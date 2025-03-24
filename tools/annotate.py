@@ -1,20 +1,26 @@
 import pandas as pd
-import gzip, os
+import gzip
+import os
 import pysam
+import pyliftover
 
-EXCEL_IN = "all.insertions.xlsx"
-EXCEL_OUT = "all.insertions.annot.xlsx"
-INSERTIONS_FILE = 'all_insertions.txt.gz'
-TMP_FASTA = 'all.insertions.fa.gz'
+EXCEL_IN = "/Users/jeremy/Desktop/MSC/all.insertions.xlsx"
+EXCEL_OUT = "/Users/jeremy/Desktop/MSC/all.insertions.annot.xlsx"
+INSERTIONS_FILE = '/Users/jeremy/Desktop/MSC/all_insertions.txt.gz'
+TMP_FASTA = '/Users/jeremy/Desktop/MSC/all.insertions.fa.gz'
 DFAM_SCRIPT = '/Users/jeremy/Desktop/isa_all/dfam/dfamscan.pl'
 DFAM_HMM = '/Users/jeremy/Desktop/isa_all/dfam/Dfam_hs.hmm'
-TMP_DFAM = 'all.insertions.dfam'
-TMP_SAM = 'all.insertions.sam'
+TMP_DFAM = '/Users/jeremy/Desktop/MSC/all.insertions.dfam'
+TMP_SAM = '/Users/jeremy/Desktop/MSC/all.insertions.sam'
 BOWTIE_SCRIPT = '/opt/homebrew/bin/bowtie2'
 BOWTIE_REF = '/Users/jeremy/Desktop/MSC/hs1/hs1'
+CHAINFILE = '/Users/jeremy/Desktop/MSC/hs1.hg38.all.chain.gz'
 
 
 if __name__ == '__main__':
+    print(f"reading chainfile {CHAINFILE}, this might take a while...")
+    lo = pyliftover.LiftOver(CHAINFILE)
+    print("done with reading chainfile.")
     d = pd.read_excel(EXCEL_IN)
     print(d)
     seqs = {i: {'L': None, 'R': None} for i in list(d['insertion'])}
@@ -75,7 +81,7 @@ if __name__ == '__main__':
                     if seqs[insertion][side][-6:] == 'aaaaaa':
                         dfams[insertion][side] = ('polyA', 0)
     mappings = {i: {'L': None, 'R': None} for i in list(d['insertion'])}
-
+    hg38 = {i: {'L': None, 'R': None} for i in list(d['insertion'])}
     with pysam.AlignmentFile(TMP_SAM) as sam:
         for read in sam:
             if read.is_qcfail: continue
@@ -83,12 +89,15 @@ if __name__ == '__main__':
             if read.is_supplementary: continue
             if read.is_unmapped: continue
             if read.mapq > 40:
-                mappings[read.query_name[:-2]][read.query_name[-1]] = f"{read.reference_name}:{read.reference_start}-{read.reference_end}{'+' if read.is_forward else '-'}"
-
-
-    print(seqs)
-    print(dfams)
-    print(mappings)
+                mappings[read.query_name[:-2]][read.query_name[
+                    -1]] = f"{read.reference_name}:{read.reference_start}-{read.reference_end}{'+' if read.is_forward else '-'}"
+                if ( read.query_name[-1] == "R" ) ^ read.is_forward:
+                    co = lo.convert_coordinate(read.reference_name, read.reference_start, '+' if read.is_forward else '-')
+                else:
+                    co = lo.convert_coordinate(read.reference_name, read.reference_end, '+' if read.is_forward else '-')
+                if co:
+                    hg38[read.query_name[:-2]][read.query_name[
+                    -1]] = f"{co[0][0]}:{co[0][1]}{co[0][2]}"
 
     for i in range(d.shape[0]):
         d.loc[i,'left_seq'] = seqs[d['insertion'][i]]['L']
@@ -99,6 +108,10 @@ if __name__ == '__main__':
                                                                          'R'] is not None else pd.NA
         d.loc[i, 'right_align'] = mappings[d['insertion'][i]]['R'] if mappings[d['insertion'][i]][
                                                                          'R'] is not None else pd.NA
+        d.loc[i, 'hg38_ins_bp_left'] = hg38[d['insertion'][i]]['L'] if hg38[d['insertion'][i]][
+                                                                         'L'] is not None else pd.NA
+        d.loc[i, 'hg38_ins_bp_right'] = hg38[d['insertion'][i]]['R'] if hg38[d['insertion'][i]][
+                                                                          'R'] is not None else pd.NA
     print(d)
     d.to_excel(EXCEL_OUT)
 
