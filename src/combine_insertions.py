@@ -11,10 +11,11 @@ from combine_insertions_get_sequence import get_sequence
 def combine_insertions(input_files, insertions_genotyping_file, combined_insertions, insertions_fasta, insertion_bam, threads):
     all_insertions = {}
     for f in input_files:
-        all_insertions[os.path.basename(f)] = {i.name: i for i in Insertion.parseFile(f) if len(i.chr) < 6 and i.chr != "MT" and i.chr !="chrM"}
-        print(f"\033[37mFile {f}: imported {len(all_insertions[f])} insertions\033[0m")
-        if len(all_insertions[f]) > CONFIG['combine_insertions']['exclude_files_with_many_insertions']:
-            del all_insertions[f]
+        fb = os.path.basename(f)
+        all_insertions[fb] = {i.name: i for i in Insertion.parseFile(f) if len(i.chr) < 6 and i.chr != "MT" and i.chr !="chrM"}
+        print(f"\033[37mFile {fb}: imported {len(all_insertions[fb])} insertions\033[0m")
+        if len(all_insertions[fb]) > CONFIG['combine_insertions']['exclude_files_with_many_insertions']:
+            del all_insertions[fb]
             print(f"\033[31mremoved file {f} since it contains too many insertions.\033[0m")
     print(f"intersecting insertions from {len(all_insertions)} files...")
     insertions = intersect_insertions(all_insertions)

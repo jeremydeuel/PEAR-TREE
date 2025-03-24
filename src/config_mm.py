@@ -28,17 +28,17 @@ CONFIG = {
         'reads_for_high_coverage': 60, #number of reads required to call high coverage
     },
     'combine_genotypes': {
-        'min_wild-types': 0, #minimal number of wild-type colonies
+        'min_wild-types': 20, #minimal number of wild-type colonies
         'min_insertions': 1, #minimal number of colonies with insertion
-        'max_artefact': 24, #maximal number of colonies with artefacts
-        'max_na': 24, #maximal number of colonies with NA genotype (high coverage or no coverage)
+        'max_artefact': 200, #maximal number of colonies with artefacts
+        'max_na': 18, #maximal number of colonies with NA genotype (high coverage or no coverage)
     },
     'combine_insertions': {
-        'genome_2bit': '/Users/jeremy/Desktop/MSC/hg38.2bit', #path to genome, has to be 2bit file
+        'genome_2bit': '/Users/jeremy/Desktop/isa_all/mm39.2bit', #path to genome, has to be 2bit file
         'exclude_files_with_many_insertions': 1_000_000, #exclude files with more than this number of insertions. No single-leaf insertions of these files can be identified.
         'samtools_executable': '/opt/homebrew/bin/samtools', #path to bowtie2 executable
         'bowtie2_executable': '/opt/homebrew/bin/bowtie2', #path to bowtie2 executable
-        'bowtie2_index': '/Users/jeremy/Desktop/MSC/hs1/hs1' #path to bowtie2 index
+        'bowtie2_index': '/Users/jeremy/Desktop/isa_all/mm39/mm39' #path to bowtie2 index
     },
     'version': '1.0'
 }

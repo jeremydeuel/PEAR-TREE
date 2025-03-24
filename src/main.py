@@ -16,7 +16,7 @@ if __name__ == '__main__':
                 'python main.py --step genotype --bam [bam] --out [outfile.txt.gz] --insertions [insertions.genotyping.txt.gz] --threads [1]\n' +
                 'python main.py --step combine_genotypes --genotypes [list of genotyping output files] --out [outfile.csv.gz] --threads [1]\n',
 
-        epilog = f'Version {CONFIG['version']}, Created by Jeremy Deuel <jeremy.deuel@usz.ch>'
+        epilog = f'Version {CONFIG["version"]}, Created by Jeremy Deuel <jeremy.deuel@usz.ch>'
     )
     clm.add_argument('--step', '-s', help="Step to execute, can be discover, genotype, combine_insertions or combine_genotypes", nargs=1)
     clm.add_argument('--bam', '-d', help='Path to input BAM file.', nargs=1)

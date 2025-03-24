@@ -1,6 +1,7 @@
 from revcomp import revcomp
 from typing import List, Iterator
 import gzip
+import os
 class Insertion:
     def __init__(self, name: str, right_consensus: str, left_consensus: str, right_mates: List[str], left_mates: List[str], file: str):
         self.name = name
@@ -11,7 +12,7 @@ class Insertion:
         self.left_consensus = left_consensus
         self.right_mates = right_mates
         self.left_mates = left_mates
-        self.files = [file]
+        self.files = [os.path.basename(file)]
 
     @property
     def left_clipped(self) -> str:

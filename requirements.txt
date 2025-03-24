@@ -1,0 +1,11 @@
+et_xmlfile==2.0.0
+numpy==2.2.4
+openpyxl==3.1.5
+pandas==2.2.3
+py2bit==0.3.3
+pyliftover==0.4.1
+pysam==0.23.0
+python-dateutil==2.9.0.post0
+pytz==2025.1
+six==1.17.0
+tzdata==2025.1
