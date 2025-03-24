@@ -10,6 +10,8 @@ If you are searching for the pipeline used for targeted sequencing go to the rep
 
 GEMINATE is run by calling the main.py file. See below how to run the different modes of this program.
 
+The readme for the supplementary tools can be found [here](tools.md).
+
 ## Requirements
 
 * python > 3.10, I recommend python3.13
@@ -23,7 +25,7 @@ GEMINATE is run by calling the main.py file. See below how to run the different 
 
 * Download this repository: git clone [repo name]
 * Install python3.13 (any version > 3.10 should work)
-  * See https://www.python.org/downloads/
+  * Get it from the [The Python homepage](https://www.python.org/downloads/)
   * Check that you have the correct version by using python -V
 * Create a new venv
   * `python -m venv venv`
@@ -31,10 +33,10 @@ GEMINATE is run by calling the main.py file. See below how to run the different 
   * `source venv/bin/activate`
   * `pip install -r requirements.txt`
 * Install bowtie2, I use version 2.5.4
-  * https://github.com/BenLangmead/bowtie2
+  * [Github repo](https://github.com/BenLangmead/bowtie2)
   * use conda, homebrew or compile yourself
 * Install samtools, I use version 1.21
-  * https://www.htslib.org/download/
+  * [HTSLib and Samtools Homepage](https://www.htslib.org/download/)
   * use conda, homebrew or follow the instructions on the above webpage
 * Download a 2bit file for the assembly your BAM-files were mapped against. See table below for sources
 * Build a bowtie index for the latest assembly of the organism you are using. It is important to choose a T2T-assembly if available.
@@ -150,6 +152,21 @@ combine_insertions.bowtie2_index | - | Path to bowtie2 index
 Note: If using enriched and not whole-genome data, wild-types usually are not detected since the absence of an insertion leads to low-coverage. Thus, it might be advisable to set min_wild-types to 0 and max_na to 1000000
 
 
-## 2Do
-- Add licence
-- Add Author info
+## License
+
+Geminate - Genomic events of mutation through insertional alterations by transposable elements
+
+Copyright (C) 2025 Jeremy Deuel <jeremy.deuel@usz.ch>
+
+    This program is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+    
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+    
+    You should have received a copy of the GNU General Public License
+    along with this program.  If not, see <https://www.gnu.org/licenses/>.

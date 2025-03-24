@@ -1,6 +1,6 @@
-# Tools for geminate
+# Supplementary tools for Geminate
 
-This readme document describes the additional tools available for geminate. They are located in the tools folder.
+This readme document describes the supplementary tools available for geminate. They are located in the tools folder.
 
 ## Annotate
 
@@ -17,7 +17,7 @@ This tool is configured directly in the source code by setting these constants:
 * **EXCEL_OUT** Output path for the annotated Excel list
 * **INSERTIONS_FILE** path to insertions.combined.txt.gz generated during step 2 of geminate. If necessary multiple files can be concatenated by using the `cat` command.
 * **TMP_FASTA** temporary fasta file that will be used for the _hmmer_ and _bowtie2_ steps
-* **DFAM_SCRIPT*** path to dfamscan.pl, downlaod from  https://dfam.org/help/tools
+* **DFAM_SCRIPT** path to dfamscan.pl, download from [DFAM](https://dfam.org/help/tools)
 * **DFAM_HMM** path to the species-specific hmm file, generated with the filter_hmm.py file
 * **TMP_DFAM** temporary dfam output file
 * **TMP_SAM** temporary bowtie2 output file
@@ -81,5 +81,5 @@ python tools/filter_hmm.py --infile Dfam.hmm --outfile Dfam.hs.hmm --species "Ho
 
 ### Input
 
-Download the full DFAM HMM library https://dfam.org/releases/current/families/Dfam.hmm.gz. Make sure to spell the species exactly as in the DFAM HMM File, e.g. "Mus musculus" or "Homo sapiens" (Check for TaxName entries if necessary).
+Download the full [DFAM HMM library](https://dfam.org/releases/current/families/Dfam.hmm.gz). Make sure to spell the species exactly as in the DFAM HMM File, e.g. "Mus musculus" or "Homo sapiens" (Check for TaxName entries if necessary).
 
