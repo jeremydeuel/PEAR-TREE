@@ -21,17 +21,17 @@ import os
 import pysam
 import pyliftover
 
-EXCEL_IN = "/Users/jeremy/Desktop/MSC/all.insertions.xlsx"
-EXCEL_OUT = "/Users/jeremy/Desktop/MSC/all.insertions.annot.xlsx"
-INSERTIONS_FILE = '/Users/jeremy/Desktop/MSC/all_insertions.txt.gz'
-TMP_FASTA = '/Users/jeremy/Desktop/MSC/all.insertions.fa.gz'
-DFAM_SCRIPT = '/Users/jeremy/Desktop/isa_all/dfam/dfamscan.pl'
-DFAM_HMM = '/Users/jeremy/Desktop/isa_all/dfam/Dfam_hs.hmm'
-TMP_DFAM = '/Users/jeremy/Desktop/MSC/all.insertions.dfam'
-TMP_SAM = '/Users/jeremy/Desktop/MSC/all.insertions.sam'
+EXCEL_IN = "../../spar/human/insertions.colon.xlsx"
+EXCEL_OUT = "../../spar/human/insertions.colon.annot.xlsx"
+INSERTIONS_FILE = '../../spar/human/insertions.colon.combined.txt.gz'
+TMP_FASTA = '../../spar/human/insertions.colon.fa.gz'
+DFAM_SCRIPT = '../../genomes/dfam/dfamscan.pl'
+DFAM_HMM = '../../genomes/dfam/Dfam_hs.hmm'
+TMP_DFAM = '../../spar/human/insertions.colon.dfam'
+TMP_SAM = '../../spar/human/insertions.colon.sam'
 BOWTIE_SCRIPT = '/opt/homebrew/bin/bowtie2'
-BOWTIE_REF = '/Users/jeremy/Desktop/MSC/hs1/hs1'
-CHAINFILE = '/Users/jeremy/Desktop/MSC/hs1.hg38.all.chain.gz'
+BOWTIE_REF = '../../genomes/bowtie2_indices/hs1'
+CHAINFILE = '../../genomes/hs1.hg38.all.chain.gz'
 
 
 if __name__ == '__main__':
@@ -105,7 +105,7 @@ if __name__ == '__main__':
             if read.is_secondary: continue
             if read.is_supplementary: continue
             if read.is_unmapped: continue
-            if read.mapq > 40:
+            if read.mapq >= 40:
                 mappings[read.query_name[:-2]][read.query_name[
                     -1]] = f"{read.reference_name}:{read.reference_start}-{read.reference_end}{'+' if read.is_forward else '-'}"
                 if ( read.query_name[-1] == "R" ) ^ read.is_forward:

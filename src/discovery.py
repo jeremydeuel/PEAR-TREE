@@ -111,6 +111,10 @@ class Discovery:
                 'left': 0,
                 'right': 0
             },
+            'short_indel': {
+                'left': 0,
+                'right': 0
+            },
             'removed_coverage': {
                 'left': 0,
                 'right': 0
@@ -132,7 +136,8 @@ class Discovery:
                 # aggregate clipped sequences
                 clipped_seqs = {}
                 unclipped_seqs = {}
-                for qname, clipped_part, unclipped_part, is_read1, is_forward in bps:
+                is_excluded = False
+                for qname, clipped_part, unclipped_part, is_read1, is_forward, exclude_flag in bps:
                     # clean clipped sequence from polyG and adapter sequences
                     if qname not in clipped_seqs.keys():
                         clipped_seqs[qname] = []
@@ -141,6 +146,7 @@ class Discovery:
                     unclipped_seqs[qname].append(unclipped_part)
                     if not is_forward:  # only reads originally mapping to the - strand can have a mate within the insertion
                         mates_left[breakpoint].append((self.reference_name, breakpoint, not is_read1, qname))
+                    is_excluded = is_excluded or exclude_flag
                 for qname, seqs in clipped_seqs.items():
                     clipped_seqs[qname] = sorted(seqs, key=len, reverse=True)[0]  # choose only longest seq
                 for qname, seqs in unclipped_seqs.items():
@@ -149,7 +155,9 @@ class Discovery:
                 clipped_seqs = [clipped_seq for clipped_seq in clipped_seqs.values() if len(clipped_seq) > CONFIG['discovery']['min_clip_len']]
                 unclipped_seqs = [unclipped_seq for unclipped_seq in unclipped_seqs.values() if
                                   len(unclipped_seq) > CONFIG['discovery']['min_clip_len']]
-
+                if is_excluded:
+                    stats['short_indel']['left'] += 1
+                    continue
                 # remove breakpoints with less than 2 independent reads
                 if len(set([len(clipped_seq) for clipped_seq in clipped_seqs])) < 2:
                     stats['removed_single']['left'] += 1
@@ -157,7 +165,6 @@ class Discovery:
                 if len(set([len(unclipped_seq) for unclipped_seq in unclipped_seqs])) < 2:
                     stats['removed_single']['left'] += 1
                     continue  # ignore insertions with not at least three different length evidence reads
-
                 # ignore high-coverage regions
                 if len(clipped_seqs) > 50:
                     stats['removed_coverage']['left'] += 1
@@ -189,7 +196,8 @@ class Discovery:
                 # aggregate clipped sequences
                 clipped_seqs = {}
                 unclipped_seqs = {}
-                for qname, clipped_part, unclipped_part, is_read1, is_forward in bps:
+                is_excluded = False
+                for qname, clipped_part, unclipped_part, is_read1, is_forward, exclude_flag in bps:
                     # clean clipped sequence from polyG and adapter sequences
                     if qname not in clipped_seqs.keys():
                         clipped_seqs[qname] = []
@@ -198,6 +206,7 @@ class Discovery:
                     unclipped_seqs[qname].append(revcomp(unclipped_part))
                     if is_forward:  # only reads originally mapping to the + strand can have a mate within the insertion
                         mates_right[breakpoint].append((self.reference_name, breakpoint, not is_read1, qname))
+                    is_excluded = is_excluded or exclude_flag
                 for qname, seqs in clipped_seqs.items():
                     clipped_seqs[qname] = sorted(seqs, key=len, reverse=True)[0]  # choose only longest seq
                 for qname, seqs in unclipped_seqs.items():
@@ -206,7 +215,9 @@ class Discovery:
                 clipped_seqs = [clipped_seq for clipped_seq in clipped_seqs.values() if len(clipped_seq) > CONFIG['discovery']['min_clip_len']]
                 unclipped_seqs = [unclipped_seq for unclipped_seq in unclipped_seqs.values() if
                                   len(unclipped_seq) > CONFIG['discovery']['min_clip_len']]
-
+                if is_excluded:
+                    stats['short_indel']['right'] += 1
+                    continue
                 # remove breakpoints with less than 2 independent reads
                 if len(set([len(clipped_seq) for clipped_seq in clipped_seqs])) < 2:
                     stats['removed_single']['right'] += 1
@@ -242,9 +253,9 @@ class Discovery:
 
         DEBUG and print(f"cleanup stats")
         DEBUG and print(
-            f"right: kept={len(clean_right)}, removed single={stats['removed_single']['right']} high_cov={stats['removed_coverage']['right']}, no_consensus={stats['removed_no_consensus']['right']}, illdefined_bp={stats['removed_illdefined_breakpoint']['right']}")
+            f"right: kept={len(clean_right)}, removed single={stats['removed_single']['right']} high_cov={stats['removed_coverage']['right']}, no_consensus={stats['removed_no_consensus']['right']}, illdefined_bp={stats['removed_illdefined_breakpoint']['right']} short_indel={stats['short_indel']['right']}")
         DEBUG and print(
-            f"left: kept={len(clean_left)}, removed single={stats['removed_single']['left']} high_cov={stats['removed_coverage']['left']}, no_consensus={stats['removed_no_consensus']['left']}, illdefined_bp={stats['removed_illdefined_breakpoint']['left']}")
+            f"left: kept={len(clean_left)}, removed single={stats['removed_single']['left']} high_cov={stats['removed_coverage']['left']}, no_consensus={stats['removed_no_consensus']['left']}, illdefined_bp={stats['removed_illdefined_breakpoint']['left']}  short_indel={stats['short_indel']['left']}")
 
         left_bps = sorted(clean_left.keys())
         right_bps = sorted(clean_right.keys())
@@ -347,7 +358,7 @@ class Discovery:
 
 
     def add_breakpoint(self, side: int, breakpoint: int, qname: str, clipped_seq: str, unclipped_seq: str, is_read1: bool,
-                       is_forward: bool) -> None:  # this function has side effects
+                       is_forward: bool, exclude_flag: bool) -> None:  # this function has side effects
         """
         side = self.CLIP_LEFT (clipped part on left hand side, usually 3' end of insertion)
              = self.CLIP_RIGHT (right hand side, usually 5' end of insertion)
@@ -376,7 +387,7 @@ class Discovery:
                 return
             if breakpoint not in self.bp_left.keys():
                 self.bp_left[breakpoint] = []
-            self.bp_left[breakpoint].append((qname, clipped_seq, unclipped_seq, is_read1, is_forward))
+            self.bp_left[breakpoint].append((qname, clipped_seq, unclipped_seq, is_read1, is_forward, exclude_flag))
         else:
             # check if unclipped part has homopolymer at breakpoint
             if 'T' * CONFIG['discovery']['max_homopolymer_len'] in unclipped_seq[-CONFIG['discovery']['max_homopolymer_len']:] or \
@@ -386,7 +397,7 @@ class Discovery:
                 return
             if breakpoint not in self.bp_right.keys():
                 self.bp_right[breakpoint] = []
-            self.bp_right[breakpoint].append((qname, clipped_seq, unclipped_seq, is_read1, is_forward))
+            self.bp_right[breakpoint].append((qname, clipped_seq, unclipped_seq, is_read1, is_forward, exclude_flag))
 
 
     def extract_chimeric(self) -> None:  # this function has side effects!
@@ -399,7 +410,6 @@ class Discovery:
                 if read.is_secondary: continue
                 if read.is_qcfail: continue
                 if read.is_duplicate: continue
-                if read.is_supplementary: continue
                 if read.is_unmapped: continue
                 if read.reference_name != self.reference_name:
                     self.cleanup()
@@ -414,6 +424,8 @@ class Discovery:
                 except TypeError as e:
                     print(e)
                 clip = None
+                # find cruciform dna artefacts here
+
                 if left_class == pysam.CSOFT_CLIP and not right_class == pysam.CSOFT_CLIP:
                     clip = self.CLIP_LEFT
                 elif right_class == pysam.CSOFT_CLIP and not left_class == pysam.CSOFT_CLIP:
@@ -424,27 +436,36 @@ class Discovery:
                     elif right_len > left_len:
                         clip = self.CLIP_LEFT
                 if clip:
+                    exclude_flag = False
+                    # check if this is a cruciform DNA artefact or a short indel. If yes, remove
+                    if read.is_supplementary:
+                        for sa in read.get_tag('SA').split(";"):
+                            if not len(sa): continue
+                            seqname, start, strand, cigar, mapq, _ = sa.split(",")
+                            if seqname==read.reference_name:
+                                if abs(read.reference_start-int(start))<CONFIG['discovery']['exclude_same_contig_supplementary']:
+                                    exclude_flag = True
                     if clip is self.CLIP_LEFT and left_len >= CONFIG['discovery']['min_clip_len']:
                         if is_adapter(revcomp(read.seq[:left_len][-CONFIG['discovery']['min_clip_len']:])):
                             continue
                         # remove right-clipped part of mapped read, if necessary
                         if right_class is pysam.CSOFT_CLIP:
                             self.add_breakpoint(clip, read.reference_start, read.query_name, read.seq[:left_len],
-                                           read.seq[left_len:-right_len], read.is_read1, read.is_forward)
+                                           read.seq[left_len:-right_len], read.is_read1, read.is_forward, exclude_flag)
                         else:
                             self.add_breakpoint(clip, read.reference_start, read.query_name, read.seq[:left_len],
-                                           read.seq[left_len:], read.is_read1, read.is_forward)
+                                           read.seq[left_len:], read.is_read1, read.is_forward, exclude_flag)
                     elif clip is self.CLIP_RIGHT and right_len >= CONFIG['discovery']['min_clip_len']:
                         if is_adapter(read.seq[-right_len:][:CONFIG['discovery']['min_clip_len']]):
                             continue
                         # remove left-clipped part of mapped read, if necessary
                         if left_class is pysam.CSOFT_CLIP:
                             self.add_breakpoint(clip, read.reference_end, read.query_name, read.seq[-right_len:],
-                                           read.seq[left_len:-right_len], read.is_read1, read.is_forward)
+                                           read.seq[left_len:-right_len], read.is_read1, read.is_forward, exclude_flag)
                         else:
                             # add_clip_stats(read.seq[-right_len:][:CONFIG['discovery']['min_clip_len']])
                             self.add_breakpoint(clip, read.reference_end, read.query_name, read.seq[-right_len:],
-                                           read.seq[:-right_len], read.is_read1, read.is_forward)
+                                           read.seq[:-right_len], read.is_read1, read.is_forward, exclude_flag)
             # final cleanup
             self.cleanup()
 
@@ -528,7 +549,7 @@ class Discovery:
                 if not len(extension):
                     break
                 right_clipped += extension.lower()
-                DEBUG and print(f"{breakpoint}: extended right by {extension.lower()} to {right_clipped}")
+                #DEBUG and print(f"{breakpoint}: extended right by {extension.lower()} to {right_clipped}")
 
             while len(left_rescues):
                 search_seq = left_clipped[:min(len(left_clipped), 10)].upper()
@@ -553,7 +574,7 @@ class Discovery:
                 if not len(extension):
                     break
                 left_clipped = extension.lower() + left_clipped
-                DEBUG and print(f"{breakpoint}: extended left by {extension.lower()} to {left_clipped}")
+                #DEBUG and print(f"{breakpoint}: extended left by {extension.lower()} to {left_clipped}")
 
             self.breakpoints[breakpoint] = (
                 right_clipped, left_clipped, right_matched, left_matched, right_rescues, left_rescues)

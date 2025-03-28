@@ -16,7 +16,7 @@
 #    along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 
-# configuration file for GEMINATE
+# configuration file for GEMINATE, specific for mus musculus
 
 CONFIG = {
 
@@ -31,7 +31,8 @@ CONFIG = {
         'min_good_bases': 10, #minimal number of bases of a clipped read to have a good quality*
         'min_consensus_score_for_good_base': 2, #minimal score for a good base (delta best hit vs. second best hit)
         'min_breakpoints_aggregated_during_first_step': 2, #minimal number of breakpoints aggregated during first step in order to even start filtering
-        'max_read_count': 60, #maximum numbers of reads in the span of a breakpoint allowed (exclude high-coverage artefact-rich regions)
+        'max_read_count': 120, #maximum numbers of reads in the span of a breakpoint allowed (exclude high-coverage artefact-rich regions)
+        'exclude_same_contig_supplementary': 1000, #minimum distance between a supplementary read to not be excluded (not interested in micro indels)
     },
 
     #define adapter sequences
@@ -52,11 +53,11 @@ CONFIG = {
         'max_na': 18, #maximal number of colonies with NA genotype (high coverage or no coverage)
     },
     'combine_insertions': {
-        'genome_2bit': '/Users/jeremy/Desktop/isa_all/mm39.2bit', #path to genome, has to be 2bit file
+        'genome_2bit': '../genomes/mm39.2bit', #path to genome, has to be 2bit file
         'exclude_files_with_many_insertions': 1_000_000, #exclude files with more than this number of insertions. No single-leaf insertions of these files can be identified.
         'samtools_executable': '/opt/homebrew/bin/samtools', #path to bowtie2 executable
         'bowtie2_executable': '/opt/homebrew/bin/bowtie2', #path to bowtie2 executable
-        'bowtie2_index': '/Users/jeremy/Desktop/isa_all/mm39/mm39' #path to bowtie2 index
+        'bowtie2_index': '../genomes/bowtie2_indices/mm39' #path to bowtie2 index
     },
     'version': '1.0'
 }
