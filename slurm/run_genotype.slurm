@@ -10,7 +10,7 @@
 #! Name of the job:
 #SBATCH -A GREEN-SL3-CPU
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=8
+#SBATCH --cpus-per-task=1
 #SBATCH --time=5:59:59
 #SBATCH --mail-type=FAIL
 #SBATCH --partition=icelake

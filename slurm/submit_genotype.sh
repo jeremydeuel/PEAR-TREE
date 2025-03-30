@@ -4,7 +4,7 @@ for i in raw/M*.sample.dupmarked.bam; do
 	if [ -f genotypes/$i.txt.gz ]; then
 		echo "$i already run, skipping"
 	else
-		echo "$i submitting run_extract_insertions.slurm"
+		echo "$i submitting run_genotype.slurm"
 		sbatch --job-name $i -o "slurm_log/$i-genotype-%A.out" run_genotype.slurm $i
 	fi
 done
