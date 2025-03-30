@@ -497,6 +497,7 @@ class Discovery:
                 qname = f"{read.query_name}:{1 if read.is_read1 else 2}"
                 if qname in self.mates.keys():
                     breakpoint = self.mates[qname]
+                    if breakpoint == 'invalid': continue
                     side = self.CLIP_LEFT if breakpoint[-1] == 'L' else self.CLIP_RIGHT
                     breakpoint = breakpoint[:-2]
                     seq = read.seq
