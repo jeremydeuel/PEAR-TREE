@@ -1,4 +1,4 @@
-# Geminate - Genomic events of mutation through insertional alterations by transposable elements
+# PEAR-TREE - paired ends of aberrant retrotransposons in phylogenetic trees
 #
 # Copyright (C) 2025 Jeremy Deuel <jeremy.deuel@usz.ch>
 #
@@ -16,13 +16,13 @@
 #    along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 
-# configuration file for GEMINATE, specific for mus musculus
+# configuration file for PEAR-TREE, specific for mus musculus
 
 CONFIG = {
 
     # settings for step 1: discovery phase:
     'discovery': {
-        'min_mapq': 60, #minimal mapq of an alignment to be considered in discovery phase
+        'min_mapq': 40, #minimal mapq of an alignment to be considered in discovery phase
         'min_clip_len': 12, #minimal length of clipped bases to be considered
         'min_evidence_reads_per_breakpoint': 2, #minimal number of independent evidence reads for each breakpoint
         'max_bp_window': 40, #max number of allowed bases deleted or duplicated between two breakpoints
@@ -53,11 +53,11 @@ CONFIG = {
         'max_na': 18, #maximal number of colonies with NA genotype (high coverage or no coverage)
     },
     'combine_insertions': {
-        'genome_2bit': '/Users/jeremy/Documents/genomes/mm39.2bit', #path to genome, has to be 2bit file
+        'genome_2bit': '/Users/jeremy/Documents/genomes/GRCm38.2bit', #path to genome, has to be 2bit file
         'exclude_files_with_many_insertions': 1_000_000, #exclude files with more than this number of insertions. No single-leaf insertions of these files can be identified.
         'samtools_executable': '/opt/homebrew/bin/samtools', #path to bowtie2 executable
         'bowtie2_executable': '/opt/homebrew/bin/bowtie2', #path to bowtie2 executable
-        'bowtie2_index': '/Users/jeremy/Documents/genomes/bowtie2_indices/mm39' #path to bowtie2 index
+        'bowtie2_index': '/Users/jeremy/Documents/genomes/bowtie2_indices/mMusMuc1.1' #path to bowtie2 index
     },
     'version': '1.0'
 }

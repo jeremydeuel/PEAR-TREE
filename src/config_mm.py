@@ -1,4 +1,4 @@
-# Geminate - Genomic events of mutation through insertional alterations by transposable elements
+# PEAR-TREE - paired ends of aberrant retrotransposons in phylogenetic trees
 #
 # Copyright (C) 2025 Jeremy Deuel <jeremy.deuel@usz.ch>
 #
@@ -16,7 +16,7 @@
 #    along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 
-# configuration file for GEMINATE, specific for mus musculus
+# configuration file for PEAR-TREE, specific for mus musculus
 
 CONFIG = {
 
@@ -57,7 +57,7 @@ CONFIG = {
         'exclude_files_with_many_insertions': 1_000_000, #exclude files with more than this number of insertions. No single-leaf insertions of these files can be identified.
         'samtools_executable': '/opt/homebrew/bin/samtools', #path to bowtie2 executable
         'bowtie2_executable': '/opt/homebrew/bin/bowtie2', #path to bowtie2 executable
-        'bowtie2_index': '../genomes/bowtie2_indices/mm39' #path to bowtie2 index
+        'bowtie2_index': '../genomes/bowtie2_indices/mMusMuc1.1' #path to bowtie2 index
     },
     'version': '1.0'
 }

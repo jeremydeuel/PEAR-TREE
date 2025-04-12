@@ -1,14 +1,14 @@
-# GEMINATE
+# PEAR-TREE
 
-Genomic events of mutation through insertional alterations by transposable elements
+paired ends of aberrant retrotransposons in phylogenetic trees
 
 This repository contains the complete pipeline to find insertional mutations in whole genome sequencing data.
 
-If you are searching for the pipeline used for targeted sequencing go to the repository GEMINATE-IAP
+If you are searching for the pipeline used for targeted sequencing go to the repository PARTRIDGE
 
 ## How do I run it?
 
-GEMINATE is run by calling the main.py file. See below how to run the different modes of this program.
+PEAR-TREE is run by calling the main.py file. See below how to run the different modes of this program.
 
 The readme for the supplementary tools can be found [here](tools.md).
 
@@ -51,16 +51,16 @@ Homo sapiens | hs1      | https://hgdownload.soe.ucsc.edu/goldenPath/hs1/bigZips
 Mus musculus | mm39     | https://hgdownload.soe.ucsc.edu/goldenPath/mm39/bigZips/mm39.2bit 
 Mus musculus | mm10 | https://hgdownload.cse.ucsc.edu/goldenpath/mm10/bigZips/mm10.2bit
 
-## Running GEMINATE
+## Running PEAR-TREE
 
-Geminate is run in four separate steps
-1. Discovery: Run GEMINATE on all bam files you have, one single-threaded process is used per file. For this step no information on the genome is required and also no external files such as samtools,  bowtie2, 2bit files or indexes are required.
+PEAR-TREE is run in four separate steps
+1. Discovery: Run PEAR-TREE on all bam files you have, one single-threaded process is used per file. For this step no information on the genome is required and also no external files such as samtools,  bowtie2, 2bit files or indexes are required.
 
 
 2. Combine Insertions: Combine the insertions detected during discovery file. For this process all requirements listed above are required.
 
 
-3. Genotype: Run GEMINATE again on all bam files you have, one multi-threaded process is used per bam file. This sensitively re-genotypes all files based upon the consolidated list of insertions generated during step 2.
+3. Genotype: Run PEAR-TREE again on all bam files you have, one multi-threaded process is used per bam file. This sensitively re-genotypes all files based upon the consolidated list of insertions generated during step 2.
 
 
 4. Combine Genotypes: This script consolidates all genotypes into one (potentially giant) csv file that can then be used for downstream analysis. The csv file contains one row per insertion and one column per bam file, specifying the genotype of that file for a given insertions. This step also performs extensive filtering defined in config.py
@@ -154,7 +154,7 @@ Note: If using enriched and not whole-genome data, wild-types usually are not de
 
 ## License
 
-Geminate - Genomic events of mutation through insertional alterations by transposable elements
+PEAR-TREE - paired ends of aberrant retrotransposons in phylogenetic trees
 
 Copyright (C) 2025 Jeremy Deuel <jeremy.deuel@usz.ch>
 

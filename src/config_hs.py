@@ -1,4 +1,4 @@
-# Geminate - Genomic events of mutation through insertional alterations by transposable elements
+# PEAR-TREE - paired ends of aberrant retrotransposons in phylogenetic trees
 #
 # Copyright (C) 2025 Jeremy Deuel <jeremy.deuel@usz.ch>
 #
@@ -16,7 +16,7 @@
 #    along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 
-# configuration file for GEMINATE
+# configuration file for PEAR-TREE
 
 CONFIG = {
 

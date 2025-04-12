@@ -21,6 +21,8 @@ import os
 import pysam
 import pyliftover
 
+
+#HUMAN
 EXCEL_IN = "../../spar/human/insertions.colon.xlsx"
 EXCEL_OUT = "../../spar/human/insertions.colon.annot.xlsx"
 INSERTIONS_FILE = '../../spar/human/insertions.colon.combined.txt.gz'
@@ -32,11 +34,26 @@ TMP_SAM = '../../spar/human/insertions.colon.sam'
 BOWTIE_SCRIPT = '/opt/homebrew/bin/bowtie2'
 BOWTIE_REF = '../../genomes/bowtie2_indices/hs1'
 CHAINFILE = '../../genomes/hs1.hg38.all.chain.gz'
+#MOUSE
+EXCEL_IN = "../../spar/mouse/germline.insertions.xlsx"
+EXCEL_OUT = "../../spar/mouse/germline.insertions.annot.xlsx"
+INSERTIONS_FILE = '../../spar/mouse/discovery.combined.txt.gz'
+TMP_FASTA = '../../spar/mouse/annotation.germline.fa.gz'
+DFAM_SCRIPT = '../../genomes/dfam/dfamscan.pl'
+DFAM_HMM = '../../genomes/dfam/Dfam_mm.hmm'
+TMP_DFAM = '../../spar/mouse/annotation.germline.dfam'
+TMP_SAM = '../../spar/mouse/annotation.germline.bam'
+BOWTIE_SCRIPT = '/opt/homebrew/bin/bowtie2'
+BOWTIE_REF = '../../genomes/bowtie2_indices/mm39'
+CHAINFILE = None#
 
 
 if __name__ == '__main__':
-    print(f"reading chainfile {CHAINFILE}, this might take a while...")
-    lo = pyliftover.LiftOver(CHAINFILE)
+    if CHAINFILE is not None:
+        print(f"reading chainfile {CHAINFILE}, this might take a while...")
+        lo = pyliftover.LiftOver(CHAINFILE)
+    else:
+        lo = None
     print("done with reading chainfile.")
     d = pd.read_excel(EXCEL_IN)
     print(d)
@@ -109,9 +126,15 @@ if __name__ == '__main__':
                 mappings[read.query_name[:-2]][read.query_name[
                     -1]] = f"{read.reference_name}:{read.reference_start}-{read.reference_end}{'+' if read.is_forward else '-'}"
                 if ( read.query_name[-1] == "R" ) ^ read.is_forward:
-                    co = lo.convert_coordinate(read.reference_name, read.reference_start, '+' if read.is_forward else '-')
+                    if lo is not None:
+                        co = lo.convert_coordinate(read.reference_name, read.reference_start, '+' if read.is_forward else '-')
+                    else:
+                        co = [(read.reference_name, read.reference_start, '+' if read.is_forward else '-')]
                 else:
-                    co = lo.convert_coordinate(read.reference_name, read.reference_end, '+' if read.is_forward else '-')
+                    if lo is not None:
+                        co = lo.convert_coordinate(read.reference_name, read.reference_end, '+' if read.is_forward else '-')
+                    else:
+                        co = [(read.reference_name, read.reference_end, '+' if read.is_forward else '-')]
                 if co:
                     hg38[read.query_name[:-2]][read.query_name[
                     -1]] = f"{co[0][0]}:{co[0][1]}{co[0][2]}"

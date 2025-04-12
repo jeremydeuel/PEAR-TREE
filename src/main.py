@@ -1,4 +1,4 @@
-# Geminate - Genomic events of mutation through insertional alterations by transposable elements
+# PEAR-TREE - paired ends of aberrant retrotransposons in phylogenetic trees
 #
 # Copyright (C) 2025 Jeremy Deuel <jeremy.deuel@usz.ch>
 #
@@ -20,14 +20,14 @@ import sys, time, os, argparse
 
 from config import CONFIG
 def print_head(phase):
-    print('\033[36;1;4mGEMINATE\033[0m')
+    print('\033[36;1;4mPEAR-TREE\033[0m')
     print('\033[36mGenomic Events of Mutation through Insertional alterations by Transposable Elements\033[0m')
     print(f"\033[90mConfiguration: {CONFIG}\033[0m")
     print(f"Current Phase: {phase}")
 
 if __name__ == '__main__':
     clm = argparse.ArgumentParser(
-        prog = 'GEMINATE',
+        prog = 'PEAR-TREE',
         description = 'Genomic events of mutation through insertional alterations by transposable elements',
         usage = 'python main.py --step discover --bam [bam] --out [outfile.txt.gz]\n' +
                 'python main.py --step combine_insertions --discovery_files [files] --out [outfile_stem] --threads [1]\n' +

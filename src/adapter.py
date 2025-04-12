@@ -1,4 +1,4 @@
-# Geminate - Genomic events of mutation through insertional alterations by transposable elements
+# PEAR-TREE - paired ends of aberrant retrotransposons in phylogenetic trees
 #
 # Copyright (C) 2025 Jeremy Deuel <jeremy.deuel@usz.ch>
 #
@@ -27,6 +27,7 @@ def is_adapter(seq: str) -> bool:
     left-cipped input has to be reverse complemented!
     """
     seq = seq.upper()
+    if len(seq) < 2: return False
     # remove all homopolymers except polyT (which corresponds to a polyA tail)
     for b in ('G', 'C', 'A'):
         if b * CONFIG['discovery']['min_clip_len'] == seq:
