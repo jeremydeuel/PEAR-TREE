@@ -18,7 +18,7 @@
 import pysam
 import gzip
 import sys
-from genotyping_insertion import Insertion
+from genotyping_insertion import Insertion, GT_ARTEFACT
 
 from multiprocessing import Process, Queue, Pipe
 from queue import Empty
@@ -51,14 +51,15 @@ def mc_process_insertion(input_queue: Queue, output_queue: Queue, bam_file: str)
             i.left_ref = left_ref
             read_count = bam.count(i.chr, min(i.left_pos, i.right_pos), max(i.left_pos, i.right_pos)+1)
             if read_count > CONFIG['genotyping']['reads_for_high_coverage']:
-                i.evidence['hc'] = read_count
+                gt, score_gt, score_other = GT_ARTEFACT, 0, 0
             else:
                 i.genotype(bam)
-            i.summarise_evidence()
+                gt, score_gt, score_other = i.summarise_evidence()
             output_queue.put((
                 i.name,
-                i.genotype_string,
-                i.evidence
+                gt,
+                score_gt,
+                score_other
             ))
 
 def mc_output(output_queue: Queue, output_file: str, output_list_queue: Queue):
@@ -66,7 +67,7 @@ def mc_output(output_queue: Queue, output_file: str, output_list_queue: Queue):
     output_buffer = {}
     output_list = []
     with gzip.open(output_file, 'wt') as out:
-        out.write('insertion\tgenotype\tright_ins\tleft_ins\twt\tart_left\tart_right\tart_both\tins_both\tno_cov\thigh_cov\n')
+        out.write('insertion\tgenotype\tscore_genotype\tscore_alternative\n')
         while o := output_queue.get():
             if o is TERMINATION_SIGNAL:
                 return
@@ -75,17 +76,16 @@ def mc_output(output_queue: Queue, output_file: str, output_list_queue: Queue):
                     output_list.append(ol)
             except Empty:
                 pass
-            name, genotype_string, evidence = o
+            name, genotype_string, score_gt, score_other = o
             #print(f"output got {name}")
-            output_buffer[name] = (genotype_string, evidence)
+            output_buffer[name] = (genotype_string, score_gt, score_other)
             while len(output_list):
                 if output_list[0] not in output_buffer.keys():
                     break
                 current_name = output_list.pop(0)
-                genotype_string, evidence = output_buffer[current_name]
-                out.write(f'{current_name}\t{genotype_string}\t{evidence["ir"]}\t{evidence["il"]}\t{evidence["wt"]}\t{evidence["ar"]}\t{evidence["al"]}\t{evidence["ad"]}\t{evidence["id"]}\t{evidence["nc"]}\t{evidence["hc"]}\n')
+                genotype_string, score_gt, score_other = output_buffer[current_name]
+                out.write(f'{current_name}\t{genotype_string}\t{int(score_gt)}\t{int(score_other)}\n')
                 del output_buffer[current_name]
-                #print(f"outputted {current_name}, current length = {len(output_buffer)}")
 
 def genotype(insertion_file: str, bam_file: str, output_file: str, threads=1):
     input_queue = Queue()

@@ -17,53 +17,102 @@
 
 
 from revcomp import revcomp
-from typing import List, Iterator
+from typing import List, Iterator, Dict
+from quality_seq import QualitySeq
 import gzip
 import os
+
+TYPE_FULL_INFO = 3
+TYPE_RIGHT_POLYA = 1
+TYPE_LEFT_POLYA = 2
 class Insertion:
-    def __init__(self, name: str, right_consensus: str, left_consensus: str, right_mates: List[str], left_mates: List[str], file: str):
-        self.name = name
-        self.chr, pos = name.split(":", maxsplit=2)
-        self.right_pos, self.left_pos = pos.split("-", maxsplit=2)
-        self.right_pos, self.left_pos = int(self.right_pos), int(self.left_pos)
-        self.right_consensus = right_consensus
-        self.left_consensus = left_consensus
-        self.right_mates = right_mates
-        self.left_mates = left_mates
+    def __init__(self, reference_name: str, start: str, end: str, data: Dict, file: str):
+        assert reference_name is not None and len(reference_name), f"reference_name not given."
+        self.name = f"{reference_name}:{start}-{end}"
+        self.type = None
+        if 'RIGHT:ALIGNED' in data.keys() and 'RIGHT:CLIPPED' in data.keys():
+            self.right_aligned = data['RIGHT:ALIGNED'].revcomp()
+            self.right_clipped = data['RIGHT:CLIPPED']
+            self.right_pos = int(end)
+        else:
+            assert end[:6] == 'polyA_', f"false right poly A detected in {reference_name}:{start}-{end} -> {data}"
+            self.right_clipped = data['RIGHT:CLIPPED_POLYA']
+            self.right_aligned = None
+            self.right_pos = None
+            self.type = TYPE_RIGHT_POLYA
+        if 'LEFT:ALIGNED' in data.keys() and 'LEFT:CLIPPED' in data.keys():
+            self.left_clipped = data['LEFT:CLIPPED'].revcomp()
+            self.left_aligned =  data['LEFT:ALIGNED']
+            self.left_pos = int(start)
+        else:
+            assert start[:6] == 'polyA_' , f"false left poly A detected in {reference_name}:{start}-{end} -> {data}"
+            self.left_clipped = data['LEFT:CLIPPED_POLYA'].revcomp().lower()
+            self.left_aligned = None
+            self.left_pos = None
+            self.type = TYPE_LEFT_POLYA
+        if self.type is None:
+            self.type = TYPE_FULL_INFO
+        self.reference_name = reference_name
+        self.right_mates = data['RIGHT:MATE']
+        self.left_mates = data['LEFT:MATE']
         self.files = [os.path.basename(file)]
 
     @property
-    def left_clipped(self) -> str:
-        for i in range(len(self.left_consensus)):
-            if self.left_consensus[i] in ("a","t","g","c","n"):
-                continue
-            return revcomp(self.left_consensus[:i])
-        return ''
-
+    def left_consensus(self) -> str:
+        assert self.type is not TYPE_LEFT_POLYA, f"can not extract consensus from left polyA type"
+        return self.left_clipped.revcomp().lower() + self.left_aligned
 
     @property
-    def right_clipped(self) -> str:
-        for i in range(len(self.right_consensus)):
-            if self.right_consensus[i] in ("A","T","G","C","N"):
-                continue
-            return self.right_consensus[i:]
-        return ''
+    def right_consensus(self) -> str:
+        assert self.type is not TYPE_RIGHT_POLYA, f"can not extract consensus from right polyA type"
+        return self.right_aligned.revcomp() + self.right_clipped.lower()
 
     def __str__(self) -> str:
-        output = f'>{self.name}\n@RIGHT_CONSENSUS\n{self.right_consensus}\n@RIGHT_MATES\n'
-        output += '\n'.join(self.right_mates)
-        output += f'\n@LEFT_CONSENSUS\n{self.left_consensus}\n@LEFT_MATES\n'
-        output += '\n'.join(self.left_mates)
-        output += f'\n@FILES\n'
-        output += '\n'.join(self.files)
-        output += '\n\n'
+        output = self.right_clipped.fastq(f"{self.name}:RIGHT:CLIPPED")
+        if type is not TYPE_RIGHT_POLYA:
+            output += self.right_consensus.fastq(f"{self.name}:RIGHT:ALIGNED")
+        output += self.left_clipped.fastq(f"{self.name}:LEFT:CLIPPED")
+        if type is not TYPE_LEFT_POLYA:
+            output += self.left_consensus.fastq(f"{self.name}:LEFT:ALIGNED")
+        i=0
+        for m in self.left_mates:
+            i += 1
+            output += m.fastq(f"{self.name}:LEFT:MATE{i}")
+        i=0
+        for m in self.right_mates:
+            i+= 1
+            output += m.fastq(f"{self.name}:RIGHT:MATE{i}")
         return output
 
     def __iadd__(self, other: 'Insertion') -> 'Insertion':
-        if len(self.left_clipped) < len(other.left_clipped):
-            self.left_consensus = other.left_consensus
-        if len(self.right_clipped) < len(other.right_clipped):
-            self.right_consensus = other.right_consensus
+        if self.type is TYPE_LEFT_POLYA and other.type is not TYPE_LEFT_POLYA:
+            self.left_clipped = other.left_clipped
+            self.left_aligned = other.left_aligned
+            self.left_pos = other.left_pos
+            self.name = f"{self.reference_name}:{self.right_pos}-{self.left_pos}"
+            self.type = TYPE_FULL_INFO
+            self.left_mates.append(QualitySeq('tttttttttttt',[0]*12) + self.left_clipped)
+        elif self.type is not TYPE_LEFT_POLYA and other.type is TYPE_LEFT_POLYA:
+            self.left_mates.append(QualitySeq('tttttttttttt',[0]*12) + other.left_clipped)
+        else:
+            if len(self.left_clipped) < len(other.left_clipped):
+                self.left_clipped = other.left_clipped
+            if self.type is not TYPE_LEFT_POLYA and len(self.left_aligned) < len(other.left_aligned):
+                self.left_aligned = other.left_aligned
+        if self.type is TYPE_RIGHT_POLYA and other.type is not TYPE_RIGHT_POLYA:
+            self.right_clipped = other.right_clipped
+            self.right_aligned = other.right_aligned
+            self.right_pos = other.right_pos
+            self.name = f"{self.reference_name}:{self.right_pos}-{self.left_pos}"
+            self.right_mates.append(QualitySeq('tttttttttttt',[0]*12) + self.right_clipped)
+            self.type = TYPE_FULL_INFO
+        elif self.type is not TYPE_RIGHT_POLYA and other.type is TYPE_RIGHT_POLYA:
+            self.right_mates.append(QualitySeq('tttttttttttt',[0]*12) + other.right_clipped)
+        else:
+            if len(self.right_clipped) < len(other.right_clipped):
+                self.right_clipped = other.right_clipped
+            if self.type is not TYPE_RIGHT_POLYA and len(self.right_aligned) < len(other.right_aligned):
+                self.right_aligned = other.right_aligned
         self.right_mates += other.right_mates
         self.left_mates += other.left_mates
         self.files += other.files
@@ -71,34 +120,31 @@ class Insertion:
 
     @staticmethod
     def parseFile(path) -> Iterator['Insertion']:
-        output = None
-        state = None
+        currentInsertion = None
+        currentData = {'LEFT:MATE': [], 'RIGHT:MATE': []}
         with gzip.open(path, 'rt') as f:
-            for s in f:
-                s = s.strip()
-                if not len(s): continue
-                if s[0] == '>':
-                    if output: yield output
-                    output = Insertion(s[1:], '', '', [], [], path)
-                    state = None
-                if s[0] == '@':
-                    state = s[1:]
-                    if state == 'FILES':
-                        #reset files if such a field is provided
-                        output.files = []
-                    continue
+            while l := f.readline():
+                l = l.strip()
+                if not len(l): continue
+                reference_name, positions, side, field = l[1:].split(":")
+                start, end = positions.split("-")
+                insertion = (reference_name, start, end)
+                if insertion != currentInsertion:
+                    if currentInsertion is not None:
+                        reference_name, start, end = currentInsertion
+                        yield Insertion(reference_name, start, end, currentData, os.path.basename(path))
+                    currentInsertion = insertion
+                    currentData = {'LEFT:MATE':[],'RIGHT:MATE':[]}
+                assert l[0] == '@', f"Expected label field, got {l}"
+                seq = f.readline().strip()
+                plus = f.readline().strip()
+                assert plus == '+', f"Expected + separator, got {plus}"
+                qual = [ord(i)-33 for i in f.readline().strip()]
+                qs = QualitySeq(seq, qual)
+                if "MATE" in field:
+                    currentData[f"{side}:MATE"].append(qs)
                 else:
-                    if state is None:
-                        continue
-                    elif state == 'LEFT_CONSENSUS':
-                        output.left_consensus = s
-                    elif state == 'RIGHT_CONSENSUS':
-                        output.right_consensus = s
-                    elif state == 'LEFT_MATES':
-                        output.left_mates.append(s)
-                    elif state == 'RIGHT_MATES':
-                        output.right_mates.append(s)
-                    elif state == 'FILES':
-                        output.files.append(s)
-                    else:
-                        raise ValueError(f"Unknown state {state} in file {f}")
+                    currentData[f"{side}:{field}"] = qs
+            if currentInsertion is not None:
+                reference_name, start, end = currentInsertion
+                yield Insertion(reference_name, start, end, currentData, os.path.basename(path))

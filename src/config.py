@@ -49,15 +49,18 @@ CONFIG = {
     'combine_genotypes': {
         'min_wild-types': 20, #minimal number of wild-type colonies
         'min_insertions': 1, #minimal number of colonies with insertion
-        'max_artefact': 200, #maximal number of colonies with artefacts
-        'max_na': 18, #maximal number of colonies with NA genotype (high coverage or no coverage)
+        'max_artefact': 0, #maximal number of colonies with artefacts
+        'max_na': 0, #maximal number of colonies with NA genotype (high coverage or no coverage)
     },
     'combine_insertions': {
         'genome_2bit': '/Users/jeremy/Documents/genomes/GRCm38.2bit', #path to genome, has to be 2bit file
         'exclude_files_with_many_insertions': 1_000_000, #exclude files with more than this number of insertions. No single-leaf insertions of these files can be identified.
         'samtools_executable': '/opt/homebrew/bin/samtools', #path to bowtie2 executable
         'bowtie2_executable': '/opt/homebrew/bin/bowtie2', #path to bowtie2 executable
-        'bowtie2_index': '/Users/jeremy/Documents/genomes/bowtie2_indices/mMusMuc1.1' #path to bowtie2 index
+        'bowtie2_index': '/Users/jeremy/Documents/genomes/bowtie2_indices/mMusMuc1.1', #path to bowtie2 index used to align the entire string of aligned read and clipped read
+        'bowtie2_index2': '/Users/jeremy/Documents/genomes/bowtie2_indices/mm39', #path to bowtie2 index used to align only the clipped part of the read.
+        'bowtie2_index2_lo': '/Users/jeremy/Documents/genomes/mm39ToMm10.over.chain.gz' # path to chainfile linking bowtie2_index to the index used for alignment in the bam file.
+
     },
     'version': '1.0'
 }

@@ -32,6 +32,8 @@ class QualitySeq:
 
     def __getitem__(self, item):
         return QualitySeq(self._sequence[item],self._quality[item])
+    def getPos(self, position: int) -> Tuple[str, int]:
+        return self._sequence[position], self._quality[position]
 
     def qual(self, item = slice(None)):
         return self._quality[item]

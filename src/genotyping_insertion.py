@@ -19,20 +19,25 @@
 import gzip
 import pysam
 from genotyping_evidence_read import EvidenceRead
-from typing import Iterator
+from typing import Iterator, List
+from genotype_qscore import REF_MATCH, ALT_MATCH, ARTEFACT
+from math import log10
 
+GT_ARTEFACT = 'artefact'
+GT_WILDTYPE = 'wild-type'
+GT_HETEROZYGOUS = 'heterozygous'
+GT_HOMOZYGOUS = 'homozygous'
 class Insertion:
     def __init__(self, name: str):
         self.name = name
         self.chr, pos = name.split(":", maxsplit=2)
-        self.right_pos, self.left_pos = pos.split("-", maxsplit=2)
+        self.left_pos, self.right_pos = pos.split("-", maxsplit=2)
         self.right_pos, self.left_pos = int(self.right_pos), int(self.left_pos)
         self.left_clipped = None
         self.right_clipped = None
         self.left_ref = None
         self.right_ref = None
-        self.evidence = {'wt':0,'id':0,'il':0,'ir':0,'ad':0,'al':0,'ar':0, '??': 0, 'hc': 0, 'nc': 0}
-        self.evidence_reads = []
+        self.evidence_reads: List[EvidenceRead] = []
     def __str__(self):
         return self.name
 
@@ -68,48 +73,72 @@ class Insertion:
             if read.mapq < 40: continue
             if read.is_secondary: continue
             if read.is_unmapped: continue
-            if read.is_supplementary: continue
             if read.is_qcfail: continue
             if read.reference_name != self.chr: continue
             evi_read = EvidenceRead(read)
-            evi_read.check_left(self.left_pos, self.left_clipped, self.left_ref)
-            evi_read.check_right(self.right_pos, self.right_clipped, self.right_ref)
+            if self.left_pos: evi_read.qleft(self.left_pos, self.left_ref, self.left_clipped)
+            if self.right_pos: evi_read.qright(self.right_pos, self.right_ref, self.right_clipped)
             self.evidence_reads.append(evi_read)
         return
 
     def summarise_evidence(self):
-        genotypes = {}
+        if not len(self.evidence_reads):
+            print(f"omitting {self.name}: no reads found")
+            return GT_WILDTYPE, 0, 0
+        # calculate best call using likelihood ratios
+        q_art = 0
+        q_alt = 0
+        q_ref = 0
+        q_hom = 0
+        #print(f"evidence for {self.name}:")
         for er in self.evidence_reads:
-            gt = er.genotype_str()
-            if gt not in genotypes.keys():
-                genotypes[gt] = set()
-            genotypes[gt].add(er.read.query_name)
-        for gt, queries in genotypes.items():
-            self.evidence[gt] += len(queries)
+            left_q_ref, left_q_alt, left_q_art = er.left_genotype
+            right_q_ref, right_q_alt, right_q_art = er.right_genotype
+            if max(left_q_ref,left_q_alt) <= left_q_art:
+                q_art += left_q_art-max(left_q_ref, left_q_alt)
+                continue
+            if max(right_q_ref, right_q_alt) <= right_q_art:
+                q_art += right_q_art-max(right_q_ref, right_q_alt)
+                continue
+            if right_q_art > 0 and left_q_art > 0:
+                if right_q_ref >= right_q_alt and right_q_ref > 0:
+                    if left_q_ref >= left_q_alt and left_q_ref > 0:
+                        #double wt
+                        q_hom -= 1
+                        q_ref += right_q_ref-right_q_alt + left_q_ref-right_q_alt
+                    elif left_q_alt > 0:
+                        q_alt += left_q_alt-left_q_ref
+                        q_ref += right_q_ref-right_q_alt
+                elif right_q_alt > 0:
+                    if left_q_ref >= left_q_alt and left_q_ref > 0:
+                        q_alt += right_q_alt-right_q_ref
+                        q_ref += left_q_ref-left_q_alt
+                    elif left_q_alt > 0:
+                        #double alt, this is an artefact
+                        q_art += left_q_alt-left_q_ref + right_q_alt - right_q_ref
+            elif right_q_art > 0:
+                if right_q_ref >= right_q_alt and right_q_ref > 0:
+                    q_ref += right_q_ref-right_q_alt
+                elif right_q_alt > 0:
+                    q_alt += right_q_alt-right_q_ref
+            elif left_q_art > 0:
+                if left_q_ref >= left_q_alt and left_q_ref > 0:
+                    q_ref += left_q_ref-left_q_alt
+                elif left_q_alt > 0:
+                    q_alt += left_q_alt-left_q_ref
 
-
-    @property
-    def genotype_string(self):
-        if self.evidence['hc']:
-            return 'NA'
-        good_reads = self.evidence['wt']+self.evidence['ir']+self.evidence['il']
-        artefact_reads = self.evidence['ar']+self.evidence['al']+self.evidence['ad']
-        if artefact_reads > 1+int(good_reads/10): #number of artefact reads is more than 10% of the number of good reads.
-            return 'artefact'
-        if self.evidence['id']>0:
-            return 'artefact'
-        if self.evidence['wt'] and not self.evidence['ir'] and not self.evidence['il']:
-            return 'wild-type'
-        if self.evidence['ir'] and self.evidence['il'] and not self.evidence['wt']:
-            return 'homozygous'
-        if self.evidence['ir'] and self.evidence['il'] and self.evidence['wt']:
-            return 'heterozygous'
-        if self.evidence['il'] or self.evidence['ir']:
-            #figure out a few edge cases
-            insertion_sum = self.evidence['il'] + self.evidence['ir']
-            if insertion_sum > max(8,8* self.evidence['wt']): #8 times more insertion reads, but not both ends covered, thats suspicious
-                return 'artefact'
-            if self.evidence['wt'] > max(8,insertion_sum * 8): #8 times more wt reads than insertion reads, thats suspicious
-                return 'artefact'
-            return 'insertion?'
-        return 'NA'
+        if q_art >= max(q_ref,q_alt):
+            return GT_ARTEFACT, q_art, max(q_ref, q_alt)
+        if q_alt > q_art:
+            if q_hom < 0:
+                if q_ref >= q_art:
+                    return GT_HETEROZYGOUS, q_alt, q_ref
+                else:
+                    return GT_ARTEFACT, q_art, max(q_alt, q_ref)
+            if q_alt >= q_ref:
+                return GT_HOMOZYGOUS, q_alt, q_ref
+            else:
+                return GT_HETEROZYGOUS, q_alt, q_ref
+        if q_ref > q_art:
+            return GT_WILDTYPE, q_ref, q_alt
+        return GT_ARTEFACT, 0, 0

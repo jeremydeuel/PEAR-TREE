@@ -27,6 +27,8 @@ from multiprocessing import Pool
 def mc_import(input_path, stem):
     corrected_artefacts = 0
     insertions = {}
+    support_score = {}
+    alt_score = {}
     with gzip.open(input_path, 'rt') as input_file:
         input_file.readline()  # ignore
         for line in input_file:
@@ -34,30 +36,17 @@ def mc_import(input_path, stem):
             if not len(line): continue
             line = line.split("\t")
             gt = line[1]
-            wt = int(line[4])
-            if gt == "artefact":  # switched off this part
-                right_ins = int(line[2])
-                left_ins = int(line[3])
-                good = right_ins + left_ins + wt
-                art_left = int(line[5])
-                art_right = int(line[6])
-                art_both = int(line[7])
-                bad = art_left + art_right + art_both
-                ins_both = int(line[8])
-                if not ins_both and not bad:
-                    if right_ins or left_ins:
-                        if right_ins + left_ins > wt / 15:
-                            gt = 'insertion?'
-                            corrected_artefacts += 1
-            if gt == 'wild-type' and wt < 5:
-                gt = 'wild-type?'
-            insertions[line[0]] = gt
-    if not len(insertions):
-        print(f"ignoring {stem}: no insertions found.")
-        return None
+            gt_support = int(line[2])
+            alt_support = int(line[3])
+            insertions[line[0]] = line[1]
+            support_score[line[0]] = gt_support
+            alt_score[line[0]] = alt_support
+
     d1 = pd.DataFrame({stem: insertions.values()}, index=insertions.keys())
+    d2 = pd.DataFrame({stem: support_score.values()}, index=support_score.keys(), dtype=int)
+    d3 = pd.DataFrame({stem: alt_score.values()}, index=alt_score.keys(), dtype=int)
     print(f"completed {stem} with {d1.shape[0]} insertions.")
-    return(d1)
+    return(d1,d2,d3)
 
 def collect_genotype(input_files, output_file, threads):
     d = None
@@ -68,9 +57,18 @@ def collect_genotype(input_files, output_file, threads):
         insertions = {}
         results.append(pool.apply_async(mc_import, args=(file, stem)))
     print(f"collecting results...")
-    results = [i.get() for i in results]
+    insertions = []
+    support_score = []
+    alt_score = []
+    for i in results:
+        i, s, a = i.get()
+        insertions.append(i)
+        support_score.append(s)
+        alt_score.append(a)
     print(f"concatenating")
-    d = pd.concat(results, copy=False, axis=1)
+    d = pd.concat(insertions, copy=False, axis=1)
+    support_score = pd.concat(support_score, copy=False, axis=1)
+    alt_score = pd.concat(alt_score, copy=False, axis=1)
     print(f"{stem}: imported {len(insertions)} insertions.")
     print(d)
 
@@ -81,7 +79,8 @@ def collect_genotype(input_files, output_file, threads):
     n_uncertain = (d == 'wild-type?').sum(axis=1) + n_uncertain_insertion
     too_many_artefacts = (d == 'artefact').sum(axis=1) > CONFIG['combine_genotypes']['max_artefact']
     too_many_nas = d.isna().sum(axis=1) > CONFIG['combine_genotypes']['max_na']
-
+    best_wt_score = support_score[d=="wild-type"].max(axis=1)
+    best_ins_score = support_score[ ( d == "heterozygous" ) | ( d == "homozygous" )].max(axis=1)
     print(f"filtering strategy, starting with {d.shape[0]} insertions")
     print(f"- removing {sum(n_wt < CONFIG['combine_genotypes']['min_wild-types'])} insertions without at least {CONFIG['combine_genotypes']['min_wild-types']} wild-type colonies")
     print(f"- removing {sum(n_insertions < CONFIG['combine_genotypes']['min_insertions'])} insertions without at least {CONFIG['combine_genotypes']['min_insertions']} certain het or hom colony")
@@ -89,15 +88,22 @@ def collect_genotype(input_files, output_file, threads):
     print(f"- removing {sum(too_many_nas)} insertions with more than {CONFIG['combine_genotypes']['max_na']} NA colonies")
     print(f"- removing {sum(n_uncertain > n_wt + n_insertions)} insertions with more than half uncertain calls.")
     print(f"- removing {sum(n_uncertain_insertion > n_insertions + 1)} insertions with more uncertain than certain insertion calls.")
+    print(f"- removing {sum(best_wt_score<5000)} with a wt score of 10000 or less")
+    print(f"- removing {sum(best_ins_score<5000)} with a het/hom score of 10000 or less")
+
     summary_filtering = pd.DataFrame([n_wt < CONFIG['combine_genotypes']['min_wild-types'],
                                       n_insertions < CONFIG['combine_genotypes']['min_insertions'],
                                       too_many_artefacts,
                                       too_many_nas,
                                       n_uncertain > n_wt + n_insertions,
-                                      n_uncertain_insertion > n_insertions + 1])
+                                      n_uncertain_insertion > n_insertions + 1,
+                                      best_wt_score<1000,
+                                      best_ins_score<1000
+                                      ])
     summary_filtering = summary_filtering.any(axis=0)
     print(f"= removing {sum(summary_filtering)} insertions failing any of these tests.")
     d = d.loc[~summary_filtering]
+    print(f" applying score filtering")
     print(f"writing a final of {d.shape[0]} filtered insertions")
     d.to_csv(output_file, sep=";")
 

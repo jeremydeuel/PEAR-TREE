@@ -141,7 +141,7 @@ if __name__ == '__main__':
         combine_insertions(discovery_files,
                            f"{output_stem}.genotyping.txt.gz",
                            f"{output_stem}.combined.txt.gz",
-                           f"{output_stem}.fa.gz",
+                           f"{output_stem}.fq.gz",
                            f"{output_stem}.bam",
                            threads)
         exit(0)

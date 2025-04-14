@@ -86,21 +86,26 @@ def clean_clipped_seq(seq: QualitySeq) -> QualitySeq:
         seq = seq[:(i-j)]
     return seq
 
-def sequence_matching_score(seqs: List[str]) -> int:
-    min_len = min(32, min([len(s) for s in seqs]))
+def sequence_matching_score(seqs: List[QualitySeq|str]) -> int:
+    min_len = min(24,min([len(s) for s in seqs]))
     score = 0
     for i in range(min_len):
         bases = {
-            'a': 0,
-            't': 0,
-            'g': 0,
-            'c': 0,
-            'n': 0
+            'A': 0,
+            'T': 0,
+            'G': 0,
+            'C': 0,
+            'N': 0
         }
-        for s in seqs:
-            bases[s[i]] += 1
+        for seq in seqs:
+            if isinstance(seq, QualitySeq):
+                base, qual = seq.getPos(i)
+            else:
+                base = seq[i]
+                qual = 1
+            bases[base.upper()] += qual
         bases['n'] = 0
-        if max(bases.values()) >= sum(bases.values())*0.51:
+        if sum(bases.values()) and max(bases.values())/sum(bases.values()) > 0.5:
             score += 1
         else:
             score -= 2

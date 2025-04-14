@@ -457,9 +457,9 @@ class Discovery:
                 while iL < len(l) and iR < len(r):
                     tsd: int = r[iR].breakpoint-l[iL].breakpoint
                     if tsd < 2:
-                        while iP < len(p) and p[iP].breakpoint - l[iL].breakpoint < 2:
+                        while iP < len(p) and p[iP].breakpoint - l[iL].breakpoint < 12:
                             iP += 1
-                        if iP != len(p) and p[iP].breakpoint - l[iL].breakpoint < 40 and p[iP].clip is CLIP_RIGHT:
+                        if iP != len(p) and p[iP].breakpoint - l[iL].breakpoint < 120 and p[iP].clip is CLIP_RIGHT:
                             self.printOutput(outfile, l[iL], p[iP])
                             nP += 1
                             iL += 1
@@ -467,9 +467,9 @@ class Discovery:
                         iR += 1
                         continue
                     elif tsd > 40:
-                        while iP < len(p) and r[iR].breakpoint - p[iP].breakpoint > 40:
+                        while iP < len(p) and r[iR].breakpoint - p[iP].breakpoint > 120:
                             iP += 1
-                        if iP != len(p) and r[iR].breakpoint - p[iP].breakpoint > 2 and p[iP].clip is CLIP_LEFT:
+                        if iP != len(p) and r[iR].breakpoint - p[iP].breakpoint > 12 and p[iP].clip is CLIP_LEFT:
                             self.printOutput(outfile, p[iP], r[iR])
                             nP += 1
                             iR += 1

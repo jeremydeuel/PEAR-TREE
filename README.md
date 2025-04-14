@@ -77,6 +77,15 @@ Parameter | Description
 --bam | Path to a single bam file
 --out | Path to a single out-file, .txt.gz
 
+This step runs on a single thread and requires at least 16 GB of ram.
+
+*Recommended slurm settings*
+```{slurm}
+--mem=16G
+--cpus-per-task=1
+--t=11:59:59
+--ntasks=1
+```
 ### Step 2: Combine Insertions
 
 ```bash
@@ -104,6 +113,14 @@ python main.py --step genotype --bam [bam] --out [outfile.txt.gz] --insertions [
  --insertions | Path to the {stem}.genotyping.txt.gz file generated in Step 2
 --threads | Number of parallel threads to use, I recommend 6, but any reasonable number (including 1) should work.
 
+
+*Recommended slurm settings*
+```{slurm}
+--mem=16G
+--cpus-per-task=16
+--t=11:59:59
+--ntasks=1
+```
 ### Step 4: Combine Genotypes
 
 ```bash
