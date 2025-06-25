@@ -1,6 +1,6 @@
-# Supplementary tools for Geminate
+# Supplementary tools for PEAR-TREE
 
-This readme document describes the supplementary tools available for geminate. They are located in the tools folder.
+This readme document describes the supplementary tools available for PEAR-TREE. They are located in the tools folder.
 
 ## Annotate
 
@@ -15,7 +15,7 @@ This tool annotates a excel output of insertions.
 This tool is configured directly in the source code by setting these constants:
 * **EXCEL_IN** Excel file with at least the column "insertion" containing the names of the insertions that sould be annotated
 * **EXCEL_OUT** Output path for the annotated Excel list
-* **INSERTIONS_FILE** path to insertions.combined.txt.gz generated during step 2 of geminate. If necessary multiple files can be concatenated by using the `cat` command.
+* **INSERTIONS_FILE** path to insertions.combined.txt.gz generated during step 2 of PEAR-TREE. If necessary multiple files can be concatenated by using the `cat` command.
 * **TMP_FASTA** temporary fasta file that will be used for the _hmmer_ and _bowtie2_ steps
 * **DFAM_SCRIPT** path to dfamscan.pl, download from [DFAM](https://dfam.org/help/tools)
 * **DFAM_HMM** path to the species-specific hmm file, generated with the filter_hmm.py file
@@ -57,8 +57,8 @@ Using an excel list of insertions, this tool generates an excel list of the numb
 This tool is configured directly in the source code by setting these constants:
 
 * `d = pd.read_excel("all.insertions.xlsx")`: Path to the input file, should contain a column named "insertion"
-* `files = list(os.listdir('PD45517'))+list(os.listdir('PD45534'))+list(os.listdir('PD48402'))`: List all the files obtained during the first step of geminate. This is only used to obtain the original bam file count.
-* `with gzip.open(f'{patient}.insertions.combined.txt.gz', 'rt') as fh:` path to the insertions.combined.txt.gz files obtained during the second step of geminate
+* `files = list(os.listdir('PD45517'))+list(os.listdir('PD45534'))+list(os.listdir('PD48402'))`: List all the files obtained during the first step of PEAR-TREE. This is only used to obtain the original bam file count.
+* `with gzip.open(f'{patient}.insertions.combined.txt.gz', 'rt') as fh:` path to the insertions.combined.txt.gz files obtained during the second step of PEAR-TREE
 * `pd.DataFrame(output).to_excel('first.step.stats.xlsx')`: path to the desired output file
 
 
