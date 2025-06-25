@@ -21,14 +21,14 @@ import sys, time, os, argparse
 from config import CONFIG
 def print_head(phase):
     print('\033[36;1;4mPEAR-TREE\033[0m')
-    print('\033[36mGenomic Events of Mutation through Insertional alterations by Transposable Elements\033[0m')
+    print('\033[36mpaired ends of aberrant retrotransposons in phylogenetic trees\033[0m')
     print(f"\033[90mConfiguration: {CONFIG}\033[0m")
     print(f"Current Phase: {phase}")
 
 if __name__ == '__main__':
     clm = argparse.ArgumentParser(
         prog = 'PEAR-TREE',
-        description = 'Genomic events of mutation through insertional alterations by transposable elements',
+        description = 'paired ends of aberrant retrotransposons in phylogenetic trees',
         usage = 'python main.py --step discover --bam [bam] --out [outfile.txt.gz]\n' +
                 'python main.py --step combine_insertions --discovery_files [files] --out [outfile_stem] --threads [1]\n' +
                 'python main.py --step genotype --bam [bam] --out [outfile.txt.gz] --insertions [insertions.genotyping.txt.gz] --threads [1]\n' +
