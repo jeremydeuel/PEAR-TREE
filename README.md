@@ -1,5 +1,7 @@
 # PEAR-TREE
 
+![PEAR-TREE Logo](peartree_logo_.png)
+
 paired ends of aberrant retrotransposons in phylogenetic trees
 
 This repository contains the complete pipeline to find insertional mutations in whole genome sequencing data.
