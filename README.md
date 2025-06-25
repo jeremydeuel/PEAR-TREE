@@ -1,6 +1,6 @@
 # PEAR-TREE
 
-![PEAR-TREE Logo](peartree_logo.png)
+<img src="peartree_logo.png" alt="drawing" width="200"/>
 
 paired ends of aberrant retrotransposons in phylogenetic trees
 
