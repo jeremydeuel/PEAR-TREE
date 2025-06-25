@@ -35,5 +35,5 @@ if [ ! -f raw/$1.sample.dupmarked.bam.bai ]; then
 	echo "Creating index for $1"
 	samtools index raw/$1.sample.dupmarked.bam
 fi
-python geminate/src/main.py --step genotype  --bam raw/$1.sample.dupmarked.bam  --out genotypes/$1.txt.gz --threads 1
+python PEAR-TREE/src/main.py --step genotype  --bam raw/$1.sample.dupmarked.bam  --out genotypes/$1.txt.gz --threads 1
 #python sirt/genotype.py insertions.genotyping.txt.gz raw/$1.sample.dupmarked.bam genotypes/$1.txt.gz

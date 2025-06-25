@@ -35,4 +35,4 @@ if [ ! -f raw/$1.sample.dupmarked.bam.bai ]; then
 	samtools index raw/$1.sample.dupmarked.bam
 fi
 #python sirt/chimericFeature_regenotyping.py raw/$1.sample.dupmarked.bam insertions/insertions/$1.txt.gz$1.txt.gz
-python geminate/src/main.py --step discover --bam raw/$1.sample.dupmarked.bam --out insertions/$1.txt.gz
+python PEAR-TREE/src/main.py --step discover --bam raw/$1.sample.dupmarked.bam --out insertions/$1.txt.gz

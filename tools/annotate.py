@@ -1,4 +1,4 @@
-# Geminate - Genomic events of mutation through insertional alterations by transposable elements
+# PEAR-TREE - Genomic events of mutation through insertional alterations by transposable elements
 #
 # Copyright (C) 2025 Jeremy Deuel <jeremy.deuel@usz.ch>
 #
