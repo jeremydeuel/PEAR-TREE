@@ -37,11 +37,14 @@ The readme for the supplementary tools can be found [here](tools.md).
 * Install bowtie2, I use version 2.5.4
   * [Github repo](https://github.com/BenLangmead/bowtie2)
   * use conda, homebrew or compile yourself
-* Install samtools, I use version 1.21
+* Install samtools, use version 1.21
   * [HTSLib and Samtools Homepage](https://www.htslib.org/download/)
   * use conda, homebrew or follow the instructions on the above webpage
 * Download a 2bit file for the assembly your BAM-files were mapped against. See table below for sources
+* Download a chain file converting the assembly of your bam files to mm39, e.g. https://hgdownload.soe.ucsc.edu/goldenPath/mm39/liftOver/mm39ToMm10.over.chain.gz
 * Build a bowtie index for the latest assembly of the organism you are using. It is important to choose a T2T-assembly if available.
+  * e.g. mm39: Download genome from https://hgdownload.soe.ucsc.edu/goldenPath/mm39/bigZips/mm39.fa.gz and build using `bowtie2-build mm39.fa.gz mm39 --threads [NUMTHREADS]`
+* Adjust the paths to your bowtie2 genomes and reference files in src/config.py
 
 ## Sources of 2bit files
 
@@ -170,6 +173,40 @@ combine_insertions.bowtie2_index | - | Path to bowtie2 index
 
 Note: If using enriched and not whole-genome data, wild-types usually are not detected since the absence of an insertion leads to low-coverage. Thus, it might be advisable to set min_wild-types to 0 and max_na to 1000000
 
+## Testing
+
+A test bam file containing a heterozygous LINE insertion at position 14:35038203-35038218 is provided in the test_data folder. It can be run using the following commands on your local computer, given the very small testdata file size, in a few seconds
+
+### Step 1: Discovery
+
+```{bash}
+python src/main.py --step discover --bam test_data/test.bam --out test_data/test_step1.txt.gz
+```
+this will find the insertion of an IAPEz in 13:32992169-32992177.
+
+### Step 2: Combine Insertions
+
+note: this step requires you to install bowtie, have a mm39 bowtie2 index and a mm10.2bit file, all correctly linked in src/config.py. It might not be suitable to do this on your local computer, although this is certainly possible. Once these references are present and build, running the command on the testfile is a matter of seconds.
+
+```{bash}
+python src/main.py --step combine_insertions --discovery_files test/data/*_step1.txt.gz --out test_data/test_step2.txt.gz
+```
+
+this will generate several files, the most important being the test_step2.txt.genotyping.txt.gz file
+
+### Step 3: Genotyping
+
+this will genotype the bam file and detect a heterozygous insertion. Using the test-data, this step can be run locally within a few seconds.
+
+```
+python src/main.py --step genotype --bam test_data/test.bam --out test_data/test_step3.txt.gz --insertions test_data/test_step2.txt.genotyping.txt.gz
+```
+
+expected output in test_step3.txt.gz
+```
+insertion	genotype	score_genotype	score_alternative
+13:32992169-32992177	heterozygous	2428	5285
+```
 
 ## License
 

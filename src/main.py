@@ -114,7 +114,7 @@ if __name__ == '__main__':
         discovery_files = args.discovery_files
         output_stem = args.out[0]
         if output_stem[-3:] == '.gz':
-            output_stem = output_stem[-3:]
+            output_stem = output_stem[:-3]
         threads = int(args.threads[0])
         if threads > os.cpu_count():
             raise ValueError(
