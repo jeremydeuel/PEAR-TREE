@@ -59,7 +59,7 @@ CONFIG = {
         'bowtie2_executable': '/nfs/users/nfs_j/jd43/software/bowtie2-2.5.4-linux-x86_64/bowtie2', #path to bowtie2 executable
         'bowtie2_index': '/lustre/scratch125/casm/teams/team273/users/jd43/pt_hu_trees/hs1', #path to bowtie2 index used to align the entire string of aligned read and clipped read, use a t2t genome if available.
         'bowtie2_index2': '/lustre/scratch125/casm/teams/team273/users/jd43/pt_hu_trees/hs1', #path to bowtie2 index used to align only the clipped part of the read, use the latest annotated genome here.
-        'bowtie2_index2_lo': '' # path to chainfile linking bowtie2_index to the index used for alignment in the bam file.
+        'bowtie2_index2_lo': None # path to chainfile linking bowtie2_index to the index used for alignment in the bam file.
 
     },
     'version': '1.0'
