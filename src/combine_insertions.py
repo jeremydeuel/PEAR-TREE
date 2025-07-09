@@ -96,7 +96,9 @@ def combine_insertions(input_files, insertions_genotyping_file, combined_inserti
         os.system(cmd)
     filter_reads = set()
     print(f"removing all reads where one of the clipped ends maps within 1000bp of the breakpoint.")
-    lo = pyliftover.LiftOver(CONFIG['combine_insertions']['bowtie2_index2_lo'])
+    lo = None
+    if CONFIG['combine_insertions']['bowtie2_index2_lo'] is not None:
+        lo = pyliftover.LiftOver(CONFIG['combine_insertions']['bowtie2_index2_lo'])
     filter_reads = set()
     delta_sampler = []
     with pysam.AlignmentFile(clipped_bam) as f:
@@ -110,7 +112,10 @@ def combine_insertions(input_files, insertions_genotyping_file, combined_inserti
                     pos = int(right_pos)
                 else:
                     pos = int(left_pos)
-                map = lo.convert_coordinate(read.reference_name, read.reference_start if read.is_forward else read.reference_end)
+		if lo is not None:
+                    map = lo.convert_coordinate(read.reference_name, read.reference_start if read.is_forward else read.reference_end)
+                else:
+                    map = [(read.reference_name, read.reference_start if read.is_forward else read.reference_end, '+' if read.is_forward else '-', 0)]
                 if map is not None:
                     for map_rn, map_coord, map_strand, map_len in map:
                         if reference_name == map_rn:
