@@ -53,12 +53,12 @@ CONFIG = {
         'max_na': 0, #maximal number of colonies with NA genotype (high coverage or no coverage)
     },
     'combine_insertions': {
-        'genome_2bit': '/lustre/scratch125/casm/teams/team273/users/jd43/pt_hu_trees/hs1/hs1.2bit', #path to genome, has to be 2bit file
+        'genome_2bit': '/lustre/scratch126/casm/teams/team273/users/jd43/pt_hu_trees/hs1/hs1.2bit', #path to genome, has to be 2bit file
         'exclude_files_with_many_insertions': 1_000_000, #exclude files with more than this number of insertions. No single-leaf insertions of these files can be identified.
         'samtools_executable': '/software/spack_environments/default/00/opt/spack/linux-ubuntu22.04-x86_64_v3/gcc-13.1.0/samtools-1.19-ufgcnbyuj24ufumlyimozp6habconpvy/bin/samtools', #path to bowtie2 executable
         'bowtie2_executable': '/nfs/users/nfs_j/jd43/software/bowtie2-2.5.4-linux-x86_64/bowtie2', #path to bowtie2 executable
-        'bowtie2_index': '/lustre/scratch125/casm/teams/team273/users/jd43/pt_hu_trees/hs1', #path to bowtie2 index used to align the entire string of aligned read and clipped read, use a t2t genome if available.
-        'bowtie2_index2': '/lustre/scratch125/casm/teams/team273/users/jd43/pt_hu_trees/hs1', #path to bowtie2 index used to align only the clipped part of the read, use the latest annotated genome here.
+        'bowtie2_index': '/lustre/scratch126/casm/teams/team273/users/jd43/pt_hu_trees/hs1/hs1', #path to bowtie2 index used to align the entire string of aligned read and clipped read, use a t2t genome if available.
+        'bowtie2_index2': '/lustre/scratch126/casm/teams/team273/users/jd43/pt_hu_trees/hs1/hs1', #path to bowtie2 index used to align only the clipped part of the read, use the latest annotated genome here.
         'bowtie2_index2_lo': None # path to chainfile linking bowtie2_index to the index used for alignment in the bam file.
 
     },

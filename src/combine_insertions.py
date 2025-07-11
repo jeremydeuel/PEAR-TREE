@@ -112,7 +112,7 @@ def combine_insertions(input_files, insertions_genotyping_file, combined_inserti
                     pos = int(right_pos)
                 else:
                     pos = int(left_pos)
-		if lo is not None:
+                if lo is not None:
                     map = lo.convert_coordinate(read.reference_name, read.reference_start if read.is_forward else read.reference_end)
                 else:
                     map = [(read.reference_name, read.reference_start if read.is_forward else read.reference_end, '+' if read.is_forward else '-', 0)]
