@@ -10,6 +10,8 @@ python tools/annotate.py
 
 This tool annotates a excel output of insertions.
 
+Generate the input excel with the first column of the combined genotyping file and renaming it to "insertion".
+
 ### Input and Configuration
 
 This tool is configured directly in the source code by setting these constants:
@@ -74,8 +76,8 @@ n_first_step | number of bam files the inseriton has been identified in during t
 This script filters a (huge) DFAM file with all possible HMMs for a given species. This script is configured in the command line. The output is used for the annotate tool
 
 ```{bash}
-python tools/filter_hmm.py --infile Dfam.hmm --outfile Dfam.mm.hmm --species "Mus musculus"
-python tools/filter_hmm.py --infile Dfam.hmm --outfile Dfam.hs.hmm --species "Homo sapiens"
+python tools/filter_hmm.py --infile Dfam.hmm --outfile Dfam.mm.hmm --species "Mus_musculus"
+python tools/filter_hmm.py --infile Dfam.hmm --outfile Dfam.hs.hmm --species "Homo_sapiens"
 
 ```
 
