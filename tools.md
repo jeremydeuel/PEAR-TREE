@@ -81,6 +81,12 @@ python tools/filter_hmm.py --infile Dfam.hmm --outfile Dfam.hs.hmm --species "Ho
 
 ```
 
+then run hmmpress on this file
+
+```{bash}
+hmmpress Dfam.hs.hmm
+```
+
 ### Input
 
 Download the full [DFAM HMM library](https://dfam.org/releases/current/families/Dfam.hmm.gz). Make sure to spell the species exactly as in the DFAM HMM File, e.g. "Mus musculus" or "Homo sapiens" (Check for TaxName entries if necessary).
