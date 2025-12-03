@@ -53,7 +53,7 @@ def collect_genotype(input_files, output_file, threads):
     pool = Pool(threads)
     results = []
     for file in input_files:
-        stem = os.path.basename(file[:-7])
+        stem = os.path.basename(file[:-6])
         insertions = {}
         results.append(pool.apply_async(mc_import, args=(file, stem)))
     print(f"collecting results...")
