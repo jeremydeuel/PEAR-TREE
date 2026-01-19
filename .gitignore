@@ -1,0 +1,10 @@
+/venv/
+/venv3.9/
+genotyping_test
+*__pycache__*
+.idea
+.DS_Store
+hs1*
+
+
+
