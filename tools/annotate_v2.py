@@ -20,11 +20,9 @@
 
 DEBUG = True
 
-import pandas as pd
 import gzip
 import os
 import pysam
-import pyliftover
 from math import floor
 import re
 import sys
