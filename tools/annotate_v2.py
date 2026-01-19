@@ -28,7 +28,7 @@ import pyliftover
 from math import floor
 import re
 import sys
-from .src.config import CONFIG
+from src.config import CONFIG
 
 class RepeatMasker_Annotation:
     def __init__(self, line):
@@ -109,7 +109,7 @@ class Insertion:
             return 'artefact'
         if len(self.right_dfams)>0:
             for m in self.right_dfams:
-                if m.is_active:
+                if True or m.is_active:
                     if "L1" in m.model:
                         # ignore strand for LINEs, since these can sometimes reverse a part of the LINE at the 5' insertion site.
                         # accept this in three conditions
@@ -143,14 +143,14 @@ class Insertion:
                                     if (strand == "+") ^ (r.strand == "+") == m.strand == "-":
                                         return m.model
             for m in self.left_dfams:
-                if m.is_active:
+                if True or m.is_active:
                     if "L1" in m.model:
                         # ignore strand for LINEs, since these can sometimes reverse a part of the LINE at the 5' insertion site.
                         # accept this in three conditions
                         # 1) polyA on the other side
                         if self.has_right_polyA():
                             return "L1"
-                        # 2) L1 element on the other side
+			# 2) L1 element on the other side
                         # ignore, already covered above.
                         # 3) match near an L1 element on the other side.
                         for pos, qual, rmsks, strand in self.right_maps:
@@ -181,9 +181,9 @@ class VariantAnnotationContainer:
         self.sample = sample
         self.insertions_file = CONFIG['annotate']['insertions_file'](sample)
         self.genotyping_file = CONFIG['annotate']['genotyping_file'](sample)
-        self.dfam_file = CONFIG['combine_insertions']['tmp']('dfam')(sample)
-        self.sam_file = CONFIG['combine_insertions']['tmp']('sam')(sample)
-        self.fasta_file = CONFIG['combine_insertions']['tmp']('fa')(sample)
+        self.dfam_file = CONFIG['annotate']['tmp']('dfam')(sample)
+        self.sam_file = CONFIG['annotate']['tmp']('sam')(sample)
+        self.fasta_file = CONFIG['annotate']['tmp']('fa.gz')(sample)
         self.output = output
         self.insertions = {}
         if not os.path.exists(self.insertions_file):
@@ -253,11 +253,11 @@ class VariantAnnotationContainer:
         """
         This function generates the fasta file necessary for dfam and samtools
         """
-        with gzip.open(self.fastafile, 'wt') as fh:
+        with gzip.open(self.fasta_file, 'wt') as fh:
             for insertion in self.insertions.values():
                 fh.write(insertion.get_fasta())
 
-    def generate_dfam(self):
+    def generate_dfam_file(self):
         """
         This function generates the dfam file using dfamscan.pl
         """
@@ -274,7 +274,7 @@ class VariantAnnotationContainer:
             f"{CONFIG['annotate']['dfamscan']} --fastafile {self.fasta_file} --hmmfile {CONFIG['annotate']['hmm']} --cpu {os.cpu_count()} --dfam_outfile {self.dfam_file}")
         assert os.path.exists(self.dfam_file)
 
-    def generate_sam(self):
+    def generate_sam_file(self):
         """
         This function generates the SAM alignment file with bowtie2
         """
@@ -375,13 +375,13 @@ class VariantAnnotationContainer:
         this function reads the output of bowtie2 and decorates the insertion object with it.
         positions are lifted over using the chainfile, if one is provided. This is usefull if re-mapping is done to another genome version, e.g. to hs1 if originally mapped to hg38.
         """
-        if CONFIG['combine_insertions']['bowtie2_index2_lo'] is not None:
-            print(f"reading CONFIG['combine_insertions']['bowtie2_index2_lo'] {CONFIG['combine_insertions']['bowtie2_index2_lo']}, this might take a while...")
-            lo = pyliftover.LiftOver(CONFIG['combine_insertions']['bowtie2_index2_lo'])
-            print(f"done reading chainfile {CONFIG['combine_insertions']['bowtie2_index2_lo']}")
-        else:
-            lo = None
-
+        #if CONFIG['combine_insertions']['bowtie2_index2_lo'] is not None:
+        #    print(f"reading CONFIG['combine_insertions']['bowtie2_index2_lo'] {CONFIG['combine_insertions']['bowtie2_index2_lo']}, this might take a while...")
+        #    lo = pyliftover.LiftOver(CONFIG['combine_insertions']['bowtie2_index2_lo'])
+        #    print(f"done reading chainfile {CONFIG['combine_insertions']['bowtie2_index2_lo']}")
+        #else:
+        #    lo = None
+        lo = None
         rmsk_library = self.read_rmsk(CONFIG['annotate']['rmsk'])
 
         rightn = 0
