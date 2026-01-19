@@ -60,9 +60,17 @@ CONFIG = {
         'bowtie2_index': '/lustre/scratch126/casm/teams/team273/users/jd43/pt_hu_trees/hs1/hs1', #path to bowtie2 index used to align the entire string of aligned read and clipped read, use a t2t genome if available.
         'bowtie2_index2': '/lustre/scratch126/casm/teams/team273/users/jd43/pt_hu_trees/hs1/hs1', #path to bowtie2 index used to align only the clipped part of the read, use the latest annotated genome here.
         'bowtie2_index2_lo': '/lustre/scratch126/casm/teams/team273/users/jd43/pt_hu_trees/hs1.hg38.all.chain.gz' # path to chainfile linking bowtie2_index to the index used for alignment in the bam file.
-
     },
-    'version': '1.0'
+    'annotate': { #necessary for annotate_v2.py
+        'rmsk': '/lustre/scratch126/casm/teams/team273/users/jd43/pt_hu_trees/hs1.repeatMasker.out.gz', # Path to repeatmasker annotation of the bowtie2_index2 genome
+        'tmp': lambda extension: lambda sample: f'/lustre/scratch126/casm/teams/team273/users/jd43/tmp/{sample}.{extension}', #function go generate temporary paths.
+        'hmm': '/lustre/scratch126/casm/teams/team273/users/jd43/Dfam-curated_only-hs.hmm', #path to the extracted species-specific hmm file. Run hmmpress first on this!
+        'dfamscan': '/lustre/scratch126/casm/teams/team273/users/jd43/dfamscan.pl', #path to the dfam dfamscan.pl script
+        'hmmer': '/nfs/users/nfs_j/jd43/.local/bin', #path to folder containing the HMMER executables
+        'genotyping_file': lambda sample: f'/lustre/scratch126/casm/teams/team273/users/jd43/pt_hu_trees/genotyping/{sample}.genotypes.csv.gz', #function go generate path to genotypes file
+        'insertions_file': lambda sample: f'/lustre/scratch126/casm/teams/team273/users/jd43/pt_hu_trees/insertions/{sample}.combined.txt.gz', # function to generate path to insertions file.
+    },
+    'version': '1.1'
 }
 
 

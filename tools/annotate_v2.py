@@ -27,20 +27,8 @@ import pysam
 import pyliftover
 from math import floor
 import re
-#HUMAN
-INSERTIONS_IN = "/Users/jeremy/Documents/revisions/trees_mpn/insertions/PD4781/PD4781.combined.txt.gz"
-EXCEL_OUT = "/Users/jeremy/Documents/revisions/trees_mpn/insertions/PD4781/PD4781.annotated.xlsx"
-GENOTYPING_FILE = '/Users/jeremy/Documents/revisions/trees_mpn/genotyping/PD4781/PD4781.genotypes.csv.gz'
-TMP_FASTA = '/Users/jeremy/Documents/revisions/trees_mpn/insertions/tmp/PD4781.insertions.fa.gz'
-DFAM_SCRIPT = '../../genomes/dfam/dfamscan.pl'
-DFAM_HMM = '../../genomes/dfam/Dfam_hs.hmm'
-TMP_DFAM = '/Users/jeremy/Documents/revisions/trees_mpn/insertions/tmp/PD4781.insertions.dfam'
-TMP_SAM = '/Users/jeremy/Documents/revisions/trees_mpn/insertions/tmp/PD4781.insertions.sam'
-BOWTIE_SCRIPT = '/opt/homebrew/bin/bowtie2'
-BOWTIE_REF = '../../genomes/bowtie2_indices/hs1'
-CHAINFILE = None#'../../genomes/hs1.hg38.all.chain.gz' #https://hgdownload.soe.ucsc.edu/goldenPath/hs1/vsHg38/hs1.hg38.all.chain.gz
-# the repeatmasker file has to be in the genome build of the bowtie2 assembly, not the original bam file assembly.
-RMSK = '/Users/jeremy/Documents/PEAR-TREE/hs1.repeatMasker.out.gz' #https://hgdownload.soe.ucsc.edu/goldenPath/hs1/bigZips/hs1.repeatMasker.out.gz
+import sys
+from ..src.config import CONFIG
 
 class RepeatMasker_Annotation:
     def __init__(self, line):
@@ -189,14 +177,14 @@ class Insertion:
 
 
 class VariantAnnotationContainer:
-    def __init__(self, sample):
+    def __init__(self, sample, output):
         self.sample = sample
-        self.insertions_file = INSERTIONS_IN
-        self.genotyping_file = GENOTYPING_FILE
-        self.dfam_file = TMP_DFAM
-        self.sam_file = TMP_SAM
-        self.fasta_file = TMP_FASTA
-        self.output = EXCEL_OUT
+        self.insertions_file = CONFIG['annotate']['insertions_file'](sample)
+        self.genotyping_file = CONFIG['annotate']['genotyping_file'](sample)
+        self.dfam_file = CONFIG['combine_insertions']['tmp']('dfam')(sample)
+        self.sam_file = CONFIG['combine_insertions']['tmp']('sam')(sample)
+        self.fasta_file = CONFIG['combine_insertions']['tmp']('fa')(sample)
+        self.output = output
         self.insertions = {}
         if not os.path.exists(self.insertions_file):
             raise FileNotFoundError(f"Insertions file {self.insertions_file} not found")
@@ -275,13 +263,15 @@ class VariantAnnotationContainer:
         """
         print(f"running DFAM on {self.sample}")
         assert os.path.exists(self.fasta_file)
-        assert os.path.exists(DFAM_SCRIPT)
-        assert os.path.exists(DFAM_HMM)
-        assert os.path.exists(DFAM_SCRIPT)
-        assert os.access(DFAM_SCRIPT, os.X_OK)
+        assert os.path.exists(CONFIG['annotate']['dfamscan'])
+        assert os.path.exists(CONFIG['annotate']['hmm'])
+        assert os.path.exists(CONFIG['annotate']['dfamscan'])
+        assert os.access(CONFIG['annotate']['dfamscan'], os.X_OK)
+        # set PATH variable to include hmmer scripts.
+        os.environ["PATH"] = CONFIG['annotate']['hmmer'] + ":" + os.environ["PATH"]
         assert 0 == os.system("nhmmscan -h > /dev/null 2>&1") # check that nhmmscan exists in path, otherwise dfamscan.pl will not work.
         assert 0 == os.system(
-            f"{DFAM_SCRIPT} --fastafile {self.fasta_file} --hmmfile {DFAM_HMM} --cpu {os.cpu_count()} --dfam_outfile {self.dfam_file}")
+            f"{CONFIG['annotate']['dfamscan']} --fastafile {self.fasta_file} --hmmfile {CONFIG['annotate']['hmm']} --cpu {os.cpu_count()} --dfam_outfile {self.dfam_file}")
         assert os.path.exists(self.dfam_file)
 
     def generate_sam(self):
@@ -290,9 +280,9 @@ class VariantAnnotationContainer:
         """
         print(f"running bowtie2 on {self.sample}")
         assert os.path.exists(self.fasta_file)
-        assert os.path.exists(BOWTIE_SCRIPT)
-        assert os.access(BOWTIE_SCRIPT, os.X_OK)
-        assert 0 == os.system(f"{BOWTIE_SCRIPT} -x {BOWTIE_REF} --end-to-end -f {self.fasta_file} > {self.sam_file}")
+        assert os.path.exists(CONFIG['combine_insertions']['bowtie2_executable'])
+        assert os.access(CONFIG['combine_insertions']['bowtie2_executable'], os.X_OK)
+        assert 0 == os.system(f"{CONFIG['combine_insertions']['bowtie2_executable']} -x {CONFIG['combine_insertions']['bowtie2_index2']} --end-to-end -f {self.fasta_file} > {self.sam_file}")
         assert os.path.exists(self.sam_file)
         assert os.path.getsize(self.sam_file)>0
 
@@ -385,14 +375,14 @@ class VariantAnnotationContainer:
         this function reads the output of bowtie2 and decorates the insertion object with it.
         positions are lifted over using the chainfile, if one is provided. This is usefull if re-mapping is done to another genome version, e.g. to hs1 if originally mapped to hg38.
         """
-        if CHAINFILE is not None:
-            print(f"reading chainfile {CHAINFILE}, this might take a while...")
-            lo = pyliftover.LiftOver(CHAINFILE)
-            print(f"done reading chainfile {CHAINFILE}")
+        if CONFIG['combine_insertions']['bowtie2_index2_lo'] is not None:
+            print(f"reading CONFIG['combine_insertions']['bowtie2_index2_lo'] {CONFIG['combine_insertions']['bowtie2_index2_lo']}, this might take a while...")
+            lo = pyliftover.LiftOver(CONFIG['combine_insertions']['bowtie2_index2_lo'])
+            print(f"done reading chainfile {CONFIG['combine_insertions']['bowtie2_index2_lo']}")
         else:
             lo = None
 
-        rmsk_library = self.read_rmsk(RMSK)
+        rmsk_library = self.read_rmsk(CONFIG['annotate']['rmsk'])
 
         rightn = 0
         leftn = 0
@@ -452,7 +442,14 @@ class VariantAnnotationContainer:
 
 
 if __name__== '__main__':
-    f = VariantAnnotationContainer('PD4781')
+    if not len(sys.argv) > 1:
+        raise NotImplementedError(f"this script takes one or two arguments.\nUsage: annotate_v2.py [sample_name] ([output_path])")
+    sample = sys.argv[1]
+    if len(sys.argv)>2:
+        output_path = sys.argv[2]
+    else:
+        output_path = f"{sample}.out"
+    f = VariantAnnotationContainer(sample, output_path)
     f.print()
 
 
