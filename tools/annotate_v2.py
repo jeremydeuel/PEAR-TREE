@@ -191,7 +191,44 @@ class Insertion:
                                     # check same strand
                                     if (strand == "+") ^ (r.strand == "+") == m.strand == "-":
                                         return m.model
-
+        # check elements only mapped, but not identified by dfam
+        l1_map_check = False
+        for pos, qual, rmsks, strand in self.left_maps:
+            for r in rmsks:
+                if 'L1' in r.repName[:2] and not l1_map_check:
+                    if self.has_right_polyA(): return r.repName
+                    l1_map_check = True #dont check this twice
+                    for pos2, qual2, rmsks2, strand2 in self.right_maps:
+                        for r2 in rmsks2:
+                            if 'L1' in r2.repName[:2]:
+                                return r.repName
+        if not l1_map_check:
+            # check left side for L1 match and right for polyA
+            for pos, qual, rmsks, strand in self.right_maps:
+                if l1_map_check: break
+                for r in rmsks:
+                    if 'L1' in r.repName[:2] and not l1_map_check:
+                        if self.has_left_polyA(): return r.repName
+                        l1_map_check = True
+                        break
+        plus_elements = set()
+        minus_elements = set()
+        for pos, qual, rmsks, strand in self.left_maps:
+            for r in rmsks:
+                if (strand == "+") ^ (r.strand == "+"):
+                    if self.has_right_polyA(): return r.repName
+                    minus_elements.add(r.repName[:3])
+                else:
+                    plus_elements.add(r.repName[:3])
+        for pos, qual, rmsks, strand in self.right_maps:
+            for r in rmsks:
+                if (strand == "+") ^ (r.strand == "+"):
+                    if r.repName[:3] in minus_elements:
+                        return r.repName
+                else:
+                    if self.has_left_polyA(): return r.repName
+                    if r.repName[:3] in plus_elements:
+                        return r.repName
         return 'unknown'
 
 
