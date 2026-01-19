@@ -53,8 +53,13 @@ class EvidenceRead:
                 if ref_pos == breakpoint:
                     breakpoint_query = query
                     break
+
             if breakpoint_query is None:
                 self.left_genotype = 0,0,0
+                return
+            #print(self.read.query_sequence)
+            #print(f"L   {self.read.query_sequence[:breakpoint_query]} {ref} {alt} -> qscore: ",qscore(QualitySeq(self.read.query_sequence[:breakpoint_query],self.read.query_qualities[:breakpoint_query]),
+            #              ref, alt, RIGHT_TO_LEFT))
             self.left_genotype = qscore(QualitySeq(self.read.query_sequence[:breakpoint_query],self.read.query_qualities[:breakpoint_query]),
                           ref, alt, RIGHT_TO_LEFT)
 
@@ -68,8 +73,12 @@ class EvidenceRead:
                 if ref_pos == breakpoint-1:
                     breakpoint_query = query+1
                     break
+
             if breakpoint_query is None:
                 self.right_genotype = 0,0,0
+                return
+            #print(f"R   {self.read.query_sequence[breakpoint_query:]} {ref} {alt} -> qscore : {qscore(QualitySeq(self.read.query_sequence[breakpoint_query:],self.read.query_qualities[breakpoint_query:]),
+            #              ref, alt, LEFT_TO_RIGHT)}")
             self.right_genotype = qscore(QualitySeq(self.read.query_sequence[breakpoint_query:],self.read.query_qualities[breakpoint_query:]),
                           ref, alt, LEFT_TO_RIGHT)
         else:

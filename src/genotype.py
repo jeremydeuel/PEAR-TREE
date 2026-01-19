@@ -50,7 +50,8 @@ def mc_process_insertion(input_queue: Queue, output_queue: Queue, bam_file: str)
             i.right_ref = right_ref
             i.left_ref = left_ref
             read_count = bam.count(i.chr, min(i.left_pos, i.right_pos), max(i.left_pos, i.right_pos)+1)
-            if read_count > CONFIG['genotyping']['reads_for_high_coverage']:
+            if False and read_count > CONFIG['genotyping']['reads_for_high_coverage']:
+                print(f"genotyping {i.name} as artefact due to high read count of {read_count} (cutoff = {CONFIG['genotyping']['reads_for_high_coverage']})")
                 gt, score_gt, score_other = GT_ARTEFACT, 0, 0
             else:
                 i.genotype(bam)

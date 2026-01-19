@@ -76,14 +76,16 @@ class Insertion:
             if read.is_qcfail: continue
             if read.reference_name != self.chr: continue
             evi_read = EvidenceRead(read)
-            if self.left_pos: evi_read.qleft(self.left_pos, self.left_ref, self.left_clipped)
-            if self.right_pos: evi_read.qright(self.right_pos, self.right_ref, self.right_clipped)
+            if self.left_pos:
+                evi_read.qleft(self.left_pos, self.left_ref, self.left_clipped)
+            if self.right_pos:
+                evi_read.qright(self.right_pos, self.right_ref, self.right_clipped)
             self.evidence_reads.append(evi_read)
         return
 
     def summarise_evidence(self):
         if not len(self.evidence_reads):
-            print(f"omitting {self.name}: no reads found")
+            #print(f"omitting {self.name}: no reads found")
             return GT_WILDTYPE, 0, 0
         # calculate best call using likelihood ratios
         q_art = 0
@@ -94,51 +96,49 @@ class Insertion:
         for er in self.evidence_reads:
             left_q_ref, left_q_alt, left_q_art = er.left_genotype
             right_q_ref, right_q_alt, right_q_art = er.right_genotype
-            if max(left_q_ref,left_q_alt) <= left_q_art:
-                q_art += left_q_art-max(left_q_ref, left_q_alt)
+            #print(f"    ref={left_q_ref} alt={left_q_alt} art={left_q_art} | ref={right_q_ref} alt={right_q_alt} art={right_q_art}")
+            if max([left_q_ref,left_q_alt]) <= left_q_art and left_q_art > 60:
+                q_art += left_q_art-max([left_q_ref, left_q_alt])
                 continue
-            if max(right_q_ref, right_q_alt) <= right_q_art:
-                q_art += right_q_art-max(right_q_ref, right_q_alt)
+            if max([right_q_ref, right_q_alt]) <= right_q_art and right_q_art > 60:
+                q_art += right_q_art-max([right_q_ref, right_q_alt])
                 continue
-            if right_q_art > 0 and left_q_art > 0:
-                if right_q_ref >= right_q_alt and right_q_ref > 0:
-                    if left_q_ref >= left_q_alt and left_q_ref > 0:
-                        #double wt
-                        q_hom -= 1
-                        q_ref += right_q_ref-right_q_alt + left_q_ref-right_q_alt
-                    elif left_q_alt > 0:
-                        q_alt += left_q_alt-left_q_ref
-                        q_ref += right_q_ref-right_q_alt
-                elif right_q_alt > 0:
-                    if left_q_ref >= left_q_alt and left_q_ref > 0:
-                        q_alt += right_q_alt-right_q_ref
-                        q_ref += left_q_ref-left_q_alt
-                    elif left_q_alt > 0:
-                        #double alt, this is an artefact
-                        q_art += left_q_alt-left_q_ref + right_q_alt - right_q_ref
-            elif right_q_art > 0:
-                if right_q_ref >= right_q_alt and right_q_ref > 0:
-                    q_ref += right_q_ref-right_q_alt
-                elif right_q_alt > 0:
-                    q_alt += right_q_alt-right_q_ref
-            elif left_q_art > 0:
+            if right_q_ref >= right_q_alt and right_q_ref > 0:
                 if left_q_ref >= left_q_alt and left_q_ref > 0:
-                    q_ref += left_q_ref-left_q_alt
+                    # double wt
+                    q_hom -= 1
+                    q_ref += right_q_ref - right_q_alt + left_q_ref - right_q_alt
                 elif left_q_alt > 0:
-                    q_alt += left_q_alt-left_q_ref
+                    q_alt += left_q_alt - left_q_ref
+                    q_ref += right_q_ref - right_q_alt
+            elif right_q_alt > 0:
+                if left_q_ref >= left_q_alt and left_q_ref > 0:
+                    q_alt += right_q_alt - right_q_ref
+                    q_ref += left_q_ref - left_q_alt
+                elif left_q_alt > 0:
+                    # double alt, this is an artefact
+                    q_art += left_q_alt - left_q_ref + right_q_alt - right_q_ref
 
-        if q_art >= max(q_ref,q_alt):
+
+        #print(f" > ref={q_ref} alt={q_alt} art={q_art}")
+        if q_art >= max([q_ref,q_alt]) and q_art > 0:
+            #print("  > CALL: ARTEFACT (too many artefact reads)")
             return GT_ARTEFACT, q_art, max(q_ref, q_alt)
         if q_alt > q_art:
             if q_hom < 0:
                 if q_ref >= q_art:
+                    #print("  > CALL: HETEROZYGOUS")
                     return GT_HETEROZYGOUS, q_alt, q_ref
                 else:
                     return GT_ARTEFACT, q_art, max(q_alt, q_ref)
             if q_alt >= q_ref:
+                #print("  > CALL: HOMOZYGOUS")
                 return GT_HOMOZYGOUS, q_alt, q_ref
             else:
+                #print("  > CALL: HETEROZYGOUS")
                 return GT_HETEROZYGOUS, q_alt, q_ref
         if q_ref > q_art:
+            #print("  > CALL: WILD-TYPE")
             return GT_WILDTYPE, q_ref, q_alt
+        #print("  > CALL: ARTEFACT")
         return GT_ARTEFACT, 0, 0

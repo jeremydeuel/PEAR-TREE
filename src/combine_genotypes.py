@@ -88,8 +88,8 @@ def collect_genotype(input_files, output_file, threads):
     print(f"- removing {sum(too_many_nas)} insertions with more than {CONFIG['combine_genotypes']['max_na']} NA colonies")
     print(f"- removing {sum(n_uncertain > n_wt + n_insertions)} insertions with more than half uncertain calls.")
     print(f"- removing {sum(n_uncertain_insertion > n_insertions + 1)} insertions with more uncertain than certain insertion calls.")
-    print(f"- removing {sum(best_wt_score<5000)} with a wt score of 10000 or less")
-    print(f"- removing {sum(best_ins_score<5000)} with a het/hom score of 10000 or less")
+    #print(f"- removing {sum(best_wt_score<800)} with a wt score of 800 or less")
+    print(f"- removing {sum(best_ins_score<800)} with a het/hom score of 800 or less")
 
     summary_filtering = pd.DataFrame([n_wt < CONFIG['combine_genotypes']['min_wild-types'],
                                       n_insertions < CONFIG['combine_genotypes']['min_insertions'],
@@ -97,8 +97,8 @@ def collect_genotype(input_files, output_file, threads):
                                       too_many_nas,
                                       n_uncertain > n_wt + n_insertions,
                                       n_uncertain_insertion > n_insertions + 1,
-                                      best_wt_score<1000,
-                                      best_ins_score<1000
+                                      #best_wt_score<800,
+                                      best_ins_score<800
                                       ])
     summary_filtering = summary_filtering.any(axis=0)
     print(f"= removing {sum(summary_filtering)} insertions failing any of these tests.")

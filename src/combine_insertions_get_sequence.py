@@ -48,6 +48,7 @@ def get_sequence(seqname, start, end):
     if seqname not in seqnames:
         print(f"Seqname {seqname} not found in file {CONFIG['combine_insertions']['genome_2bit']}")
         return ''
+    print(seqname)
     if start>=end: return ''
     try:
         return GENOME.sequence(seqname, start, end)
