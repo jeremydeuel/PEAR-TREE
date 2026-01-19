@@ -89,9 +89,9 @@ class Insertion:
         self.left_maps = []
         # extract inserted sequences
     def has_right_polyA(self):
-        return re.match(r"[ACGT]t{6,}", self.right_seq)
+        return re.search(r"[ACGT]t{6}", self.right_seq)
     def has_left_polyA(self):
-        return re.match(r"a{6}[ACGT]", self.left_seq)
+        return re.search(r"a{6}[ACGT]", self.left_seq)
 
     def get_fasta(self) -> str:
         """
