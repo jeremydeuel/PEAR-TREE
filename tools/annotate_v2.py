@@ -152,7 +152,7 @@ class Insertion:
                             for r in rmsks:
                                 if r.repName[:3] == m.model[:3]:
                                     # check same strand
-                                    if (strand == "+") ^ (r.strand == "+") == m.strand == "-":
+                                    if (strand == "+") ^ (r.strand == "+") == (m.strand == "-"):
                                         DEBUG and print(
                                             f"      found a suitable mapping in the left dfams ({r} on strand {r.strand}, mapping is on strand {strand})-> accepted.")
                                         return m.model
@@ -189,7 +189,7 @@ class Insertion:
                             for r in rmsks:
                                 if r.repName[:3] == m.model[:3]:
                                     # check same strand
-                                    if (strand == "+") ^ (r.strand == "+") == m.strand == "-":
+                                    if (strand == "+") ^ (r.strand == "+") == (m.strand == "-"):
                                         return m.model
         # check elements only mapped, but not identified by dfam
         l1_map_check = False
