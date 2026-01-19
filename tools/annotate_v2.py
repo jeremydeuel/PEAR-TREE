@@ -97,8 +97,8 @@ class Insertion:
         """
         This function returns a FASTA chunk with the inserted sequences for the insertion.
         """
-        self.left_ins_seq = self.left_seq[min([self.right_seq.find(b) for b in 'acgt' if b in self.right_seq]):].upper()
-        self.right_ins_seq = self.right_seq[:min([self.left_seq.find(b) for b in 'ACGT' if b in self.left_seq])].upper()
+        self.right_ins_seq = self.right_seq[min([self.right_seq.find(b) for b in 'acgt' if b in self.right_seq]):].upper()
+        self.left_ins_seq = self.left_seq[:min([self.left_seq.find(b) for b in 'ACGT' if b in self.left_seq])].upper()
         return f'>{self.title}:R\n{self.left_ins_seq}\n>{self.title}:L\n{self.right_ins_seq}\n'
 
     def conclusion(self) -> str:
