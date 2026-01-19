@@ -28,7 +28,7 @@ import pyliftover
 from math import floor
 import re
 import sys
-from ..src.config import CONFIG
+from .src.config import CONFIG
 
 class RepeatMasker_Annotation:
     def __init__(self, line):
