@@ -18,7 +18,7 @@
 
 # this is an updated version of annotate.py that does not require excel file generation and also is more sophisticated in removing false positives.
 
-
+DEBUG = True
 
 import pandas as pd
 import gzip
@@ -111,29 +111,41 @@ class Insertion:
             for m in self.right_dfams:
                 if True or m.is_active:
                     if "L1" in m.model:
+                        DEBUG and print(f"    - detected RIGHT L1 dfam model {m.model}...")
                         # ignore strand for LINEs, since these can sometimes reverse a part of the LINE at the 5' insertion site.
                         # accept this in three conditions
                         # 1) polyA on the other side
                         if self.has_left_polyA():
+                            DEBUG and print(f"      has left polyA -> accepted")
                             return "L1"
+                        else:
+                            DEBUG and print(f"      does not have left polyA -> rejected, checking left dfams")
                         # 2) L1 element on the other side
                         for m2 in self.left_dfams:
-                            if "L1" in m2.model and m2.is_active:
+                            if "L1" in m2.model:
+                                DEBUG and print(f"      found another L1 ({m2.model}) in left defams -> accepted.")
                                 return m.model
+                        DEBUG and print(f"      does not have a suitable left dfam, checking mappings.")
                         # 3) match near an L1 element on the other side.
                         for pos, qual, rmsks, strand in self.left_maps:
                             for r in rmsks:
                                 if r.repFamily == "L1":
+                                    DEBUG and print(f"      found a suitable rmsk annotation ({r}) in left mapping -> accepted.")
                                     return m.model
                     else:
+                        DEBUG and print(f"    - detected RIGHT dfam model {m.model} on strand {m.strand}, checking...")
                         # dont ignore strands for Alus and since these should have the same orientation
                         # accept this in three conditions
                         # 1) the other side has a polyA, but only if the RTE is on reverse
                         if m.strand == "+" and self.has_left_polyA():
+                            DEBUG and print(
+                                f"      found a suitable polyA in the left mapping -> accepted.")
                             return m.model
                         # 2) same element on the other side, oriented in the same direction
                         for m2 in self.left_dfams:
                             if m2.is_active and m2.model[:3] == m.model[:3] and m2.strand == m.strand:
+                                DEBUG and print(
+                                    f"      found a suitable model in the left dfams ({m2.model} on strand {m2.strand}) in the left mapping -> accepted.")
                                 return m.model
                         # 3) match near an L1 element on the other side.
                         for pos, qual, rmsks, strand in self.left_maps:
@@ -141,26 +153,33 @@ class Insertion:
                                 if r.repName[:3] == m.model[:3]:
                                     # check same strand
                                     if (strand == "+") ^ (r.strand == "+") == m.strand == "-":
+                                        DEBUG and print(
+                                            f"      found a suitable mapping in the left dfams ({r} on strand {r.strand}, mapping is on strand {strand})-> accepted.")
                                         return m.model
             for m in self.left_dfams:
                 if True or m.is_active:
                     if "L1" in m.model:
+                        DEBUG and print(f"    - detected left L1 dfam model {m.model}...")
                         # ignore strand for LINEs, since these can sometimes reverse a part of the LINE at the 5' insertion site.
                         # accept this in three conditions
                         # 1) polyA on the other side
                         if self.has_right_polyA():
+                            DEBUG and print(f"      has right polyA -> accepted")
                             return "L1"
-			# 2) L1 element on the other side
+                        # 2) L1 element on the other side
                         # ignore, already covered above.
                         # 3) match near an L1 element on the other side.
                         for pos, qual, rmsks, strand in self.right_maps:
                             for r in rmsks:
                                 if r.repFamily == "L1":
+                                    DEBUG and print(
+                                        f"      found a suitable rmsk annotation ({r}) in right mapping -> accepted.")
                                     return m.model
                     else:
                         # dont ignore strands for Alus and since these should have the same orientation
                         # accept this in three conditions
                         # 1) the other side has a polyA, but only if the RTE is on reverse
+                        DEBUG and print(f"    - detected left dfam model {m.model} on strand {m.strand}, checking...")
                         if m.strand == "-" and self.has_right_polyA():
                             return m.model
                         # 2) same element on the other side, oriented in the same direction
