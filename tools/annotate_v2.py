@@ -97,7 +97,7 @@ class Insertion:
         """
         self.right_ins_seq = self.right_seq[min([self.right_seq.find(b) for b in 'acgt' if b in self.right_seq]):].upper()
         self.left_ins_seq = self.left_seq[:min([self.left_seq.find(b) for b in 'ACGT' if b in self.left_seq])].upper()
-        return f'>{self.title}:R\n{self.left_ins_seq}\n>{self.title}:L\n{self.right_ins_seq}\n'
+        return f'>{self.title}:R\n{self.right_ins_seq}\n>{self.title}:L\n{self.left_ins_seq}\n'
 
     def conclusion(self) -> str:
         """
@@ -183,7 +183,7 @@ class Insertion:
                         # 2) same element on the other side, oriented in the same direction
                         # ignore, already covered above.
                         # 3) match near an L1 element on the other side.
-                        for pos, qual, rmsk, strand in self.right_maps:
+                        for pos, qual, rmsks, strand in self.right_maps:
                             for r in rmsks:
                                 if r.repName[:3] == m.model[:3]:
                                     # check same strand
@@ -358,10 +358,10 @@ class VariantAnnotationContainer:
                     print(f"insertion {insertion} is not in the insertion list")
                     continue
                 if line[2][-1] == 'L':
-                    self.insertions[insertion].right_dfams.append(Dfam_Annotation(line))
+                    self.insertions[insertion].left_dfams.append(Dfam_Annotation(line))
                     n_annot_right += 1
                 elif line[2][-1] == 'R':
-                    self.insertions[insertion].left_dfams.append(Dfam_Annotation(line))
+                    self.insertions[insertion].right_dfams.append(Dfam_Annotation(line))
                     n_annot_left += 1
                 else:
                     raise ValueError(f"Unknown insertion side {line[2]}, expected R or L.")
@@ -464,10 +464,10 @@ class VariantAnnotationContainer:
                     else:
                         co = [(read.reference_name, read.reference_end, '+' if read.is_forward else '-')]
                 if co:
-                    if read.query_name[-1] == "L":
+                    if read.query_name[-1] == "R":
                         rightn += 1
                         self.insertions[insertion].right_maps.append((f"{co[0][0]}:{co[0][1]}{co[0][2]}", read.mapping_quality, local_rmsks, co[0][2]))
-                    elif read.query_name[-1] == "R":
+                    elif read.query_name[-1] == "L":
                         leftn += 1
                         self.insertions[insertion].left_maps.append((f"{co[0][0]}:{co[0][1]}{co[0][2]}", read.mapping_quality, local_rmsks,
                                                                         co[0][2]))
@@ -482,16 +482,20 @@ class VariantAnnotationContainer:
             print(f"  RIGHT INSERTION: {insertion.right_seq}")
             for dfam in insertion.right_dfams:
                 print(f"    {str(dfam)}")
+            else:
+                print(f"    - no dfam entries found")
             for pos, mq, rmsks, strand in insertion.right_maps:
                 print(f"    {pos} {[str(r) for r in rmsks]}")
-            if re.match(r"[ACGT]t{6,}", insertion.right_seq):
+            if insertion.has_right_polyA():
                 print(f"    is polyA")
             print(f"  LEFT INSERTION: {insertion.left_seq}")
             for dfam in insertion.left_dfams:
                 print(f"    {str(dfam)}")
+            else:
+                print(f"    - no dfam entries found")
             for pos, mq, rmsks, strand in insertion.left_maps:
                 print(f"    {pos} {[str(r) for r in rmsks]}")
-            if re.match(r"a{6,}[ACGT]",insertion.left_seq):
+            if insertion.has_left_polyA():
                 print(f"    is polyA")
 
 

@@ -5,6 +5,6 @@ genotyping_test
 .idea
 .DS_Store
 hs1*
-
+src/config.py
 
 
