@@ -80,7 +80,7 @@ pub fn clean_clipped_seq(seq: &QualitySeq) -> QualitySeq {
 
 /// Port of consensus.find_consensus. Left-aligned quality-weighted consensus,
 /// truncated at the first ambiguous position. Tie-break order is A,T,G,C.
-pub fn find_consensus(seqs: &[QualitySeq]) -> QualitySeq {
+pub fn find_consensus(seqs: &[QualitySeq], tolerant: bool) -> QualitySeq {
     if seqs.is_empty() {
         return QualitySeq::empty();
     }
@@ -112,13 +112,39 @@ pub fn find_consensus(seqs: &[QualitySeq]) -> QualitySeq {
         // stable sort by score descending, preserving A,T,G,C order on ties.
         let mut sorted = stat;
         sorted.sort_by(|a, b| b.1.cmp(&a.1)); // slice sort is stable
-        let delta_best = sorted[0].1 - sorted[1].1 - sorted[2].1 - sorted[3].1;
-        if delta_best > 0 {
-            consensus_score.push(delta_best as i32);
+        // SENS-7: `tolerant` extends while the best base strictly beats the
+        // second-best; legacy requires it to beat the sum of all others. Both
+        // truncate at the first genuinely ambiguous (tied) position.
+        let delta = if tolerant {
+            sorted[0].1 - sorted[1].1
+        } else {
+            sorted[0].1 - sorted[1].1 - sorted[2].1 - sorted[3].1
+        };
+        if delta > 0 {
+            consensus_score.push(delta as i32);
             consensus_seq.push(sorted[0].0);
         } else {
             break; // only extract seq to the first ambiguous base
         }
     }
     QualitySeq::new(consensus_seq, consensus_score)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sens7_tolerant_extends_past_isolated_ambiguity() {
+        // position 2 has A(q30) vs T(q15) vs G(q15): best beats second-best (30>15)
+        // but not the sum of others (30 - 15 - 15 = 0). Legacy truncates there;
+        // tolerant keeps the best base and continues to the fully-agreed pos 3.
+        let seqs = vec![
+            QualitySeq::new(b"AAAA".to_vec(), vec![30, 30, 30, 30]),
+            QualitySeq::new(b"AATA".to_vec(), vec![30, 30, 15, 30]),
+            QualitySeq::new(b"AAGA".to_vec(), vec![30, 30, 15, 30]),
+        ];
+        assert_eq!(find_consensus(&seqs, false).len(), 2); // legacy: stops at the tie
+        assert_eq!(find_consensus(&seqs, true).len(), 4); // tolerant: extends through it
+    }
 }

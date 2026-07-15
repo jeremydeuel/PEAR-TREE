@@ -18,6 +18,9 @@ pub struct Breakpoint {
     pub side: i32,
     pub has_mate: bool,
     pub bp_precise: bool,
+    /// mapping quality of the source read (SENS-2 low-MAPQ-clip-ratio guard); 0 for
+    /// a synthesised consensus breakpoint.
+    pub mapq: u8,
     /// (mate_is_read1, qname)
     pub mates: Vec<(bool, String)>,
     pub mate_seqs: Vec<QualitySeq>,
@@ -36,6 +39,7 @@ impl Breakpoint {
         is_read1: Option<bool>,
         is_forward: Option<bool>,
         exclude: bool,
+        mapq: u8,
     ) -> Self {
         Breakpoint {
             exclude,
@@ -49,6 +53,7 @@ impl Breakpoint {
             side,
             has_mate: false,
             bp_precise: true,
+            mapq,
             mates: Vec::new(),
             mate_seqs: Vec::new(),
             n_reads: 1,
@@ -147,6 +152,18 @@ pub fn join(mut breakpoints: Vec<Breakpoint>, cfg: &DiscoveryConfig, evidence_fl
     let side = breakpoints[0].side;
     let reference_name = breakpoints[0].reference_name.clone();
 
+    // SENS-2 guard: with a lowered min_mapq, drop a locus dominated by low-MAPQ
+    // clipped reads (a low-quality pileup, not a real junction). Ships with the
+    // relaxation so recall gains near repeats do not come with low-MAPQ artefacts.
+    if let Some(max_ratio) = cfg.max_lowq_clip_ratio {
+        let total = breakpoints.len();
+        let lowq = breakpoints.iter().filter(|b| b.mapq < cfg.lowq_mapq_threshold).count();
+        if total > 0 && (lowq as f64 / total as f64) > max_ratio {
+            stats.side_mut(side).excluded += 1;
+            return None;
+        }
+    }
+
     // clean/orient clipped sequences and collect qc-passing precise positions
     let mut bps: Vec<i64> = Vec::new();
     for bp in breakpoints.iter_mut() {
@@ -171,7 +188,14 @@ pub fn join(mut breakpoints: Vec<Breakpoint>, cfg: &DiscoveryConfig, evidence_fl
         return None;
     }
 
-    let (best_bp, n) = most_common_first(&bps);
+    let (best_bp, exact_n) = most_common_first(&bps);
+    // SENS-1/OBS-3: count support within +/- evidence_window of the mode, not only
+    // at the exact modal position. 0 = exact (legacy, byte-identical).
+    let n = if cfg.evidence_window > 0 {
+        bps.iter().filter(|&&b| (b - best_bp).abs() <= cfg.evidence_window).count()
+    } else {
+        exact_n
+    };
 
     if n < evidence_floor {
         // try polyA rescue on the individual breakpoints; first hit wins
@@ -250,8 +274,8 @@ pub fn join(mut breakpoints: Vec<Breakpoint>, cfg: &DiscoveryConfig, evidence_fl
         }
     }
 
-    let clipped_cons = find_consensus(&clipped);
-    let unclipped_cons = find_consensus(&unclipped);
+    let clipped_cons = find_consensus(&clipped, cfg.consensus_tolerant);
+    let unclipped_cons = find_consensus(&unclipped, cfg.consensus_tolerant);
     if clipped_cons.len() <= MIN_CLIP_LEN {
         stats.side_mut(side).clipped_failed += 1;
         return None;
@@ -281,6 +305,7 @@ pub fn join(mut breakpoints: Vec<Breakpoint>, cfg: &DiscoveryConfig, evidence_fl
         None,
         None,
         false,
+        0, // synthesised consensus breakpoint: mapq unused
     );
     b.mates = mates;
     b.n_reads = clipped.len();

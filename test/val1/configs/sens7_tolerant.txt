@@ -1,0 +1,2 @@
+# SENS-7 tolerant consensus
+consensus_tolerant = true

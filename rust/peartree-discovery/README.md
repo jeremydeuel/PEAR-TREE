@@ -110,6 +110,9 @@ the file. With no config the run is **byte-identical** to the pre-config port.
 | `coverage_mask` / `coverage_mask_multiplier` | false / 5.0 | SPEC-3 pileup mask: drop breakpoints whose local coverage exceeds N× the genome-wide median |
 | `adaptive_evidence` | false | SPEC-4: scale the evidence floor by local/median coverage (never below `min_evidence_reads_per_breakpoint`) |
 | `coverage_bin_size` / `coverage_sample_size` | 500 / 3000 | shared SPEC-3/4 coverage-estimator bin size and median subsample bound |
+| `evidence_window` | 0 | SENS-1/OBS-3: count support within ±N bp of the modal breakpoint (0 = exact). Gate with SPEC-3/4 |
+| `consensus_tolerant` | false | SENS-7: extend consensus while the best base strictly beats the second-best |
+| `max_lowq_clip_ratio` / `lowq_mapq_threshold` | none / 40 | SENS-2 guard: drop a locus whose fraction of clipped reads below the MAPQ threshold exceeds the ratio (ship with a lowered `min_mapq`) |
 
 SPEC-3/4 add one lightweight coverage pre-pass over the BAM; it only runs when one
 of those gates is enabled, so the default path is unchanged.

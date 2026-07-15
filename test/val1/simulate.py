@@ -120,6 +120,58 @@ def simulate(args):
             truth.append((contig, L, R, cls, tsd, alt, ref, vaf))
             idx += 1
 
+    erv5 = LTR_CONSENSUS[:clip_s].ljust(clip_s, "A")
+    anchor_l = (ANCHOR_POOL * 2)[:anchor_m]
+    anchor_r = (ANCHOR_POOL[::-1] * 2)[:anchor_m]
+
+    def coverage_reads(tag, ti, L):
+        for k in range(rng.randint(args.ref_min, args.ref_max)):
+            records.append(make_read(hdr, ti, f"{tag}_ref{k}", rnd_seq(rng, ref_m),
+                                     max(L - ref_m // 2 + (k % 7), 0), f"{ref_m}M", 60, flag=0x1 | 0x40))
+
+    # SENS-1 targets: ERV insertions whose junction breakpoints wobble over a few bp,
+    # so the exact modal count is 1 (missed) but the windowed count clears the floor.
+    # Each read is one continuous genome+element sequence with the clip boundary (and
+    # so the breakpoint) shifted by `off` — the realistic form the consensus can
+    # delta-align back together.
+    t_right = anchor_r + erv5   # [anchor | element], boundary slides for RIGHT clips
+    t_left = erv5 + anchor_l    # [element | anchor], boundary slides for LEFT clips
+    for _ in range(args.n_wobble):
+        contig = contigs[idx % len(contigs)]; ti = tid[contig]
+        L = slot[ti]; slot[ti] += step
+        tsd = rng.randint(args.tsd_min, args.tsd_max); R = L + tsd
+        alt = max(args.alt_min, 3)
+        tag = f"WOB_{contig}_{L}"
+        for k in range(alt):
+            off = k - alt // 2  # spread breakpoints across +/- a couple bp
+            # RIGHT bp = reference_end = R + off: fixed start, slide the M/S boundary
+            records.append(make_read(hdr, ti, f"{tag}_R{k}", t_right,
+                                     R - anchor_m, f"{anchor_m + off}M{clip_s - off}S", 60, flag=0x1 | 0x40))
+            # LEFT bp = reference_start = L + off: slide start and the S/M boundary
+            records.append(make_read(hdr, ti, f"{tag}_L{k}", t_left,
+                                     L + off, f"{clip_s + off}S{anchor_m - off}M", 60, flag=0x1 | 0x40))
+        coverage_reads(tag, ti, L)
+        truth.append((contig, L, R, "WOBBLE", tsd, alt, 0, 0.0))
+        idx += 1
+
+    # SENS-2 targets: ERV insertions with one high-MAPQ + one low-MAPQ read per
+    # junction. At the default floor only the high-MAPQ read survives (n=1, missed);
+    # a lowered min_mapq recovers n=2, and the low-MAPQ fraction (0.5) stays under
+    # the guard so it is not dropped.
+    for _ in range(args.n_lowmapq):
+        contig = contigs[idx % len(contigs)]; ti = tid[contig]
+        L = slot[ti]; slot[ti] += step
+        tsd = rng.randint(args.tsd_min, args.tsd_max); R = L + tsd
+        tag = f"LMQ_{contig}_{L}"
+        for mq in (60, 30):
+            records.append(make_read(hdr, ti, f"{tag}_R{mq}", anchor_r + erv5,
+                                     R - anchor_m, f"{anchor_m}M{clip_s}S", mq, flag=0x1 | 0x40))
+            records.append(make_read(hdr, ti, f"{tag}_L{mq}", erv5 + anchor_l,
+                                     L, f"{clip_s}S{anchor_m}M", mq, flag=0x1 | 0x40))
+        coverage_reads(tag, ti, L)
+        truth.append((contig, L, R, "LOWMAPQ", tsd, 2, 0, 0.0))
+        idx += 1
+
     # pileup artefacts: high local coverage + a spurious clipped pair, far from real
     # insertions and NOT in truth. These are the false positives SPEC-3 (coverage
     # mask) and SPEC-4 (adaptive evidence floor) must remove.
@@ -138,10 +190,10 @@ def simulate(args):
         seq_l = rnd_seq(rng, clip_s) + rnd_seq(rng, anchor_m)
         for k in range(2):  # spurious RIGHT breakpoint at A+tsd
             records.append(make_read(hdr, ti, f"art_{contig}_{A}_R{k}", seq_r,
-                                     (A + tsd) - anchor_m, f"{anchor_m}M{clip_s}S", 60, flag=0x1 | 0x40))
+                                     (A + tsd) - anchor_m, f"{anchor_m}M{clip_s}S", args.artefact_mapq, flag=0x1 | 0x40))
         for k in range(2):  # spurious LEFT breakpoint at A
             records.append(make_read(hdr, ti, f"art_{contig}_{A}_L{k}", seq_l,
-                                     A, f"{clip_s}S{anchor_m}M", 60, flag=0x1 | 0x40))
+                                     A, f"{clip_s}S{anchor_m}M", args.artefact_mapq, flag=0x1 | 0x40))
 
     records.sort(key=lambda a: (a.reference_id, a.reference_start))
     with pysam.AlignmentFile(args.out_bam, "wb", header=hdr) as out:
@@ -171,9 +223,12 @@ def main():
     p.add_argument("--alt-max", type=int, default=8)
     p.add_argument("--ref-min", type=int, default=5)
     p.add_argument("--ref-max", type=int, default=40)
+    p.add_argument("--n-wobble", type=int, default=0, help="SENS-1: insertions with wobbled breakpoints")
+    p.add_argument("--n-lowmapq", type=int, default=0, help="SENS-2: insertions with mixed-MAPQ junction reads")
     p.add_argument("--n-artefacts", type=int, default=0, help="pileup false-positive regions (not in truth)")
     p.add_argument("--artefact-cov-min", type=int, default=150)
     p.add_argument("--artefact-cov-max", type=int, default=300)
+    p.add_argument("--artefact-mapq", type=int, default=60, help="MAPQ of artefact clipped reads (30 => low-MAPQ pileup)")
     simulate(p.parse_args())
 
 

@@ -224,6 +224,7 @@ impl Discovery {
         is_read1: bool,
         is_forward: bool,
         exclude: bool,
+        mapq: u8,
     ) {
         let bp = Breakpoint::new(
             side,
@@ -235,6 +236,7 @@ impl Discovery {
             Some(is_read1),
             Some(is_forward),
             exclude,
+            mapq,
         );
         self.temporary_breakpoints.push(bp);
     }
@@ -399,7 +401,7 @@ impl Discovery {
                 } else {
                     full.pyslice(Some(left_len as isize), None)
                 };
-                self.add_breakpoint(clip, read.reference_start, &qname, clipped, unclipped, read.is_read1, read.is_forward(), exclude_flag);
+                self.add_breakpoint(clip, read.reference_start, &qname, clipped, unclipped, read.is_read1, read.is_forward(), exclude_flag, read.mapq);
             } else {
                 // CLIP_RIGHT: adapter check on the first MIN_CLIP_LEN of the clipped part
                 let clip_part = &seq[n - right_len..];
@@ -413,7 +415,7 @@ impl Discovery {
                 } else {
                     full.pyslice(None, Some(-(right_len as isize)))
                 };
-                self.add_breakpoint(clip, read.reference_end, &qname, clipped, unclipped, read.is_read1, read.is_forward(), exclude_flag);
+                self.add_breakpoint(clip, read.reference_end, &qname, clipped, unclipped, read.is_read1, read.is_forward(), exclude_flag, read.mapq);
             }
         }
         self.cleanup();

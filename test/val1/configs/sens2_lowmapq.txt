@@ -1,0 +1,3 @@
+# SENS-2 lower MAPQ floor + low-MAPQ-clip-ratio guard (same commit)
+min_mapq = 25
+max_lowq_clip_ratio = 0.65

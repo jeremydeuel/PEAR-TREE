@@ -1,0 +1,3 @@
+# SENS-1 windowed evidence count (ship with a SPEC-3/4 gate)
+evidence_window = 5
+coverage_mask = true

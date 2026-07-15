@@ -82,6 +82,18 @@ pub struct DiscoveryConfig {
     /// shared coverage-estimator parameters (SPEC-3/4)
     pub coverage_bin_size: i64,
     pub coverage_sample_size: usize,
+    /// SENS-1/OBS-3: count evidence reads within +/- this jitter of the modal
+    /// breakpoint, not only at the exact mode. 0 = exact (legacy). Tie to the
+    /// cluster window (OBS-3). Gate with SPEC-3/4 before defaulting on.
+    pub evidence_window: i64,
+    /// SENS-7: extend consensus while the best base strictly beats the second-best
+    /// (rather than beating the sum of all others). Off = legacy.
+    pub consensus_tolerant: bool,
+    /// SENS-2: per-locus guard shipped with a lowered `min_mapq`. Drop a breakpoint
+    /// when the fraction of its supporting clipped reads with MAPQ below
+    /// `lowq_mapq_threshold` exceeds this. `None` = off (no guard).
+    pub max_lowq_clip_ratio: Option<f64>,
+    pub lowq_mapq_threshold: u8,
 }
 
 impl Default for DiscoveryConfig {
@@ -104,6 +116,10 @@ impl Default for DiscoveryConfig {
             adaptive_evidence: false,
             coverage_bin_size: 500,
             coverage_sample_size: 3000,
+            evidence_window: 0,
+            consensus_tolerant: false,
+            max_lowq_clip_ratio: None,
+            lowq_mapq_threshold: 40,
         }
     }
 }
@@ -176,6 +192,10 @@ impl DiscoveryConfig {
             "adaptive_evidence" => self.adaptive_evidence = parse_bool(val)?,
             "coverage_bin_size" => self.coverage_bin_size = parse_num(val)?,
             "coverage_sample_size" => self.coverage_sample_size = parse_num(val)?,
+            "evidence_window" => self.evidence_window = parse_num(val)?,
+            "consensus_tolerant" => self.consensus_tolerant = parse_bool(val)?,
+            "max_lowq_clip_ratio" => self.max_lowq_clip_ratio = Some(parse_num(val)?),
+            "lowq_mapq_threshold" => self.lowq_mapq_threshold = parse_num(val)?,
             other => eprintln!("warning: ignoring unknown config key '{other}'"),
         }
         Ok(())
