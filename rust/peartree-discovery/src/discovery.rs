@@ -60,7 +60,6 @@ struct DiscordantCluster {
     pos: i64,
     n_reads: usize,
     /// mate landing sites; consumed by the D3 RTE-origin check.
-    #[allow(dead_code)]
     mate_dests: Vec<(Option<usize>, i64)>,
     /// D3: fraction of `mate_dests` landing in the RTE track (0.0 until computed).
     rte_origin: f64,
@@ -153,6 +152,9 @@ pub struct Discovery {
     /// Feature A: clusters built from `discordant_obs` in a prepass, consumed by the
     /// output rescue. Empty unless `discordant_anchor` is on.
     discordant_clusters: Vec<DiscordantCluster>,
+    /// D3: RTE track for the mate-origin check (from `discordant_rte_track`). Set on
+    /// the parent only (clustering runs after the SPD-3 merge); workers leave it None.
+    discordant_rte: Option<IntervalIndex>,
     stats: Stats,
     bam_threads: usize, // BGZF decode workers (SPD-2); 1 = single-threaded
 }
@@ -181,6 +183,7 @@ impl Discovery {
             only_contig: None,
             discordant_obs: Vec::new(),
             discordant_clusters: Vec::new(),
+            discordant_rte: None,
             stats: Stats::default(),
             bam_threads: bam_threads.max(1),
         }
@@ -249,6 +252,11 @@ impl Discovery {
     /// OBS-1 reject-counter sidecar, serialised as JSON.
     pub fn stats_json(&self) -> String {
         self.stats.to_json()
+    }
+
+    /// D3: install the RTE track used for the discordant mate-origin check.
+    pub fn set_discordant_rte(&mut self, ix: Option<IntervalIndex>) {
+        self.discordant_rte = ix;
     }
 
     /// Contig filter for the read-scan (extract_chimeric). With an allowlist set the
@@ -842,7 +850,47 @@ impl Discovery {
             i = j;
         }
         self.stats.disc_clusters = clusters.len() as u64;
+
+        // D3: score each cluster's mate-origin against the RTE track (reuse the SPEC-7
+        // RepeatMasker loader, applied to the mate landing site). Non-gating unless
+        // `discordant_rte_only`; here we only compute the fraction + a diagnostic count.
+        if let Some(rte) = &self.discordant_rte {
+            let names = self.reference_names().unwrap_or_default();
+            let mut rejected = 0u64;
+            for c in clusters.iter_mut() {
+                let (mut hits, mut total) = (0usize, 0usize);
+                for &(mref, mpos) in &c.mate_dests {
+                    let Some(id) = mref else { continue };
+                    let Some(name) = names.get(id) else { continue };
+                    total += 1;
+                    if rte.contains(name, mpos) {
+                        hits += 1;
+                    }
+                }
+                c.rte_origin = if total > 0 { hits as f64 / total as f64 } else { 0.0 };
+                if c.rte_origin < self.config.discordant_rte_min {
+                    rejected += 1;
+                }
+            }
+            self.stats.disc_rejected_rte = rejected;
+        }
+
         self.discordant_clusters = clusters;
+    }
+
+    /// Resolve the header's reference sequence names in id order (for the D3 mate
+    /// contig lookup). Opened once per clustering pass, only when the RTE track is set.
+    fn reference_names(&self) -> io::Result<Vec<String>> {
+        let mut reader = open_bam(&self.filepath, 1)?;
+        let header = reader.read_header()?;
+        Ok(header
+            .reference_sequences()
+            .keys()
+            .map(|k| {
+                let b: &[u8] = k.as_ref();
+                String::from_utf8_lossy(b).into_owned()
+            })
+            .collect())
     }
 
     /// Feature A: find a discordant cluster on `contig` with the given `role` whose

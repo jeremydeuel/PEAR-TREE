@@ -127,8 +127,38 @@ fn main() -> io::Result<()> {
     if config.contig_threads > 1 {
         eprintln!("contig parallelism: {} threads (SPD-3)", config.contig_threads);
     }
+    if config.discordant_anchor {
+        eprintln!(
+            "discordant anchoring: ON (>= {} reads{})",
+            config.discordant_min_reads,
+            if config.discordant_rte_only {
+                format!(", RTE-origin gate >= {}", config.discordant_rte_min)
+            } else if config.discordant_rte_track.is_some() {
+                ", RTE-origin labelled".to_string()
+            } else {
+                String::new()
+            }
+        );
+    }
+
+    // D3: build the discordant mate-origin RTE index (reuses the SPEC-7 RM loader).
+    let discordant_rte = match (config.discordant_anchor, config.discordant_rte_track.as_deref()) {
+        (true, Some(p)) => match intervals::IntervalIndex::from_repeatmasker(p, config.discordant_rte_divergence_max) {
+            Ok(ix) => Some(ix),
+            Err(e) => {
+                eprintln!("cannot read discordant_rte_track {p}: {e}");
+                std::process::exit(1);
+            }
+        },
+        _ => None,
+    };
+    if config.discordant_rte_only && discordant_rte.is_none() {
+        eprintln!("discordant_rte_only is on but discordant_rte_track is not set");
+        std::process::exit(1);
+    }
 
     let mut d = Discovery::new(bam, threads, config, exclude, rm_mask);
+    d.set_discordant_rte(discordant_rte);
     d.discovery()?;
 
     let file = File::create(&out)?;
