@@ -101,13 +101,20 @@ pub struct Discovery {
     filepath: String,
     config: DiscoveryConfig,
     exclude: Option<IntervalIndex>,
+    rm_mask: Option<IntervalIndex>,
     coverage: Coverage,
     stats: Stats,
     bam_threads: usize, // BGZF decode workers (SPD-2); 1 = single-threaded
 }
 
 impl Discovery {
-    pub fn new(filepath: String, bam_threads: usize, config: DiscoveryConfig, exclude: Option<IntervalIndex>) -> Self {
+    pub fn new(
+        filepath: String,
+        bam_threads: usize,
+        config: DiscoveryConfig,
+        exclude: Option<IntervalIndex>,
+        rm_mask: Option<IntervalIndex>,
+    ) -> Self {
         let coverage = Coverage::new(config.coverage_bin_size);
         Discovery {
             temporary_breakpoints: Vec::new(),
@@ -118,6 +125,7 @@ impl Discovery {
             filepath,
             config,
             exclude,
+            rm_mask,
             coverage,
             stats: Stats::default(),
             bam_threads: bam_threads.max(1),
@@ -589,6 +597,13 @@ impl Discovery {
                 l.retain(|b| (self.coverage.local(rn, b.breakpoint) as f64) <= thr);
                 r.retain(|b| (self.coverage.local(rn, b.breakpoint) as f64) <= thr);
                 p.retain(|b| (self.coverage.local(rn, b.breakpoint.unwrap()) as f64) <= thr);
+            }
+
+            // SPEC-7: drop breakpoints inside a young RepeatMasker element (no-op if unset)
+            if let Some(rm) = &self.rm_mask {
+                l.retain(|b| !rm.contains(rn, b.breakpoint));
+                r.retain(|b| !rm.contains(rn, b.breakpoint));
+                p.retain(|b| !rm.contains(rn, b.breakpoint.unwrap()));
             }
 
             let (mut il, mut ir, mut ip) = (0usize, 0usize, 0usize);

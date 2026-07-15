@@ -102,6 +102,13 @@ pub struct DiscoveryConfig {
     /// when the clipped consensus is a pure poly-A/T terminus. Off by default.
     pub short_polya_clip: bool,
     pub short_polya_min_clip: usize,
+    /// SPEC-7: drop breakpoints inside a *young* RepeatMasker element (percent
+    /// divergence <= `rm_divergence_max`) from `rm_track` — divergence-gated, not
+    /// family membership. `rm_track` must match the BAM's assembly (hs1 tracks are
+    /// in-repo; supply a GRCh38 / GRCm39 track for those). Off by default.
+    pub rm_self_mask: bool,
+    pub rm_track: Option<String>,
+    pub rm_divergence_max: f64,
 }
 
 impl Default for DiscoveryConfig {
@@ -131,6 +138,9 @@ impl Default for DiscoveryConfig {
             hallmark_score: false,
             short_polya_clip: false,
             short_polya_min_clip: 7,
+            rm_self_mask: false,
+            rm_track: None,
+            rm_divergence_max: 5.0,
         }
     }
 }
@@ -210,6 +220,9 @@ impl DiscoveryConfig {
             "hallmark_score" => self.hallmark_score = parse_bool(val)?,
             "short_polya_clip" => self.short_polya_clip = parse_bool(val)?,
             "short_polya_min_clip" => self.short_polya_min_clip = parse_num(val)?,
+            "rm_self_mask" => self.rm_self_mask = parse_bool(val)?,
+            "rm_track" => self.rm_track = Some(val.to_string()),
+            "rm_divergence_max" => self.rm_divergence_max = parse_num(val)?,
             other => eprintln!("warning: ignoring unknown config key '{other}'"),
         }
         Ok(())

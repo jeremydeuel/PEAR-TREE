@@ -81,6 +81,25 @@ fn main() -> io::Result<()> {
         None => None,
     };
 
+    // SPEC-7: build the young-RepeatMasker mask (divergence-gated) when enabled.
+    let rm_mask = if config.rm_self_mask {
+        match config.rm_track.as_deref() {
+            Some(p) => match intervals::IntervalIndex::from_repeatmasker(p, config.rm_divergence_max) {
+                Ok(ix) => Some(ix),
+                Err(e) => {
+                    eprintln!("cannot read rm_track {p}: {e}");
+                    std::process::exit(1);
+                }
+            },
+            None => {
+                eprintln!("rm_self_mask is on but rm_track is not set");
+                std::process::exit(1);
+            }
+        }
+    } else {
+        None
+    };
+
     eprintln!("PEAR-TREE discovery (rust)");
     eprintln!("input bam: {bam}, output file: {out}");
     // min_mapq is the parameter most likely to differ from production (generic
@@ -99,8 +118,11 @@ fn main() -> io::Result<()> {
     if config.adaptive_evidence {
         eprintln!("adaptive evidence floor: ON");
     }
+    if config.rm_self_mask {
+        eprintln!("RM self-mask: ON (divergence <= {})", config.rm_divergence_max);
+    }
 
-    let mut d = Discovery::new(bam, threads, config, exclude);
+    let mut d = Discovery::new(bam, threads, config, exclude, rm_mask);
     d.discovery()?;
 
     let file = File::create(&out)?;
