@@ -136,6 +136,8 @@ fn main() -> io::Result<()> {
     let mut writer = BufWriter::new(encoder);
     let mut hallmarks: Vec<u8> = Vec::new();
     d.output(&mut writer, &mut hallmarks)?;
+    // Feature A: append discordant-anchored calls (no-op unless discordant_anchor).
+    d.discordant_rescue(&mut writer)?;
     writer.into_inner()?.finish()?;
 
     // OBS-1: reject-counter sidecar next to the output.

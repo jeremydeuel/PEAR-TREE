@@ -18,12 +18,16 @@
 
 from typing import Dict, List
 from sequence_checks import sequence_matching_score
-from combine_insertions_insertion import Insertion, TYPE_LEFT_POLYA, TYPE_RIGHT_POLYA, TYPE_FULL_INFO
+from combine_insertions_insertion import (
+    Insertion, TYPE_LEFT_POLYA, TYPE_RIGHT_POLYA, TYPE_FULL_INFO,
+    TYPE_LEFT_DISC, TYPE_RIGHT_DISC,
+)
 from collections import Counter
 
 def intersect_insertions(insertions: List[Insertion]) -> List[Insertion]:
     full_insertions = {}
     polyA = {}
+    disc = {}  # Feature A: discordant-anchored one-sided junctions
     # sort everything neatly by name and type
     full_insertion_assoc = {}
     for i in insertions:
@@ -48,10 +52,13 @@ def intersect_insertions(insertions: List[Insertion]) -> List[Insertion]:
                 polyA[name] = [i]
             else:
                 polyA[name].append(i)
+        elif i.type is TYPE_RIGHT_DISC or i.type is TYPE_LEFT_DISC:
+            # Feature A: parked like polyA until a dedicated discordant filter exists.
+            disc.setdefault(name, []).append(i)
         else:
             raise ValueError(f"Unknown Insertion Type: {i.type}")
 
-    print(f"imported {len(insertions)}  insertions, divided up in {len(full_insertions)} unique full-information insertions and {len(polyA)}  polyA insertions")
+    print(f"imported {len(insertions)}  insertions, divided up in {len(full_insertions)} unique full-information insertions, {len(polyA)}  polyA insertions and {len(disc)} discordant-anchored insertions")
     for name, insertions in full_insertions.items():
         if len(insertions) == 1:
             full_insertions[name] = insertions[0]

@@ -30,6 +30,8 @@ enum BpRef {
 enum Emit<'a> {
     Bp(&'a Breakpoint),
     Pa(&'a PolyABreakpoint),
+    /// Feature A: a discordant-cluster end (coordinate only, no reads).
+    Disc(&'a DiscordantCluster),
 }
 
 /// Feature A: one discordant read-pair observation — a confidently-placed anchor
@@ -38,16 +40,30 @@ enum Emit<'a> {
 /// side (a forward anchor bounds the insertion on its right → fills the LEFT/smaller
 /// coordinate; a reverse anchor → the RIGHT/larger coordinate). `mate_ref_id`/
 /// `mate_pos` record where the mate landed, for the D3 RTE-origin check.
-// Fields are populated here (D1) and consumed by the clustering / rescue (D2) and
-// the mate-origin RTE check (D3); allow the interim dead-code until those land.
 #[derive(Clone)]
-#[allow(dead_code)]
 struct DiscordantObs {
     contig: String,
     role: i32, // CLIP_LEFT or CLIP_RIGHT
     pos: i64,
     mate_ref_id: Option<usize>,
     mate_pos: i64,
+}
+
+/// Feature A: a cluster of >= `discordant_min_reads` discordant observations sharing
+/// a contig, role and (approximate) breakpoint. It can stand in for a missing
+/// reciprocal breakpoint during output pairing. `mate_dests` are the mate landing
+/// sites, used by the D3 RTE-origin check.
+#[derive(Clone)]
+struct DiscordantCluster {
+    contig: String,
+    role: i32,
+    pos: i64,
+    n_reads: usize,
+    /// mate landing sites; consumed by the D3 RTE-origin check.
+    #[allow(dead_code)]
+    mate_dests: Vec<(Option<usize>, i64)>,
+    /// D3: fraction of `mate_dests` landing in the RTE track (0.0 until computed).
+    rte_origin: f64,
 }
 
 /// Open the BAM as a record reader. With `bam_threads > 1` the BGZF blocks are
@@ -134,6 +150,9 @@ pub struct Discovery {
     /// Feature A: discordant read-pair observations collected during the scan (only
     /// when `discordant_anchor` is on). Persist across contigs like `polya`.
     discordant_obs: Vec<DiscordantObs>,
+    /// Feature A: clusters built from `discordant_obs` in a prepass, consumed by the
+    /// output rescue. Empty unless `discordant_anchor` is on.
+    discordant_clusters: Vec<DiscordantCluster>,
     stats: Stats,
     bam_threads: usize, // BGZF decode workers (SPD-2); 1 = single-threaded
 }
@@ -161,6 +180,7 @@ impl Discovery {
             mate_coords: FxHashMap::default(),
             only_contig: None,
             discordant_obs: Vec::new(),
+            discordant_clusters: Vec::new(),
             stats: Stats::default(),
             bam_threads: bam_threads.max(1),
         }
@@ -776,7 +796,63 @@ impl Discovery {
         self.find_mates()?;
         // extend_mates() is a no-op in the Python (operates on the already-emptied
         // temporary_breakpoints); intentionally omitted.
+        self.cluster_discordant();
         Ok(())
+    }
+
+    /// Feature A: fold `discordant_obs` into `discordant_clusters` (single-linkage
+    /// within `discordant_window`, per contig+role), keeping clusters with at least
+    /// `discordant_min_reads` distinct reads. No-op unless `discordant_anchor` is on.
+    fn cluster_discordant(&mut self) {
+        if !self.config.discordant_anchor || self.discordant_obs.is_empty() {
+            return;
+        }
+        let window = self.config.discordant_window.max(0);
+        let min_reads = self.config.discordant_min_reads.max(1);
+        // group key (contig, role); within each, sort by pos and single-link.
+        let mut obs = std::mem::take(&mut self.discordant_obs);
+        obs.sort_by(|a, b| {
+            a.contig.cmp(&b.contig).then(a.role.cmp(&b.role)).then(a.pos.cmp(&b.pos))
+        });
+        let mut clusters: Vec<DiscordantCluster> = Vec::new();
+        let mut i = 0;
+        while i < obs.len() {
+            let mut j = i + 1;
+            while j < obs.len()
+                && obs[j].contig == obs[i].contig
+                && obs[j].role == obs[i].role
+                && obs[j].pos - obs[j - 1].pos <= window
+            {
+                j += 1;
+            }
+            let group = &obs[i..j];
+            if group.len() >= min_reads {
+                // representative position = median of the (sorted) group
+                let pos = group[group.len() / 2].pos;
+                let mate_dests = group.iter().map(|o| (o.mate_ref_id, o.mate_pos)).collect();
+                clusters.push(DiscordantCluster {
+                    contig: obs[i].contig.clone(),
+                    role: obs[i].role,
+                    pos,
+                    n_reads: group.len(),
+                    mate_dests,
+                    rte_origin: 0.0,
+                });
+            }
+            i = j;
+        }
+        self.stats.disc_clusters = clusters.len() as u64;
+        self.discordant_clusters = clusters;
+    }
+
+    /// Feature A: find a discordant cluster on `contig` with the given `role` whose
+    /// representative position lies in [lo, hi]. Returns the one with the most reads.
+    fn find_disc_cluster(&self, contig: &str, role: i32, lo: i64, hi: i64) -> Option<&DiscordantCluster> {
+        self.discordant_clusters
+            .iter()
+            .filter(|c| c.contig == contig && c.role == role && c.pos >= lo && c.pos <= hi)
+            .filter(|c| !self.config.discordant_rte_only || c.rte_origin >= self.config.discordant_rte_min)
+            .max_by_key(|c| c.n_reads)
     }
 
     /// SPD-3: process contigs in parallel, each in its own worker over an indexed
@@ -833,7 +909,9 @@ impl Discovery {
             }
             self.discordant_obs.append(&mut w.discordant_obs);
         }
-        self.find_mates()
+        self.find_mates()?;
+        self.cluster_discordant();
+        Ok(())
     }
 
     /// One SPD-3 worker: run extract_chimeric over a single contig and return the
@@ -969,6 +1047,86 @@ impl Discovery {
         }
         Ok(())
     }
+
+    /// Feature A: append discordant-anchored calls after the normal output. A real
+    /// breakpoint with no reciprocal real partner in its TSD window is paired with a
+    /// discordant cluster on the missing side (`disc_<pos>` token, no reads for that
+    /// end). Only runs when `discordant_anchor` is on, so the default output above is
+    /// untouched. The "no real partner in window" test is mutually exclusive with the
+    /// main loop's pairing, so a real pair is never duplicated.
+    pub fn discordant_rescue<W: Write>(&mut self, writer: &mut W) -> io::Result<()> {
+        if !self.config.discordant_anchor || self.discordant_clusters.is_empty() {
+            return Ok(());
+        }
+        let (tsd_min, tsd_max) = (self.config.tsd_min, self.config.tsd_max);
+        let in_window = |gap: i64| gap >= tsd_min && gap <= tsd_max;
+
+        // group breakpoints per contig, applying the same SPEC-5/3/7 retains as output.
+        let mut left_map: FxHashMap<String, Vec<usize>> = FxHashMap::default();
+        for (i, bp) in self.final_left_breakpoints.iter().enumerate() {
+            left_map.entry(bp.reference_name.clone()).or_default().push(i);
+        }
+        let mut right_map: FxHashMap<String, Vec<usize>> = FxHashMap::default();
+        for (i, bp) in self.final_right_breakpoints.iter().enumerate() {
+            right_map.entry(bp.reference_name.clone()).or_default().push(i);
+        }
+        let mut contigs: Vec<String> = left_map.keys().chain(right_map.keys()).cloned().collect();
+        contigs.sort();
+        contigs.dedup();
+
+        let empty: Vec<usize> = Vec::new();
+        let mut paired: u64 = 0;
+        for rn in &contigs {
+            if !self.contig_ok_output(rn) {
+                continue;
+            }
+            let mut l: Vec<&Breakpoint> = left_map.get(rn).unwrap_or(&empty).iter().map(|&i| &self.final_left_breakpoints[i]).collect();
+            let mut r: Vec<&Breakpoint> = right_map.get(rn).unwrap_or(&empty).iter().map(|&i| &self.final_right_breakpoints[i]).collect();
+            l.sort_by_key(|b| b.breakpoint);
+            r.sort_by_key(|b| b.breakpoint);
+            self.retain_visible(rn, &mut l);
+            self.retain_visible(rn, &mut r);
+
+            // a LEFT breakpoint with no real RIGHT partner in window -> RIGHT-role cluster
+            for lb in &l {
+                if r.iter().any(|rb| in_window(rb.breakpoint - lb.breakpoint)) {
+                    continue;
+                }
+                if let Some(c) = self.find_disc_cluster(rn, CLIP_RIGHT, lb.breakpoint + tsd_min, lb.breakpoint + tsd_max) {
+                    print_output(writer, Emit::Bp(lb), Emit::Disc(c))?;
+                    paired += 1;
+                }
+            }
+            // a RIGHT breakpoint with no real LEFT partner in window -> LEFT-role cluster
+            for rb in &r {
+                if l.iter().any(|lb| in_window(rb.breakpoint - lb.breakpoint)) {
+                    continue;
+                }
+                if let Some(c) = self.find_disc_cluster(rn, CLIP_LEFT, rb.breakpoint - tsd_max, rb.breakpoint - tsd_min) {
+                    print_output(writer, Emit::Disc(c), Emit::Bp(rb))?;
+                    paired += 1;
+                }
+            }
+        }
+        self.stats.disc_paired = paired;
+        Ok(())
+    }
+
+    /// Apply the SPEC-5 (exclude-BED), SPEC-3 (coverage) and SPEC-7 (RM) retains to a
+    /// breakpoint list, matching `output`'s masking so a rescue never resurrects a
+    /// masked locus.
+    fn retain_visible(&self, rn: &str, v: &mut Vec<&Breakpoint>) {
+        if self.exclude.is_some() {
+            v.retain(|b| !self.excluded(rn, b.breakpoint));
+        }
+        if self.config.coverage_mask && self.coverage.median() > 0.0 {
+            let thr = self.config.coverage_mask_multiplier * self.coverage.median();
+            v.retain(|b| (self.coverage.local(rn, b.breakpoint) as f64) <= thr);
+        }
+        if let Some(rm) = &self.rm_mask {
+            v.retain(|b| !rm.contains(rn, b.breakpoint));
+        }
+    }
 }
 
 // --- SENS-5 hallmark features (non-gating annotation) ---
@@ -977,13 +1135,14 @@ fn emit_clip<'a>(e: &'a Emit) -> Option<&'a QualitySeq> {
     match e {
         Emit::Bp(b) => Some(&b.clipped),
         Emit::Pa(p) => p.clipped.as_ref(),
+        Emit::Disc(_) => None,
     }
 }
 
 fn emit_unclip<'a>(e: &'a Emit) -> Option<&'a QualitySeq> {
     match e {
         Emit::Bp(b) => Some(&b.unclipped),
-        Emit::Pa(_) => None,
+        Emit::Pa(_) | Emit::Disc(_) => None,
     }
 }
 
@@ -1009,16 +1168,14 @@ fn contains_motif(qs: &QualitySeq, motif: &[u8]) -> bool {
 /// and never gating: poly-A is scored, never required (so ERV is not penalised); the
 /// EN motif is only a small tie-breaker.
 fn write_hallmark(buf: &mut Vec<u8>, contig: &str, left: &Emit, right: &Emit) -> io::Result<()> {
-    let (l_pos, r_pos): (i64, i64) = (
-        match left {
+    let epos = |e: &Emit| -> i64 {
+        match e {
             Emit::Bp(b) => b.breakpoint,
             Emit::Pa(p) => p.breakpoint.unwrap_or(0),
-        },
-        match right {
-            Emit::Bp(b) => b.breakpoint,
-            Emit::Pa(p) => p.breakpoint.unwrap_or(0),
-        },
-    );
+            Emit::Disc(c) => c.pos,
+        }
+    };
+    let (l_pos, r_pos): (i64, i64) = (epos(left), epos(right));
     let tsd = r_pos - l_pos;
     let mut purity = 0.0f64;
     for c in [emit_clip(left), emit_clip(right)].into_iter().flatten() {
@@ -1051,7 +1208,18 @@ fn print_output<W: Write>(writer: &mut W, left: Emit, right: Emit) -> io::Result
             format!("{}", lb.breakpoint),
             format!("{}", rb.breakpoint),
         ),
-        (Emit::Pa(_), Emit::Pa(_)) => unreachable!("two polyA breakpoints are never paired"),
+        // Feature A: a discordant end carries a `disc_<pos>` token and no reads.
+        (Emit::Bp(lb), Emit::Disc(c)) => (
+            lb.reference_name.clone(),
+            format!("{}", lb.breakpoint),
+            format!("disc_{}", c.pos),
+        ),
+        (Emit::Disc(c), Emit::Bp(rb)) => (
+            rb.reference_name.clone(),
+            format!("disc_{}", c.pos),
+            format!("{}", rb.breakpoint),
+        ),
+        _ => unreachable!("invalid pairing: polyA/disc ends are only paired with a real breakpoint"),
     };
     let bp_name = format!("{}:{}-{}", reference_name, left_str, right_str);
 
@@ -1067,6 +1235,8 @@ fn print_output<W: Write>(writer: &mut W, left: Emit, right: Emit) -> io::Result
                 writer.write_all(mate.revcomp().fastq(&format!("{}:LEFT:MATE{}", bp_name, i)).as_bytes())?;
             }
         }
+        // Feature A: discordant left end emits no reads (coordinate only).
+        Emit::Disc(_) => {}
     }
     match &right {
         Emit::Pa(pa) => {
@@ -1080,6 +1250,8 @@ fn print_output<W: Write>(writer: &mut W, left: Emit, right: Emit) -> io::Result
                 writer.write_all(mate.revcomp().fastq(&format!("{}:RIGHT:MATE{}", bp_name, i)).as_bytes())?;
             }
         }
+        // Feature A: discordant right end emits no reads (coordinate only).
+        Emit::Disc(_) => {}
     }
     Ok(())
 }

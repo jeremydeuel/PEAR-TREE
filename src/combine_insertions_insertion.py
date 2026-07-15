@@ -25,6 +25,13 @@ import os
 TYPE_FULL_INFO = 3
 TYPE_RIGHT_POLYA = 1
 TYPE_LEFT_POLYA = 2
+# Feature A (discovery discordant_anchor): a one-sided junction whose missing
+# reciprocal end is supported by a cluster of discordant mates. The discordant end
+# carries a real coordinate (token `disc_<pos>`) but no reads. Like the polyA types,
+# these are recognised here so the pipeline does not crash; full downstream
+# genotyping of coordinate-only ends is deferred (see intersect_insertions).
+TYPE_RIGHT_DISC = 4
+TYPE_LEFT_DISC = 5
 class Insertion:
     def __init__(self, reference_name: str, start: str, end: str, data: Dict, file: str):
         assert reference_name is not None and len(reference_name), f"reference_name not given."
@@ -34,6 +41,12 @@ class Insertion:
             self.right_aligned = data['RIGHT:ALIGNED'].revcomp()
             self.right_clipped = data['RIGHT:CLIPPED']
             self.right_pos = int(end)
+        elif end[:5] == 'disc_':
+            # Feature A: discordant-anchored right end — real coordinate, no reads.
+            self.right_clipped = None
+            self.right_aligned = None
+            self.right_pos = int(end[5:])
+            self.type = TYPE_RIGHT_DISC
         else:
             assert end[:6] == 'polyA_', f"false right poly A detected in {reference_name}:{start}-{end} -> {data}"
             self.right_clipped = data['RIGHT:CLIPPED_POLYA']
@@ -44,6 +57,12 @@ class Insertion:
             self.left_clipped = data['LEFT:CLIPPED'].revcomp()
             self.left_aligned =  data['LEFT:ALIGNED']
             self.left_pos = int(start)
+        elif start[:5] == 'disc_':
+            # Feature A: discordant-anchored left end — real coordinate, no reads.
+            self.left_clipped = None
+            self.left_aligned = None
+            self.left_pos = int(start[5:])
+            self.type = TYPE_LEFT_DISC
         else:
             assert start[:6] == 'polyA_' , f"false left poly A detected in {reference_name}:{start}-{end} -> {data}"
             self.left_clipped = data['LEFT:CLIPPED_POLYA'].revcomp().lower()
@@ -59,20 +78,23 @@ class Insertion:
 
     @property
     def left_consensus(self) -> str:
-        assert self.type is not TYPE_LEFT_POLYA, f"can not extract consensus from left polyA type"
+        assert self.type not in (TYPE_LEFT_POLYA, TYPE_LEFT_DISC), f"can not extract consensus from left polyA/disc type"
         return self.left_clipped.revcomp().lower() + self.left_aligned
 
     @property
     def right_consensus(self) -> str:
-        assert self.type is not TYPE_RIGHT_POLYA, f"can not extract consensus from right polyA type"
+        assert self.type not in (TYPE_RIGHT_POLYA, TYPE_RIGHT_DISC), f"can not extract consensus from right polyA/disc type"
         return self.right_aligned.revcomp() + self.right_clipped.lower()
 
     def __str__(self) -> str:
-        output = self.right_clipped.fastq(f"{self.name}:RIGHT:CLIPPED")
-        if type is not TYPE_RIGHT_POLYA:
+        # a discordant end has no clipped/aligned reads (right_clipped/left_clipped is
+        # None); emit only the sides that carry sequence.
+        output = self.right_clipped.fastq(f"{self.name}:RIGHT:CLIPPED") if self.right_clipped is not None else ""
+        if type is not TYPE_RIGHT_POLYA and self.right_clipped is not None:
             output += self.right_consensus.fastq(f"{self.name}:RIGHT:ALIGNED")
-        output += self.left_clipped.fastq(f"{self.name}:LEFT:CLIPPED")
-        if type is not TYPE_LEFT_POLYA:
+        if self.left_clipped is not None:
+            output += self.left_clipped.fastq(f"{self.name}:LEFT:CLIPPED")
+        if type is not TYPE_LEFT_POLYA and self.left_clipped is not None:
             output += self.left_consensus.fastq(f"{self.name}:LEFT:ALIGNED")
         i=0
         for m in self.left_mates:
