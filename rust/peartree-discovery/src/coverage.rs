@@ -11,7 +11,7 @@
 
 use rustc_hash::FxHashMap;
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct Coverage {
     bin_size: i64,
     by_contig: FxHashMap<String, Vec<u32>>,

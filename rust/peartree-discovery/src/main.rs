@@ -121,6 +121,12 @@ fn main() -> io::Result<()> {
     if config.rm_self_mask {
         eprintln!("RM self-mask: ON (divergence <= {})", config.rm_divergence_max);
     }
+    if config.mate_fetch {
+        eprintln!("mate resolution: indexed fetch (SPD-4)");
+    }
+    if config.contig_threads > 1 {
+        eprintln!("contig parallelism: {} threads (SPD-3)", config.contig_threads);
+    }
 
     let mut d = Discovery::new(bam, threads, config, exclude, rm_mask);
     d.discovery()?;

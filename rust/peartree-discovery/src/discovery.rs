@@ -7,6 +7,7 @@ use std::num::NonZeroUsize;
 use noodles_bam as bam;
 use noodles_bgzf as bgzf;
 use noodles_core::{Position, Region};
+use noodles_sam::Header;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::config::*;
@@ -109,6 +110,9 @@ pub struct Discovery {
     /// read number so both reads of a pair (each a breakpoint read) are kept, not
     /// overwritten. Only populated when `mate_fetch` is on.
     mate_coords: FxHashMap<(String, bool), (usize, i64)>,
+    /// SPD-3: when set, extract_chimeric processes only this contig (indexed fetch).
+    /// Used by the parallel per-contig workers; None = the full single-threaded scan.
+    only_contig: Option<usize>,
     stats: Stats,
     bam_threads: usize, // BGZF decode workers (SPD-2); 1 = single-threaded
 }
@@ -134,6 +138,7 @@ impl Discovery {
             rm_mask,
             coverage,
             mate_coords: FxHashMap::default(),
+            only_contig: None,
             stats: Stats::default(),
             bam_threads: bam_threads.max(1),
         }
@@ -310,146 +315,179 @@ impl Discovery {
     }
 
     pub fn extract_chimeric(&mut self) -> io::Result<()> {
-        let mut reader = open_bam(&self.filepath, self.bam_threads)?;
-        let header = reader.read_header()?;
         let reject_fullmap = self.config.reject_fully_mapping_reads;
         let min_mapq = self.config.min_mapq;
         self.reference_name = None;
         let mut current_ref_id: Option<usize> = None;
-        let mut record = bam::Record::default();
-        while reader.read_record(&mut record)? != 0 {
-            let read = BamRead::from_record(&record, &header)?;
-
-            if read.mapq < min_mapq {
-                if let Some(b) = PolyABreakpoint::find_polya(&read) {
-                    // SPD-4: record the polyA read's mate coordinate too
-                    if self.config.mate_fetch {
-                        if let Some(mref) = read.mate_ref_id {
-                            if read.mate_pos >= 0 {
-                                self.mate_coords.insert((read.query_name(), !read.is_read1), (mref, read.mate_pos));
-                            }
-                        }
-                    }
-                    self.polya.push(b);
-                }
-                continue;
+        if let Some(cid) = self.only_contig {
+            // SPD-3 worker path: fetch just this contig via the index.
+            let mut reader = bam::io::indexed_reader::Builder::default().build_from_path(&self.filepath)?;
+            let header = reader.read_header()?;
+            let name: Vec<u8> = header
+                .reference_sequences()
+                .get_index(cid)
+                .map(|(k, _)| {
+                    let b: &[u8] = k.as_ref();
+                    b.to_vec()
+                })
+                .unwrap_or_default();
+            let region = Region::new(name, ..);
+            for rec in reader.query(&header, &region)? {
+                let rec = rec?;
+                self.handle_record(&rec, &header, min_mapq, reject_fullmap, &mut current_ref_id)?;
             }
-            if read.is_secondary || read.is_qcfail || read.is_duplicate {
-                continue;
-            }
-            // SPD-5a: detect contig change by integer reference id; resolve the name
-            // string only when it changes, not for every read.
-            let ref_id = match read.reference_sequence_id {
-                Some(id) => id,
-                None => continue, // high-mapq unmapped: skip (would crash pysam)
-            };
-            if current_ref_id != Some(ref_id) {
-                self.cleanup();
-                current_ref_id = Some(ref_id);
-                self.reference_name = read.reference_name();
-            }
-            let ref_name = self.reference_name.as_deref().unwrap_or_default();
-            if !self.contig_ok_extract(ref_name) {
-                continue;
-            }
-            if !read.has_cigar {
-                continue;
-            }
-
-            let left_soft = read.left_is_soft;
-            let right_soft = read.right_is_soft;
-            let left_len = read.left_len;
-            let right_len = read.right_len;
-
-            let clip: Option<i32> = if left_soft && !right_soft {
-                Some(CLIP_LEFT)
-            } else if right_soft && !left_soft {
-                Some(CLIP_RIGHT)
-            } else if right_soft && left_soft {
-                if left_len > right_len {
-                    Some(CLIP_LEFT)
-                } else if right_len > left_len {
-                    Some(CLIP_RIGHT)
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
-
-            let Some(clip) = clip else { continue };
-
-            // drop reads that map contiguously elsewhere in the reference
-            // (XA/SA full-length alt): not real chimeric junctions.
-            if reject_fullmap && maps_fully_elsewhere(&read) {
-                continue;
-            }
-
-            // cruciform / short-indel exclusion via SA tag
-            let mut exclude_flag = false;
-            if read.is_supplementary {
-                if let Some(sa) = read.sa() {
-                    for part in sa.split(';') {
-                        if part.is_empty() {
-                            continue;
-                        }
-                        let fields: Vec<&str> = part.split(',').collect();
-                        if fields.len() >= 2 && fields[0] == ref_name {
-                            if let Ok(start) = fields[1].parse::<i64>() {
-                                if (read.reference_start - start).abs() < self.config.exclude_same_contig_supplementary {
-                                    exclude_flag = true;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            // surviving clip candidate: now decode the heavy fields (SPD-1).
-            let seq = read.seq();
-            let qname = read.query_name();
-            // SPD-4: remember where this read's mate is, so it can be fetched later.
-            if self.config.mate_fetch {
-                if let Some(mref) = read.mate_ref_id {
-                    if read.mate_pos >= 0 {
-                        self.mate_coords.insert((qname.clone(), !read.is_read1), (mref, read.mate_pos));
-                    }
-                }
-            }
-            let full = QualitySeq::new(seq.clone(), read.qual());
-            let n = seq.len();
-
-            if clip == CLIP_LEFT {
-                // adapter check on the last MIN_CLIP_LEN of the clipped part, revcomped
-                let clip_part = &seq[..left_len];
-                let sub = &clip_part[clip_part.len().saturating_sub(MIN_CLIP_LEN)..];
-                if is_adapter(&revcomp_bytes(sub)) {
-                    continue;
-                }
-                let clipped = full.pyslice(None, Some(left_len as isize));
-                let unclipped = if right_soft {
-                    full.pyslice(Some(left_len as isize), Some(-(right_len as isize)))
-                } else {
-                    full.pyslice(Some(left_len as isize), None)
-                };
-                self.add_breakpoint(clip, read.reference_start, &qname, clipped, unclipped, read.is_read1, read.is_forward(), exclude_flag, read.mapq);
-            } else {
-                // CLIP_RIGHT: adapter check on the first MIN_CLIP_LEN of the clipped part
-                let clip_part = &seq[n - right_len..];
-                let sub = &clip_part[..clip_part.len().min(MIN_CLIP_LEN)];
-                if is_adapter(sub) {
-                    continue;
-                }
-                let clipped = full.pyslice(Some(-(right_len as isize)), None);
-                let unclipped = if left_soft {
-                    full.pyslice(Some(left_len as isize), Some(-(right_len as isize)))
-                } else {
-                    full.pyslice(None, Some(-(right_len as isize)))
-                };
-                self.add_breakpoint(clip, read.reference_end, &qname, clipped, unclipped, read.is_read1, read.is_forward(), exclude_flag, read.mapq);
+        } else {
+            let mut reader = open_bam(&self.filepath, self.bam_threads)?;
+            let header = reader.read_header()?;
+            let mut record = bam::Record::default();
+            while reader.read_record(&mut record)? != 0 {
+                self.handle_record(&record, &header, min_mapq, reject_fullmap, &mut current_ref_id)?;
             }
         }
         self.cleanup();
+        Ok(())
+    }
+
+    /// Per-read body shared by the full-scan and the SPD-3 per-contig indexed paths.
+    /// A read-level `continue` in the original single loop is a `return Ok(())` here.
+    fn handle_record(
+        &mut self,
+        record: &bam::Record,
+        header: &Header,
+        min_mapq: u8,
+        reject_fullmap: bool,
+        current_ref_id: &mut Option<usize>,
+    ) -> io::Result<()> {
+        let read = BamRead::from_record(record, header)?;
+
+        if read.mapq < min_mapq {
+            if let Some(b) = PolyABreakpoint::find_polya(&read) {
+                // SPD-4: record the polyA read's mate coordinate too
+                if self.config.mate_fetch {
+                    if let Some(mref) = read.mate_ref_id {
+                        if read.mate_pos >= 0 {
+                            self.mate_coords.insert((read.query_name(), !read.is_read1), (mref, read.mate_pos));
+                        }
+                    }
+                }
+                self.polya.push(b);
+            }
+            return Ok(());
+        }
+        if read.is_secondary || read.is_qcfail || read.is_duplicate {
+            return Ok(());
+        }
+        // SPD-5a: detect contig change by integer reference id; resolve the name
+        // string only when it changes, not for every read.
+        let ref_id = match read.reference_sequence_id {
+            Some(id) => id,
+            None => return Ok(()), // high-mapq unmapped: skip (would crash pysam)
+        };
+        if *current_ref_id != Some(ref_id) {
+            self.cleanup();
+            *current_ref_id = Some(ref_id);
+            self.reference_name = read.reference_name();
+        }
+        let ref_name = self.reference_name.as_deref().unwrap_or_default();
+        if !self.contig_ok_extract(ref_name) {
+            return Ok(());
+        }
+        if !read.has_cigar {
+            return Ok(());
+        }
+
+        let left_soft = read.left_is_soft;
+        let right_soft = read.right_is_soft;
+        let left_len = read.left_len;
+        let right_len = read.right_len;
+
+        let clip: Option<i32> = if left_soft && !right_soft {
+            Some(CLIP_LEFT)
+        } else if right_soft && !left_soft {
+            Some(CLIP_RIGHT)
+        } else if right_soft && left_soft {
+            if left_len > right_len {
+                Some(CLIP_LEFT)
+            } else if right_len > left_len {
+                Some(CLIP_RIGHT)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        let Some(clip) = clip else { return Ok(()) };
+
+        // drop reads that map contiguously elsewhere in the reference
+        // (XA/SA full-length alt): not real chimeric junctions.
+        if reject_fullmap && maps_fully_elsewhere(&read) {
+            return Ok(());
+        }
+
+        // cruciform / short-indel exclusion via SA tag
+        let mut exclude_flag = false;
+        if read.is_supplementary {
+            if let Some(sa) = read.sa() {
+                for part in sa.split(';') {
+                    if part.is_empty() {
+                        continue; // inner loop over SA parts
+                    }
+                    let fields: Vec<&str> = part.split(',').collect();
+                    if fields.len() >= 2 && fields[0] == ref_name {
+                        if let Ok(start) = fields[1].parse::<i64>() {
+                            if (read.reference_start - start).abs() < self.config.exclude_same_contig_supplementary {
+                                exclude_flag = true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // surviving clip candidate: now decode the heavy fields (SPD-1).
+        let seq = read.seq();
+        let qname = read.query_name();
+        // SPD-4: remember where this read's mate is, so it can be fetched later.
+        if self.config.mate_fetch {
+            if let Some(mref) = read.mate_ref_id {
+                if read.mate_pos >= 0 {
+                    self.mate_coords.insert((qname.clone(), !read.is_read1), (mref, read.mate_pos));
+                }
+            }
+        }
+        let full = QualitySeq::new(seq.clone(), read.qual());
+        let n = seq.len();
+
+        if clip == CLIP_LEFT {
+            // adapter check on the last MIN_CLIP_LEN of the clipped part, revcomped
+            let clip_part = &seq[..left_len];
+            let sub = &clip_part[clip_part.len().saturating_sub(MIN_CLIP_LEN)..];
+            if is_adapter(&revcomp_bytes(sub)) {
+                return Ok(());
+            }
+            let clipped = full.pyslice(None, Some(left_len as isize));
+            let unclipped = if right_soft {
+                full.pyslice(Some(left_len as isize), Some(-(right_len as isize)))
+            } else {
+                full.pyslice(Some(left_len as isize), None)
+            };
+            self.add_breakpoint(clip, read.reference_start, &qname, clipped, unclipped, read.is_read1, read.is_forward(), exclude_flag, read.mapq);
+        } else {
+            // CLIP_RIGHT: adapter check on the first MIN_CLIP_LEN of the clipped part
+            let clip_part = &seq[n - right_len..];
+            let sub = &clip_part[..clip_part.len().min(MIN_CLIP_LEN)];
+            if is_adapter(sub) {
+                return Ok(());
+            }
+            let clipped = full.pyslice(Some(-(right_len as isize)), None);
+            let unclipped = if left_soft {
+                full.pyslice(Some(left_len as isize), Some(-(right_len as isize)))
+            } else {
+                full.pyslice(None, Some(-(right_len as isize)))
+            };
+            self.add_breakpoint(clip, read.reference_end, &qname, clipped, unclipped, read.is_read1, read.is_forward(), exclude_flag, read.mapq);
+        }
         Ok(())
     }
 
@@ -673,6 +711,9 @@ impl Discovery {
     }
 
     pub fn discovery(&mut self) -> io::Result<()> {
+        if self.config.contig_threads > 1 {
+            return self.discovery_parallel();
+        }
         if self.coverage_enabled() {
             self.estimate_coverage()?;
         }
@@ -681,6 +722,72 @@ impl Discovery {
         // extend_mates() is a no-op in the Python (operates on the already-emptied
         // temporary_breakpoints); intentionally omitted.
         Ok(())
+    }
+
+    /// SPD-3: process contigs in parallel, each in its own worker over an indexed
+    /// fetch, then merge in contig-id order (which equals the coordinate-sorted
+    /// single-threaded order) so the breakpoint indices — and thus output — match.
+    /// ⚠ Reproduces the single-threaded output on the local multi-contig BAM, but
+    /// the merge/order guarantees need the real-WGS differential before this is
+    /// trusted. Default (contig_threads = 1) is the validated single-threaded path.
+    fn discovery_parallel(&mut self) -> io::Result<()> {
+        if self.coverage_enabled() {
+            self.estimate_coverage()?;
+        }
+        let n_contigs = {
+            let mut r = bam::io::indexed_reader::Builder::default().build_from_path(&self.filepath)?;
+            let h = r.read_header()?;
+            h.reference_sequences().len()
+        };
+        let filepath = self.filepath.clone();
+        let config = self.config.clone();
+        let coverage = self.coverage.clone();
+        let nthreads = self.config.contig_threads.min(n_contigs.max(1)).max(1);
+        let next = std::sync::atomic::AtomicUsize::new(0);
+        let results: std::sync::Mutex<Vec<(usize, Discovery)>> = std::sync::Mutex::new(Vec::new());
+        let first_err: std::sync::Mutex<Option<io::Error>> = std::sync::Mutex::new(None);
+        std::thread::scope(|s| {
+            for _ in 0..nthreads {
+                s.spawn(|| loop {
+                    let cid = next.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    if cid >= n_contigs || first_err.lock().unwrap().is_some() {
+                        break;
+                    }
+                    match Discovery::process_contig(&filepath, cid, &config, &coverage) {
+                        Ok(w) => results.lock().unwrap().push((cid, w)),
+                        Err(e) => {
+                            *first_err.lock().unwrap() = Some(e);
+                            break;
+                        }
+                    }
+                });
+            }
+        });
+        if let Some(e) = first_err.into_inner().unwrap() {
+            return Err(e);
+        }
+        let mut results = results.into_inner().unwrap();
+        results.sort_by_key(|(cid, _)| *cid);
+        for (_, mut w) in results {
+            self.final_left_breakpoints.append(&mut w.final_left_breakpoints);
+            self.final_right_breakpoints.append(&mut w.final_right_breakpoints);
+            self.polya.append(&mut w.polya);
+            self.stats.merge(&w.stats);
+            for (k, v) in w.mate_coords {
+                self.mate_coords.insert(k, v);
+            }
+        }
+        self.find_mates()
+    }
+
+    /// One SPD-3 worker: run extract_chimeric over a single contig and return the
+    /// worker (owning that contig's breakpoints / polyA / stats / mate_coords).
+    fn process_contig(filepath: &str, cid: usize, config: &DiscoveryConfig, coverage: &Coverage) -> io::Result<Discovery> {
+        let mut w = Discovery::new(filepath.to_string(), 1, config.clone(), None, None);
+        w.only_contig = Some(cid);
+        w.coverage = coverage.clone();
+        w.extract_chimeric()?;
+        Ok(w)
     }
 
     pub fn output<W: Write>(&self, writer: &mut W, hallmarks: &mut Vec<u8>) -> io::Result<()> {

@@ -38,6 +38,20 @@ impl Stats {
         }
     }
 
+    /// Sum another Stats into this one (SPD-3: merge per-contig worker counters).
+    pub fn merge(&mut self, other: &Stats) {
+        for (dst, src) in [(&mut self.left, &other.left), (&mut self.right, &other.right)] {
+            dst.too_few += src.too_few;
+            dst.rescued_pa += src.rescued_pa;
+            dst.excluded += src.excluded;
+            dst.too_few_after_filter += src.too_few_after_filter;
+            dst.clipped_failed += src.clipped_failed;
+            dst.unclipped_failed += src.unclipped_failed;
+            dst.polymer += src.polymer;
+            dst.passed += src.passed;
+        }
+    }
+
     /// Serialise to JSON. Field names match the Python keys exactly (incl. `rescued_pA`).
     pub fn to_json(&self) -> String {
         format!(
