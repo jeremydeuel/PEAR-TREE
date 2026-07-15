@@ -118,9 +118,27 @@ the file. With no config the run is **byte-identical** to the pre-config port.
 | `rm_self_mask` / `rm_track` / `rm_divergence_max` | false / none / 5.0 | SPEC-7: drop breakpoints inside a *young* RepeatMasker element (percent divergence ≤ max) from `rm_track` (`.out[.gz]`) — divergence-gated, not family membership. Track must match the BAM assembly; hs1 tracks are in-repo, supply GRCh38/GRCm39 tracks for those |
 | `mate_fetch` | false | SPD-4: resolve mates by indexed coordinate fetch (+ SA-tag supplementary loci) instead of a second full pass. Needs a `.bai`. ⚠ byte-identical only on complete BAMs — **validate on the real-WGS differential before enabling** |
 | `contig_threads` | 1 | SPD-3: process contigs in parallel across N worker threads (indexed fetch per contig, merged in contig order). Needs a `.bai`. Reproduces single-threaded output on local multi-contig BAMs; **validate on the real-WGS differential before relying on it** |
+| `discordant_anchor` | false | **Feature A**: rescue a one-sided junction (e.g. a lone poly-A clip) by pairing a real breakpoint that has no reciprocal partner in its TSD window with a cluster of discordant read pairs on the missing side. Emits a `disc_<pos>` coordinate token (no reads for that end). ⚠ adds calls — validate on the real-WGS differential + orthogonal confirmation before defaulting on |
+| `discordant_max_tlen` | 1000 | same-contig template length beyond which a mapped pair counts as discordant (different-contig pairs always do; mate strand is not in the record, so non-FR is not tested) |
+| `discordant_min_reads` | 3 | minimum distinct discordant pairs to form an anchoring cluster |
+| `discordant_window` | 6 | single-linkage cluster width for discordant observations |
+| `discordant_rte_track` | none | **Feature A2**: RepeatMasker `.out[.gz]` scored against the *mate* landing site to establish RTE origin. May be the same track as `rm_track` |
+| `discordant_rte_divergence_max` | 20.0 | keep RTE copies with percent divergence ≤ this for the mate-origin test |
+| `discordant_rte_only` / `discordant_rte_min` | false / 0.5 | gate: only let a cluster act as a partner when its RTE-origin fraction ≥ min (drops random-SV discordant clusters). Off = label only |
+| `splice_hallmark` | false | **Feature B**: write `<out>.splice.tsv` flagging candidates whose mate reads span ≥ `splice_min_exons` exons of one gene with the introns skipped (processed-pseudogene signature). NON-GATING — main output unchanged |
+| `exon_annotation` | none | exon annotation (`contig begin end gene_id`, 0-based half-open; `.gz` ok) for `splice_hallmark`. Required when on; must match the BAM assembly (external input, not shipped) |
+| `splice_min_exons` | 2 | distinct same-gene exons a candidate's mates must hit to be flagged |
 
 SPEC-3/4 add one lightweight coverage pre-pass over the BAM; it only runs when one
 of those gates is enabled, so the default path is unchanged.
+
+**Feature A pipeline note.** `discordant_anchor` is the first discovery toggle that
+changes the 4-step contract: a discordant end is written as a `disc_<pos>` token
+(mirroring `polyA_<pos>`) with no reads. The Python `combine_insertions` step parses
+it (types `TYPE_*_DISC`) and currently **parks** these calls exactly as it parks
+poly-A insertions — full downstream genotyping of coordinate-only ends is deferred
+pending a dedicated filter. `splice_hallmark` is sidecar-only and touches nothing
+downstream.
 
 A `<out>.stats.json` reject-counter sidecar (OBS-1) is written next to every
 output, mirroring the per-side `Breakpoint.stats` field set.
