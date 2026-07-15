@@ -24,6 +24,53 @@ enum Emit<'a> {
     Pa(&'a PolyABreakpoint),
 }
 
+/// True if an alternative-alignment CIGAR (XA or SA tag) covers essentially the
+/// whole read end-to-end (clips fewer than MIN_CLIP_LEN bases). Mirrors the
+/// Python `_alt_is_full_length`.
+fn alt_is_full_length(cigar: &str) -> bool {
+    let mut aligned: usize = 0;
+    let mut clip: usize = 0;
+    let mut num: usize = 0;
+    let mut saw_digit = false;
+    for ch in cigar.bytes() {
+        if ch.is_ascii_digit() {
+            num = num * 10 + (ch - b'0') as usize;
+            saw_digit = true;
+        } else {
+            if saw_digit {
+                match ch {
+                    b'S' | b'H' => clip += num,
+                    b'M' | b'=' | b'X' => aligned += num,
+                    _ => {}
+                }
+            }
+            num = 0;
+            saw_digit = false;
+        }
+    }
+    aligned > 0 && clip < MIN_CLIP_LEN
+}
+
+/// True if the read has any XA/SA alternative alignment spanning the whole read.
+/// Such reads map contiguously elsewhere and are not genuine junctions.
+fn maps_fully_elsewhere(read: &BamRead) -> bool {
+    // (tag string, index of the CIGAR field within a comma-separated entry)
+    for (tag, cigar_idx) in [(&read.xa, 2usize), (&read.sa, 3usize)] {
+        if let Some(s) = tag {
+            for entry in s.split(';') {
+                if entry.is_empty() {
+                    continue;
+                }
+                let fields: Vec<&str> = entry.split(',').collect();
+                if fields.len() > cigar_idx && alt_is_full_length(fields[cigar_idx]) {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
 pub struct Discovery {
     temporary_breakpoints: Vec<Breakpoint>,
     final_left_breakpoints: Vec<Breakpoint>,
@@ -129,6 +176,7 @@ impl Discovery {
     pub fn extract_chimeric(&mut self) -> io::Result<()> {
         let mut reader = bam::io::reader::Builder::default().build_from_path(&self.filepath)?;
         let header = reader.read_header()?;
+        let reject_fullmap = reject_fully_mapping_reads();
         self.reference_name = None;
         for result in reader.records() {
             let record = result?;
@@ -183,6 +231,12 @@ impl Discovery {
             };
 
             let Some(clip) = clip else { continue };
+
+            // drop reads that map contiguously elsewhere in the reference
+            // (XA/SA full-length alt): not real chimeric junctions.
+            if reject_fullmap && maps_fully_elsewhere(&read) {
+                continue;
+            }
 
             // cruciform / short-indel exclusion via SA tag
             let mut exclude_flag = false;

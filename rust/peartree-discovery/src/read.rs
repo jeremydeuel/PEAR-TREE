@@ -42,6 +42,7 @@ pub struct BamRead {
     pub right_is_soft: bool,
     pub right_len: usize,
     pub sa: Option<String>,
+    pub xa: Option<String>,
 }
 
 impl BamRead {
@@ -95,7 +96,12 @@ impl BamRead {
             .map(|n| String::from_utf8_lossy(n.as_ref()).into_owned())
             .unwrap_or_default();
 
-        let sa = match record.data().get(&Tag::OTHER_ALIGNMENTS).transpose()? {
+        let data = record.data();
+        let sa = match data.get(&Tag::OTHER_ALIGNMENTS).transpose()? {
+            Some(value) => Some(value_to_string(&value)),
+            None => None,
+        };
+        let xa = match data.get(&Tag::from([b'X', b'A'])).transpose()? {
             Some(value) => Some(value_to_string(&value)),
             None => None,
         };
@@ -126,6 +132,7 @@ impl BamRead {
             right_is_soft,
             right_len,
             sa,
+            xa,
         })
     }
 }

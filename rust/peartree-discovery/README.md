@@ -46,6 +46,7 @@ Validated byte-identical on:
 | `test_data/test.bam` | single real insertion: left/right consensus, mate extension, SA/exclude flag, adapter clipping, multi-read consensus |
 | `tests/gen_multicontig.py` | multiple contigs + output ordering; `MT` and >5-char contig skips |
 | `tests/gen_polya.py` | polyA-rescue path (LEFT polyA paired with a right breakpoint) |
+| `tests/gen_xa.py` | the XA/SA "maps fully elsewhere" early filter (on and off) |
 
 Regenerate the synthetic inputs with:
 
@@ -60,13 +61,29 @@ venv/bin/python rust/peartree-discovery/tests/gen_polya.py     /tmp/polya.bam
 > pipeline over to the Rust binary. Until then, keep the Python discovery as the
 > reference implementation.
 
+## Early "maps fully elsewhere" filter
+
+A clipped candidate read is dropped during discovery if it carries an `XA`
+(bwa alternative hit) or `SA` (supplementary) alignment that spans essentially
+the **whole** read (clip in that alt `< min_clip_len`). Such a read maps
+contiguously elsewhere in the reference and is therefore not a genuine chimeric
+junction — step 2 would remove it anyway; doing it here shrinks the candidate
+set early, using evidence already in the BAM (no genome required). An alt that
+covers only the *clipped* part is the real junction signal and is **kept**.
+
+Implemented identically in the Python and Rust discovery so they stay
+byte-identical. On by default; disable with `PEARTREE_KEEP_FULLMAP=1`
+(Python honours the same env var, and the `discovery.reject_fully_mapping_reads`
+config key).
+
 ## Scope & fidelity notes
 
-- This is a **faithful** port of the current Python behaviour, including its
-  quirks (e.g. the CLIP_LEFT double-append in `join`, the polyA dict-key output
-  ordering, the SA-start vs 0-based-start off-by-one in the exclude check). The
-  goal was byte-identical output, not "fixed" behaviour — cleanups belong in a
-  later stage so they can be diffed against this baseline.
+- The port is a **faithful** reimplementation of the Python discovery, including
+  its quirks (e.g. the CLIP_LEFT double-append in `join`, the polyA dict-key
+  output ordering, the SA-start vs 0-based-start off-by-one in the exclude
+  check). Byte-identical output is the goal; behavioural changes (like the XA/SA
+  filter above) are made in **both** implementations at once so they can still
+  be diffed against each other.
 - `extend_mates()` is a no-op in the Python (it iterates an already-emptied
   list) and is intentionally omitted here.
 - Config values (MAPQ, clip lengths, adapters, …) are compiled in from

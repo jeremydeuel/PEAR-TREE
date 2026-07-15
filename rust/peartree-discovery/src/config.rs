@@ -10,6 +10,13 @@ pub const EXCLUDE_SAME_CONTIG_SUPPLEMENTARY: i64 = 1000;
 
 pub const POLYA_CUTOFF: usize = 12;
 
+// drop clipped reads whose XA/SA shows the whole read maps contiguously
+// elsewhere (not a real junction). On by default; set PEARTREE_KEEP_FULLMAP=1
+// to disable (e.g. to reproduce pre-filter output).
+pub fn reject_fully_mapping_reads() -> bool {
+    !matches!(std::env::var("PEARTREE_KEEP_FULLMAP").as_deref(), Ok("1") | Ok("true") | Ok("True"))
+}
+
 // clip side constants (match the Python ints)
 pub const CLIP_RIGHT: i32 = 1;
 pub const CLIP_LEFT: i32 = 2;

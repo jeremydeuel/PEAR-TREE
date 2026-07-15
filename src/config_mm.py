@@ -33,6 +33,7 @@ CONFIG = {
         'min_breakpoints_aggregated_during_first_step': 2, #minimal number of breakpoints aggregated during first step in order to even start filtering
         'max_read_count': 120, #maximum numbers of reads in the span of a breakpoint allowed (exclude high-coverage artefact-rich regions)
         'exclude_same_contig_supplementary': 1000, #minimum distance between a supplementary read to not be excluded (not interested in micro indels)
+        'reject_fully_mapping_reads': True, #drop clipped reads whose XA/SA shows the whole read maps contiguously elsewhere (not a real junction)
     },
 
     #define adapter sequences

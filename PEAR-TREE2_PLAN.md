@@ -156,7 +156,16 @@ still-evolving filtering logic lives.
 - [x] **Emits the exact existing `.txt.gz` breakpoint format** — a faithful,
   byte-for-byte port of the current Python behaviour (quirks included, so it can
   be diffed against the Python baseline). `extend_mates()` no-op omitted.
-- [ ] Port the Stage-2 discovery-time artefact filters (after Stage 2 exists).
+- [x] First discovery-time artefact filter landed (brought forward from Stage 2):
+  **XA/SA "maps fully elsewhere" early rejection** — drop clipped reads whose
+  XA/SA alt spans the whole read (step 2's "maps entirely to reference" filter,
+  applied early using tags already in the BAM, no genome). Implemented in **both**
+  Python and Rust discovery (stay byte-identical); toggle `PEARTREE_KEEP_FULLMAP=1`
+  / `discovery.reject_fully_mapping_reads`. Validated: no-op on the existing
+  differential tests (no full-length alts there), and a dedicated `gen_xa.py`
+  case confirms it removes a full-map insertion, py==rust in on and off modes.
+- [ ] Remaining Stage-2 discovery-time filters: high-coverage masking,
+  low-complexity/repeat, cluster-level split-read rejection, orientation sanity.
 - [x] Ships as a standalone binary; drop-in for `--step discover`.
 - [~] **Equivalence test:** byte-identical to Python on `test_data/test.bam` and
   two synthetic inputs (multi-contig ordering + `MT`/long-contig skips; polyA

@@ -61,6 +61,7 @@
 
 
 import pysam
+import re
 from revcomp import revcomp
 import gzip
 from adapter import is_adapter
@@ -72,6 +73,47 @@ from breakpoint import Breakpoint, CLIP_LEFT, CLIP_RIGHT
 from typing import Tuple, List, Dict
 from polyABreakpoint import PolyABreakpoint
 import os
+
+_CIGAR_RE = re.compile(r'(\d+)([MIDNSHP=X])')
+
+
+def _alt_is_full_length(cigar: str) -> bool:
+    """
+    True if an alternative-alignment CIGAR (from an XA or SA tag) covers
+    essentially the whole read end-to-end, i.e. it clips fewer than
+    min_clip_len bases. Such a read maps contiguously elsewhere in the
+    reference and therefore is not a genuine chimeric junction.
+    """
+    aligned = 0
+    clip = 0
+    for n, op in _CIGAR_RE.findall(cigar):
+        if op in ('S', 'H'):
+            clip += int(n)
+        elif op in ('M', '=', 'X'):
+            aligned += int(n)
+    return aligned > 0 and clip < CONFIG['discovery']['min_clip_len']
+
+
+def maps_fully_elsewhere(read) -> bool:
+    """
+    True if the read has any XA (bwa alternative hit) or SA (supplementary)
+    alignment that spans the whole read. These reads are dropped early because
+    step 2 would remove them anyway ("at least one end maps entirely to the
+    reference genome, ... can not be chimeric"). Only full-length alternatives
+    count — an alt that covers just the clipped part is the real junction signal
+    and is kept.
+    """
+    for tag, cigar_idx in (('XA', 2), ('SA', 3)):
+        if read.has_tag(tag):
+            for entry in read.get_tag(tag).split(';'):
+                if not entry:
+                    continue
+                fields = entry.split(',')
+                if len(fields) <= cigar_idx:
+                    continue
+                if _alt_is_full_length(fields[cigar_idx]):
+                    return True
+    return False
 # Enable verbose per-read/per-breakpoint debug output by setting PEARTREE_DEBUG=1.
 # Off by default: these prints are a measurable cost on a WGS-scale run.
 DEBUG = os.environ.get("PEARTREE_DEBUG", "") not in ("", "0", "false", "False")
@@ -186,6 +228,8 @@ class Discovery:
 
     def extract_chimeric(self) -> None:  # this function has side effects!
         assert self.filepath is not None
+        reject_fullmap = CONFIG['discovery'].get('reject_fully_mapping_reads', True) and \
+            os.environ.get('PEARTREE_KEEP_FULLMAP', '') not in ('1', 'true', 'True')
         with pysam.AlignmentFile(self.filepath, threads=BAM_THREADS) as f:
             self._assert_coordinate_sorted(f)
             self.reference_name = None
@@ -227,6 +271,12 @@ class Discovery:
                     elif right_len > left_len:
                         clip = CLIP_RIGHT
                 if clip:
+                    # drop reads that map contiguously elsewhere in the reference
+                    # (XA/SA full-length alt): not real chimeric junctions. This is
+                    # the "maps entirely to reference" filter from step 2, applied
+                    # early where the evidence is already in the BAM (no genome).
+                    if reject_fullmap and maps_fully_elsewhere(read):
+                        continue
                     exclude_flag = False
                     # check if this is a cruciform DNA artefact or a short indel. If yes, remove
                     if read.is_supplementary:
