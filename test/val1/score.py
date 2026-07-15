@@ -15,7 +15,10 @@ import subprocess
 import sys
 import tempfile
 
-CALL_RE = re.compile(r"^@([^:]+):(\d+)-(\d+):")
+# a call header is @<contig>:<left>-<right>:...; either coordinate may carry a
+# non-numeric partner prefix (polyA_<pos>, or disc_<pos> from Feature A), which we
+# strip so the call is scored by its numeric breakpoint position.
+CALL_RE = re.compile(r"^@([^:]+):(?:polyA_|disc_)?(\d+)-(?:polyA_|disc_)?(\d+):")
 
 
 def load_truth(path):

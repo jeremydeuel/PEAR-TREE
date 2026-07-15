@@ -117,6 +117,37 @@ pub struct DiscoveryConfig {
     /// SPD-3: process contigs in parallel across this many worker threads (1 = the
     /// validated single-threaded path). Requires the mate fetch (needs an index).
     pub contig_threads: usize,
+    // --- Feature A: discordant-mate anchoring (all off/neutral by default) ---
+    /// Master switch: collect discordant read pairs as an evidence source so a
+    /// one-sided junction (e.g. a lone poly-A clip) can be paired with a cluster of
+    /// discordant mates supplying the missing reciprocal side. Off = no change.
+    pub discordant_anchor: bool,
+    /// Same-contig template length beyond which a mapped pair counts as discordant
+    /// (different-contig and non-FR pairs are always discordant).
+    pub discordant_max_tlen: i64,
+    /// Minimum distinct discordant pairs to form an anchoring cluster.
+    pub discordant_min_reads: usize,
+    /// Cluster width for discordant observations (defaults to `cluster_window`).
+    pub discordant_window: i64,
+    /// RTE track (RepeatMasker `.out[.gz]`) for the mate-origin check. `None` = the
+    /// origin fraction is reported as 0 (label only, never blocks).
+    pub discordant_rte_track: Option<String>,
+    /// Keep RTE copies with percent divergence <= this for the mate-origin test.
+    pub discordant_rte_divergence_max: f64,
+    /// Gate: require the RTE-origin fraction >= `discordant_rte_min` before a
+    /// discordant cluster may act as a partner. Off = label only.
+    pub discordant_rte_only: bool,
+    pub discordant_rte_min: f64,
+    // --- Feature B: processed-pseudogene (splice) annotation ---
+    /// Write a non-gating `<out>.splice.tsv` flagging candidates whose mate reads span
+    /// >= `splice_min_exons` exons of a single reference gene (intron skipped). The
+    /// main breakpoint output is unchanged. Off by default.
+    pub splice_hallmark: bool,
+    /// Exon annotation (BED/GTF with gene_id) for the BAM's assembly. Required when
+    /// `splice_hallmark` is on; must match the assembly (external input, not shipped).
+    pub exon_annotation: Option<String>,
+    /// Distinct same-gene exons a candidate's mates must hit to be flagged.
+    pub splice_min_exons: usize,
 }
 
 impl Default for DiscoveryConfig {
@@ -151,6 +182,17 @@ impl Default for DiscoveryConfig {
             rm_divergence_max: 5.0,
             mate_fetch: false,
             contig_threads: 1,
+            discordant_anchor: false,
+            discordant_max_tlen: 1000,
+            discordant_min_reads: 3,
+            discordant_window: CLUSTER_WINDOW,
+            discordant_rte_track: None,
+            discordant_rte_divergence_max: 20.0,
+            discordant_rte_only: false,
+            discordant_rte_min: 0.5,
+            splice_hallmark: false,
+            exon_annotation: None,
+            splice_min_exons: 2,
         }
     }
 }
@@ -235,6 +277,17 @@ impl DiscoveryConfig {
             "rm_divergence_max" => self.rm_divergence_max = parse_num(val)?,
             "mate_fetch" => self.mate_fetch = parse_bool(val)?,
             "contig_threads" => self.contig_threads = parse_num(val)?,
+            "discordant_anchor" => self.discordant_anchor = parse_bool(val)?,
+            "discordant_max_tlen" => self.discordant_max_tlen = parse_num(val)?,
+            "discordant_min_reads" => self.discordant_min_reads = parse_num(val)?,
+            "discordant_window" => self.discordant_window = parse_num(val)?,
+            "discordant_rte_track" => self.discordant_rte_track = Some(val.to_string()),
+            "discordant_rte_divergence_max" => self.discordant_rte_divergence_max = parse_num(val)?,
+            "discordant_rte_only" => self.discordant_rte_only = parse_bool(val)?,
+            "discordant_rte_min" => self.discordant_rte_min = parse_num(val)?,
+            "splice_hallmark" => self.splice_hallmark = parse_bool(val)?,
+            "exon_annotation" => self.exon_annotation = Some(val.to_string()),
+            "splice_min_exons" => self.splice_min_exons = parse_num(val)?,
             other => eprintln!("warning: ignoring unknown config key '{other}'"),
         }
         Ok(())
@@ -288,6 +341,43 @@ mod tests {
         let mut c = DiscoveryConfig::default();
         assert!(c.set("min_mapq", "notnum").is_err());
         assert!(c.set("reject_fully_mapping_reads", "maybe").is_err());
+    }
+
+    #[test]
+    fn feature_ab_defaults_are_off() {
+        let c = DiscoveryConfig::default();
+        assert!(!c.discordant_anchor);
+        assert_eq!(c.discordant_max_tlen, 1000);
+        assert_eq!(c.discordant_min_reads, 3);
+        assert_eq!(c.discordant_window, CLUSTER_WINDOW);
+        assert!(c.discordant_rte_track.is_none());
+        assert!(!c.discordant_rte_only);
+        assert!(!c.splice_hallmark);
+        assert!(c.exon_annotation.is_none());
+        assert_eq!(c.splice_min_exons, 2);
+    }
+
+    #[test]
+    fn feature_ab_keys_set() {
+        let mut c = DiscoveryConfig::default();
+        c.set("discordant_anchor", "true").unwrap();
+        c.set("discordant_max_tlen", "2500").unwrap();
+        c.set("discordant_min_reads", "5").unwrap();
+        c.set("discordant_rte_track", "/data/rmsk.out.gz").unwrap();
+        c.set("discordant_rte_only", "1").unwrap();
+        c.set("discordant_rte_min", "0.75").unwrap();
+        c.set("splice_hallmark", "true").unwrap();
+        c.set("exon_annotation", "/data/exons.bed").unwrap();
+        c.set("splice_min_exons", "3").unwrap();
+        assert!(c.discordant_anchor);
+        assert_eq!(c.discordant_max_tlen, 2500);
+        assert_eq!(c.discordant_min_reads, 5);
+        assert_eq!(c.discordant_rte_track.as_deref(), Some("/data/rmsk.out.gz"));
+        assert!(c.discordant_rte_only);
+        assert!((c.discordant_rte_min - 0.75).abs() < 1e-9);
+        assert!(c.splice_hallmark);
+        assert_eq!(c.exon_annotation.as_deref(), Some("/data/exons.bed"));
+        assert_eq!(c.splice_min_exons, 3);
     }
 
     #[test]

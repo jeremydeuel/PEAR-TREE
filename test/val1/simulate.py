@@ -41,7 +41,8 @@ def rnd_seq(rng, n):
     return "".join(rng.choice(BASES) for _ in range(n))
 
 
-def make_read(hdr, tid, name, seq, start, cigar, mapq, flag=0):
+def make_read(hdr, tid, name, seq, start, cigar, mapq, flag=0,
+              next_tid=-1, next_start=-1, tlen=0):
     a = pysam.AlignedSegment(hdr)
     a.query_name = name
     a.query_sequence = seq
@@ -51,6 +52,12 @@ def make_read(hdr, tid, name, seq, start, cigar, mapq, flag=0):
     a.reference_start = start
     a.mapping_quality = mapq
     a.cigarstring = cigar
+    # mate/discordant fields (Feature A/B): PNEXT/RNEXT + template length. A read is
+    # "discordant" when it is paired (0x1) but not proper (no 0x2); its mate is mapped
+    # (no 0x8) either on another contig or far away on the same one.
+    a.next_reference_id = next_tid
+    a.next_reference_start = next_start
+    a.template_length = tlen
     return a
 
 
@@ -191,6 +198,103 @@ def simulate(args):
         truth.append((contig, L, R, "SHORTPOLYA", tsd, alt, 0, 0.0))
         idx += 1
 
+    # ------------------------------------------------------------------ Feature A
+    # DISCORDANT targets (A1): a one-sided junction — a real LEFT soft-clip at L, no
+    # RIGHT soft-clip — rescued by a cluster of reverse discordant anchor reads that
+    # start at ~R (reference_start = R => RIGHT-role partner) whose mates map into an
+    # element locus. `discordant` variants send mates to the RTE band (contig 3,
+    # covered by the emitted rmsk track => RTE-origin true); `disc_artefact` variants
+    # send mates to a non-RTE band. With `discordant_anchor` on (no gate) BOTH are
+    # rescued; under `discordant_rte_only` only the RTE-origin ones survive.
+    elem_tid = tid[contigs[2]]  # contig "3" holds the synthetic element / gene loci
+    RTE_BAND = 15_000_000       # mates here fall inside the emitted rmsk track (young)
+    NONRTE_BAND = 16_000_000    # mates here are random genome (no rmsk entry)
+    rmsk_rows = []  # (contig, begin, end, div) young RepeatMasker element intervals
+
+    def discordant_block(n, mate_band, cls, in_truth):
+        nonlocal idx
+        for j in range(n):
+            contig = contigs[idx % len(contigs)]
+            if contig == contigs[2]:
+                contig = contigs[0]  # keep the insertion off the element contig
+            ti = tid[contig]
+            L = slot[ti]; slot[ti] += step
+            tsd = rng.randint(args.tsd_min, min(args.tsd_max, 20)); R = L + tsd
+            alt = max(args.alt_min, 2)
+            ndisc = max(args.discordant_min_reads, 3)
+            tag = f"{cls}_{contig}_{L}"
+            # real LEFT breakpoint at L
+            for k in range(alt):
+                records.append(make_read(hdr, ti, f"{tag}_L{k}", erv5 + anchor_l,
+                                         L, f"{clip_s}S{anchor_m}M", 60, flag=0x1 | 0x40))
+            # reverse discordant anchors at R, mate -> element band on contig 3
+            for k in range(ndisc):
+                mpos = mate_band + j * 2000 + k * 10
+                records.append(make_read(hdr, ti, f"{tag}_D{k}", rnd_seq(rng, ref_m),
+                                         R, f"{ref_m}M", 60,
+                                         flag=0x1 | 0x10 | 0x80,  # paired, reverse, read2, NOT proper
+                                         next_tid=elem_tid, next_start=mpos))
+            coverage_reads(tag, ti, L)
+            if in_truth:
+                truth.append((contig, L, R, cls.upper(), tsd, alt, 0, 0.0))
+            idx += 1
+
+    discordant_block(args.n_discordant, RTE_BAND, "discordant", in_truth=True)
+    discordant_block(args.n_disc_artefact, NONRTE_BAND, "disc_artefact", in_truth=False)
+    if args.n_discordant or args.n_disc_artefact:
+        # one young-element interval spanning the whole RTE band the mates map into
+        rmsk_rows.append((contigs[2], RTE_BAND, RTE_BAND + 1_000_000, 3.0))
+
+    # ------------------------------------------------------------------ Feature B
+    # PSEUDOGENE targets (B3): a normal insertion whose RIGHT-junction reads are read1
+    # of pairs whose mates map into >=2 exons of a single synthetic gene (introns
+    # skipped) — the processed-pseudogene signature. A single-exon variant must NOT be
+    # flagged. Exons are emitted to the companion annotation file.
+    GENE_START = 17_000_000
+    EXON_LEN = 400
+    EXON_GAP = 10_000  # intron between exons
+    exon_rows = []  # (contig, begin, end, gene_id)
+    n_gene_exons = 3
+    for e in range(n_gene_exons):
+        b = GENE_START + e * EXON_GAP
+        exon_rows.append((contigs[2], b, b + EXON_LEN, "G1"))
+
+    def pseudogene_block(n, n_exons_hit, cls, in_truth):
+        nonlocal idx
+        for _ in range(n):
+            contig = contigs[idx % len(contigs)]
+            if contig == contigs[2]:
+                contig = contigs[0]
+            ti = tid[contig]
+            L = slot[ti]; slot[ti] += step
+            tsd = rng.randint(args.tsd_min, min(args.tsd_max, 20)); R = L + tsd
+            alt = max(args.alt_min, n_exons_hit)
+            tag = f"{cls}_{contig}_{L}"
+            # LEFT breakpoint (plain) at L
+            for k in range(alt):
+                records.append(make_read(hdr, ti, f"{tag}_L{k}", erv5 + anchor_l,
+                                         L, f"{clip_s}S{anchor_m}M", 60, flag=0x1 | 0x40))
+            # RIGHT breakpoint at R: forward read1 => has_mate; mate maps into exon (k mod n_exons_hit)
+            for k in range(alt):
+                exon = k % n_exons_hit
+                mpos = GENE_START + exon * EXON_GAP + 50
+                nm = f"{tag}_R{k}"
+                records.append(make_read(hdr, ti, nm, anchor_r + erv5,
+                                         R - anchor_m, f"{anchor_m}M{clip_s}S", 60,
+                                         flag=0x1 | 0x40,  # paired, read1, forward
+                                         next_tid=elem_tid, next_start=mpos))
+                # the mate as a real record inside the exon (read2)
+                records.append(make_read(hdr, elem_tid, nm, rnd_seq(rng, ref_m),
+                                         mpos, f"{ref_m}M", 60,
+                                         flag=0x1 | 0x80, next_tid=ti, next_start=R - anchor_m))
+            coverage_reads(tag, ti, L)
+            if in_truth:
+                truth.append((contig, L, R, cls.upper(), tsd, alt, 0, 0.0))
+            idx += 1
+
+    pseudogene_block(args.n_pseudogene, n_gene_exons, "pseudogene", in_truth=True)
+    pseudogene_block(args.n_single_exon, 1, "single_exon", in_truth=True)
+
     # pileup artefacts: high local coverage + a spurious clipped pair, far from real
     # insertions and NOT in truth. These are the false positives SPEC-3 (coverage
     # mask) and SPEC-4 (adaptive evidence floor) must remove.
@@ -225,6 +329,23 @@ def simulate(args):
         for row in truth:
             f.write("\t".join(str(x) for x in row) + "\n")
 
+    # Feature A: emit a matching RepeatMasker .out track (div-gated parser format:
+    # col1=%div, col4=contig, col5=begin 1-based, col6=end) covering the RTE band the
+    # discordant mates map into, so the D3 config can point `discordant_rte_track` at it.
+    if args.out_rmsk and rmsk_rows:
+        with open(args.out_rmsk, "w") as f:
+            f.write("   SW  perc perc perc  query  begin  end (left) strand repeat class ...\n")
+            for contig, begin0, end0, div in rmsk_rows:
+                # 1-based inclusive begin; parser stores [begin-1, end)
+                f.write(f"1000 {div} 0.0 0.0 {contig} {begin0 + 1} {end0} (0) + ELEM LINE/L1 1 100 (0) 1\n")
+
+    # Feature B: emit the exon annotation (contig, begin, end, gene_id; 0-based
+    # half-open) so the D5 config can point `exon_annotation` at it.
+    if args.out_exons and exon_rows:
+        with open(args.out_exons, "w") as f:
+            for contig, begin, end, gene in exon_rows:
+                f.write(f"{contig}\t{begin}\t{end}\t{gene}\n")
+
     print(f"wrote {len(records)} reads, {len(truth)} insertions to {args.out_bam}; truth -> {args.out_truth}",
           file=sys.stderr)
 
@@ -233,6 +354,8 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--out-bam", required=True)
     p.add_argument("--out-truth", required=True)
+    p.add_argument("--out-rmsk", help="Feature A: write a RepeatMasker .out track for the RTE band")
+    p.add_argument("--out-exons", help="Feature B: write the exon annotation (contig,begin,end,gene_id)")
     p.add_argument("--seed", type=int, default=1)
     p.add_argument("--n-l1", type=int, default=30)
     p.add_argument("--n-erv", type=int, default=20)
@@ -246,6 +369,11 @@ def main():
     p.add_argument("--n-lowmapq", type=int, default=0, help="SENS-2: insertions with mixed-MAPQ junction reads")
     p.add_argument("--n-shortpolya", type=int, default=0, help="SENS-8: insertions with a short poly-A clip")
     p.add_argument("--shortpolya-len", type=int, default=11, help="length of the short poly-A clip (<= 12 floor)")
+    p.add_argument("--n-discordant", type=int, default=0, help="A1: one-sided junctions rescued by RTE-origin discordant mates")
+    p.add_argument("--n-disc-artefact", type=int, default=0, help="A2: one-sided junctions whose discordant mates are non-RTE (not in truth)")
+    p.add_argument("--discordant-min-reads", type=int, default=3, help="discordant anchor reads per one-sided junction")
+    p.add_argument("--n-pseudogene", type=int, default=0, help="B3: insertions whose mates span >=2 exons of one gene")
+    p.add_argument("--n-single-exon", type=int, default=0, help="B3 negative control: mates hit a single exon (must not flag)")
     p.add_argument("--n-artefacts", type=int, default=0, help="pileup false-positive regions (not in truth)")
     p.add_argument("--artefact-cov-min", type=int, default=150)
     p.add_argument("--artefact-cov-max", type=int, default=300)
