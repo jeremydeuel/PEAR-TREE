@@ -94,6 +94,14 @@ pub struct DiscoveryConfig {
     /// `lowq_mapq_threshold` exceeds this. `None` = off (no guard).
     pub max_lowq_clip_ratio: Option<f64>,
     pub lowq_mapq_threshold: u8,
+    /// SENS-5: write a per-insertion hallmark annotation to `<out>.hallmarks.tsv`
+    /// (poly-A purity, TSD length, EN motif). NON-GATING — the main output is
+    /// unchanged, so this is byte-identical either way. Off by default.
+    pub hallmark_score: bool,
+    /// SENS-8: allow clips down to `short_polya_min_clip` (instead of min_clip_len)
+    /// when the clipped consensus is a pure poly-A/T terminus. Off by default.
+    pub short_polya_clip: bool,
+    pub short_polya_min_clip: usize,
 }
 
 impl Default for DiscoveryConfig {
@@ -120,6 +128,9 @@ impl Default for DiscoveryConfig {
             consensus_tolerant: false,
             max_lowq_clip_ratio: None,
             lowq_mapq_threshold: 40,
+            hallmark_score: false,
+            short_polya_clip: false,
+            short_polya_min_clip: 7,
         }
     }
 }
@@ -196,6 +207,9 @@ impl DiscoveryConfig {
             "consensus_tolerant" => self.consensus_tolerant = parse_bool(val)?,
             "max_lowq_clip_ratio" => self.max_lowq_clip_ratio = Some(parse_num(val)?),
             "lowq_mapq_threshold" => self.lowq_mapq_threshold = parse_num(val)?,
+            "hallmark_score" => self.hallmark_score = parse_bool(val)?,
+            "short_polya_clip" => self.short_polya_clip = parse_bool(val)?,
+            "short_polya_min_clip" => self.short_polya_min_clip = parse_num(val)?,
             other => eprintln!("warning: ignoring unknown config key '{other}'"),
         }
         Ok(())

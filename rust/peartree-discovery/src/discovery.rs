@@ -517,7 +517,13 @@ impl Discovery {
         Ok(())
     }
 
-    pub fn output<W: Write>(&self, writer: &mut W) -> io::Result<()> {
+    pub fn output<W: Write>(&self, writer: &mut W, hallmarks: &mut Vec<u8>) -> io::Result<()> {
+        // SENS-5: hallmark annotation is non-gating — the FASTQ output below is
+        // identical whether or not it is enabled; only this sidecar is added.
+        let hm = self.config.hallmark_score;
+        if hm {
+            hallmarks.extend_from_slice(b"contig\tleft\tright\ttsd\tpolya_purity\ten_motif\tscore\n");
+        }
         // group by reference, preserving the Python dict-key ordering of polyA
         let mut polya_order: Vec<String> = Vec::new();
         let mut polya_map: FxHashMap<String, Vec<usize>> = FxHashMap::default();
@@ -593,6 +599,9 @@ impl Discovery {
                         ip += 1;
                     }
                     if ip != p.len() && p[ip].breakpoint.unwrap() - l[il].breakpoint < self.config.polya_far_dist && p[ip].clip == CLIP_RIGHT {
+                        if hm {
+                            write_hallmark(hallmarks, rn, &Emit::Bp(l[il]), &Emit::Pa(p[ip]))?;
+                        }
                         print_output(writer, Emit::Bp(l[il]), Emit::Pa(p[ip]))?;
                         il += 1;
                         continue;
@@ -604,6 +613,9 @@ impl Discovery {
                         ip += 1;
                     }
                     if ip != p.len() && r[ir].breakpoint - p[ip].breakpoint.unwrap() > self.config.polya_near_dist && p[ip].clip == CLIP_LEFT {
+                        if hm {
+                            write_hallmark(hallmarks, rn, &Emit::Pa(p[ip]), &Emit::Bp(r[ir]))?;
+                        }
                         print_output(writer, Emit::Pa(p[ip]), Emit::Bp(r[ir]))?;
                         ir += 1;
                         continue;
@@ -611,6 +623,9 @@ impl Discovery {
                     il += 1;
                     continue;
                 } else {
+                    if hm {
+                        write_hallmark(hallmarks, rn, &Emit::Bp(l[il]), &Emit::Bp(r[ir]))?;
+                    }
                     print_output(writer, Emit::Bp(l[il]), Emit::Bp(r[ir]))?;
                     il += 1;
                 }
@@ -618,6 +633,69 @@ impl Discovery {
         }
         Ok(())
     }
+}
+
+// --- SENS-5 hallmark features (non-gating annotation) ---
+
+fn emit_clip<'a>(e: &'a Emit) -> Option<&'a QualitySeq> {
+    match e {
+        Emit::Bp(b) => Some(&b.clipped),
+        Emit::Pa(p) => p.clipped.as_ref(),
+    }
+}
+
+fn emit_unclip<'a>(e: &'a Emit) -> Option<&'a QualitySeq> {
+    match e {
+        Emit::Bp(b) => Some(&b.unclipped),
+        Emit::Pa(_) => None,
+    }
+}
+
+/// Poly-A/T purity over the terminal (<=12 bp) window of a clip: max(fracA, fracT).
+fn terminal_purity(qs: &QualitySeq) -> f64 {
+    let n = qs.seq.len();
+    if n == 0 {
+        return 0.0;
+    }
+    let w = n.min(12);
+    let tail = &qs.seq[n - w..];
+    let a = tail.iter().filter(|&&b| b == b'A' || b == b'a').count();
+    let t = tail.iter().filter(|&&b| b == b'T' || b == b't').count();
+    a.max(t) as f64 / w as f64
+}
+
+fn contains_motif(qs: &QualitySeq, motif: &[u8]) -> bool {
+    let up: Vec<u8> = qs.seq.iter().map(|b| b.to_ascii_uppercase()).collect();
+    up.windows(motif.len()).any(|w| w == motif)
+}
+
+/// Compute and write one hallmark TSV line for an emitted pair. Element-class-aware
+/// and never gating: poly-A is scored, never required (so ERV is not penalised); the
+/// EN motif is only a small tie-breaker.
+fn write_hallmark(buf: &mut Vec<u8>, contig: &str, left: &Emit, right: &Emit) -> io::Result<()> {
+    let (l_pos, r_pos): (i64, i64) = (
+        match left {
+            Emit::Bp(b) => b.breakpoint,
+            Emit::Pa(p) => p.breakpoint.unwrap_or(0),
+        },
+        match right {
+            Emit::Bp(b) => b.breakpoint,
+            Emit::Pa(p) => p.breakpoint.unwrap_or(0),
+        },
+    );
+    let tsd = r_pos - l_pos;
+    let mut purity = 0.0f64;
+    for c in [emit_clip(left), emit_clip(right)].into_iter().flatten() {
+        purity = purity.max(terminal_purity(c));
+    }
+    // one fixed EN motif (L1 endonuclease consensus), checked in the genomic flank
+    let en = [emit_unclip(left), emit_unclip(right)]
+        .into_iter()
+        .flatten()
+        .any(|u| contains_motif(u, b"TTAAAA"));
+    let tsd_reward = if (2..=20).contains(&tsd) { 1.0 } else { 0.0 };
+    let score = purity + tsd_reward + if en { 0.1 } else { 0.0 };
+    writeln!(buf, "{contig}\t{l_pos}\t{r_pos}\t{tsd}\t{purity:.3}\t{en}\t{score:.3}")
 }
 
 fn print_output<W: Write>(writer: &mut W, left: Emit, right: Emit) -> io::Result<()> {

@@ -61,6 +61,19 @@ impl Breakpoint {
     }
 }
 
+/// SENS-8: a clipped consensus is a "pure" poly-A/T terminus when >=90% of its
+/// bases are A (or >=90% T). Used to relax the clip-length floor for genuine
+/// poly-A tails only.
+fn is_pure_polya(qs: &QualitySeq) -> bool {
+    let n = qs.len();
+    if n == 0 {
+        return false;
+    }
+    let a = qs.seq.iter().filter(|&&b| b == b'A' || b == b'a').count();
+    let t = qs.seq.iter().filter(|&&b| b == b'T' || b == b't').count();
+    (a.max(t) as f64 / n as f64) >= 0.9
+}
+
 /// Counter.most_common()[0]: most frequent value, ties broken by first
 /// insertion order. Returns (value, count).
 fn most_common_first(values: &[i64]) -> (i64, usize) {
@@ -276,7 +289,14 @@ pub fn join(mut breakpoints: Vec<Breakpoint>, cfg: &DiscoveryConfig, evidence_fl
 
     let clipped_cons = find_consensus(&clipped, cfg.consensus_tolerant);
     let unclipped_cons = find_consensus(&unclipped, cfg.consensus_tolerant);
-    if clipped_cons.len() <= MIN_CLIP_LEN {
+    // SENS-8: keep the 12 bp floor, but allow shorter clips when the clipped
+    // consensus is a pure poly-A/T terminus (a genuine tail). Off = legacy floor.
+    let clip_floor = if cfg.short_polya_clip && is_pure_polya(&clipped_cons) {
+        cfg.short_polya_min_clip
+    } else {
+        MIN_CLIP_LEN
+    };
+    if clipped_cons.len() <= clip_floor {
         stats.side_mut(side).clipped_failed += 1;
         return None;
     }

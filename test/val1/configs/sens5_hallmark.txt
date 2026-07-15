@@ -1,0 +1,2 @@
+# SENS-5 hallmark annotation sidecar (non-gating)
+hallmark_score = true

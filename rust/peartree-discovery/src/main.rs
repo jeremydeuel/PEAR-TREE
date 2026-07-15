@@ -106,13 +106,21 @@ fn main() -> io::Result<()> {
     let file = File::create(&out)?;
     let encoder = GzEncoder::new(BufWriter::new(file), Compression::default());
     let mut writer = BufWriter::new(encoder);
-    d.output(&mut writer)?;
+    let mut hallmarks: Vec<u8> = Vec::new();
+    d.output(&mut writer, &mut hallmarks)?;
     writer.into_inner()?.finish()?;
 
     // OBS-1: reject-counter sidecar next to the output.
     let stats_path = format!("{out}.stats.json");
     std::fs::write(&stats_path, d.stats_json())?;
     eprintln!("stats: {stats_path}");
+
+    // SENS-5: hallmark annotation sidecar (only when enabled).
+    if !hallmarks.is_empty() {
+        let hm_path = format!("{out}.hallmarks.tsv");
+        std::fs::write(&hm_path, &hallmarks)?;
+        eprintln!("hallmarks: {hm_path}");
+    }
 
     eprintln!("done.");
     Ok(())

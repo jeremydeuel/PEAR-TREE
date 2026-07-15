@@ -1,0 +1,2 @@
+# SENS-8 short poly-A clips (human-first)
+short_polya_clip = true

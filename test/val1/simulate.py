@@ -172,6 +172,25 @@ def simulate(args):
         truth.append((contig, L, R, "LOWMAPQ", tsd, 2, 0, 0.0))
         idx += 1
 
+    # SENS-8 targets: an insertion whose RIGHT junction clip is a short pure poly-A
+    # tail (>= min_good_bases but <= the 12 bp floor), so baseline rejects that side
+    # (no pair); SENS-8 accepts it because it is a pure poly-A terminus.
+    short = "A" * args.shortpolya_len
+    for _ in range(args.n_shortpolya):
+        contig = contigs[idx % len(contigs)]; ti = tid[contig]
+        L = slot[ti]; slot[ti] += step
+        tsd = rng.randint(args.tsd_min, min(args.tsd_max, 20)); R = L + tsd
+        alt = max(args.alt_min, 2)
+        tag = f"SPA_{contig}_{L}"
+        for k in range(alt):
+            records.append(make_read(hdr, ti, f"{tag}_R{k}", anchor_r + short,
+                                     R - anchor_m, f"{anchor_m}M{len(short)}S", 60, flag=0x1 | 0x40))
+            records.append(make_read(hdr, ti, f"{tag}_L{k}", erv5 + anchor_l,
+                                     L, f"{clip_s}S{anchor_m}M", 60, flag=0x1 | 0x40))
+        coverage_reads(tag, ti, L)
+        truth.append((contig, L, R, "SHORTPOLYA", tsd, alt, 0, 0.0))
+        idx += 1
+
     # pileup artefacts: high local coverage + a spurious clipped pair, far from real
     # insertions and NOT in truth. These are the false positives SPEC-3 (coverage
     # mask) and SPEC-4 (adaptive evidence floor) must remove.
@@ -225,6 +244,8 @@ def main():
     p.add_argument("--ref-max", type=int, default=40)
     p.add_argument("--n-wobble", type=int, default=0, help="SENS-1: insertions with wobbled breakpoints")
     p.add_argument("--n-lowmapq", type=int, default=0, help="SENS-2: insertions with mixed-MAPQ junction reads")
+    p.add_argument("--n-shortpolya", type=int, default=0, help="SENS-8: insertions with a short poly-A clip")
+    p.add_argument("--shortpolya-len", type=int, default=11, help="length of the short poly-A clip (<= 12 floor)")
     p.add_argument("--n-artefacts", type=int, default=0, help="pileup false-positive regions (not in truth)")
     p.add_argument("--artefact-cov-min", type=int, default=150)
     p.add_argument("--artefact-cov-max", type=int, default=300)
