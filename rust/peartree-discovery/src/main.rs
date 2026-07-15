@@ -5,6 +5,7 @@
 mod config;
 mod discovery;
 mod filters;
+mod intervals;
 mod model;
 mod polya;
 mod qseq;
@@ -67,13 +68,32 @@ fn main() -> io::Result<()> {
         }
     };
 
+    // SPEC-5: build the exclude-BED interval index up front so a bad path fails fast.
+    let exclude = match config.exclude_bed.as_deref() {
+        Some(p) => match intervals::IntervalIndex::from_bed(p) {
+            Ok(ix) => Some(ix),
+            Err(e) => {
+                eprintln!("cannot read exclude_bed {p}: {e}");
+                std::process::exit(1);
+            }
+        },
+        None => None,
+    };
+
     eprintln!("PEAR-TREE discovery (rust)");
     eprintln!("input bam: {bam}, output file: {out}");
     // min_mapq is the parameter most likely to differ from production (generic
     // config = 40, config_hs/mm = 60); report the effective value for the record.
     eprintln!("effective min_mapq: {}", config.min_mapq);
+    match &config.contig_allowlist {
+        Some(set) => eprintln!("contig allowlist: {} contigs", set.len()),
+        None => eprintln!("contig allowlist: none (legacy len<=5 + not-MT filter)"),
+    }
+    if config.exclude_bed.is_some() {
+        eprintln!("exclude-bed: {}", config.exclude_bed.as_deref().unwrap());
+    }
 
-    let mut d = Discovery::new(bam, threads, config);
+    let mut d = Discovery::new(bam, threads, config, exclude);
     d.discovery()?;
 
     let file = File::create(&out)?;

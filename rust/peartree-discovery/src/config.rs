@@ -1,6 +1,8 @@
 //! Discovery-relevant configuration, mirroring the `discovery` and `adapters`
 //! sections of src/config.py. (Stage 2 will make these load from a file.)
 
+use rustc_hash::FxHashSet;
+
 pub const MIN_MAPQ: u8 = 40;
 pub const MIN_CLIP_LEN: usize = 12;
 pub const MIN_EVIDENCE_READS_PER_BREAKPOINT: usize = 2;
@@ -64,6 +66,12 @@ pub struct DiscoveryConfig {
     pub polya_near_dist: i64,
     pub polya_far_dist: i64,
     pub reject_fully_mapping_reads: bool,
+    /// SPEC-5/SENS-4: explicit primary-assembly allowlist. When `Some`, a contig is
+    /// processed iff its name is in the set (replacing the `len(name) > 5` + MT/chrM
+    /// heuristic). When `None`, the legacy heuristic applies, so output is unchanged.
+    pub contig_allowlist: Option<FxHashSet<String>>,
+    /// SPEC-5: path to a BED file of regions to drop breakpoints in. `None` = no-op.
+    pub exclude_bed: Option<String>,
 }
 
 impl Default for DiscoveryConfig {
@@ -79,6 +87,8 @@ impl Default for DiscoveryConfig {
             polya_near_dist: POLYA_NEAR_DIST,
             polya_far_dist: POLYA_FAR_DIST,
             reject_fully_mapping_reads: reject_fully_mapping_reads(),
+            contig_allowlist: None,
+            exclude_bed: None,
         }
     }
 }
@@ -130,6 +140,22 @@ impl DiscoveryConfig {
             "polya_near_dist" => self.polya_near_dist = parse_num(val)?,
             "polya_far_dist" => self.polya_far_dist = parse_num(val)?,
             "reject_fully_mapping_reads" => self.reject_fully_mapping_reads = parse_bool(val)?,
+            // comma-separated inline allowlist, e.g. "1,2,...,X,Y,MT"
+            "contig_allowlist" => {
+                self.contig_allowlist = Some(val.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()).map(String::from).collect())
+            }
+            // allowlist from a file, one contig name per line (# comments allowed)
+            "contig_allowlist_file" => {
+                let text = std::fs::read_to_string(val).map_err(|e| format!("cannot read contig_allowlist_file {val}: {e}"))?;
+                self.contig_allowlist = Some(
+                    text.lines()
+                        .map(|l| l.split('#').next().unwrap_or("").trim())
+                        .filter(|s| !s.is_empty())
+                        .map(String::from)
+                        .collect(),
+                )
+            }
+            "exclude_bed" => self.exclude_bed = Some(val.to_string()),
             other => eprintln!("warning: ignoring unknown config key '{other}'"),
         }
         Ok(())
@@ -183,5 +209,18 @@ mod tests {
         let mut c = DiscoveryConfig::default();
         assert!(c.set("min_mapq", "notnum").is_err());
         assert!(c.set("reject_fully_mapping_reads", "maybe").is_err());
+    }
+
+    #[test]
+    fn inline_allowlist_parses() {
+        let mut c = DiscoveryConfig::default();
+        assert!(c.contig_allowlist.is_none());
+        c.set("contig_allowlist", "1, 2 ,X,, NC_000014.9").unwrap();
+        let set = c.contig_allowlist.unwrap();
+        assert_eq!(set.len(), 4); // empty entry between the commas is dropped
+        assert!(set.contains("1"));
+        assert!(set.contains("X"));
+        assert!(set.contains("NC_000014.9"));
+        assert!(!set.contains("3"));
     }
 }

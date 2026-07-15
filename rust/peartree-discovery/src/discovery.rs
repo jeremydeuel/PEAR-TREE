@@ -10,6 +10,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::config::*;
 use crate::filters::{clean_clipped_seq, is_adapter};
+use crate::intervals::IntervalIndex;
 use crate::model::{join, Breakpoint};
 use crate::polya::PolyABreakpoint;
 use crate::qseq::{revcomp_bytes, QualitySeq};
@@ -98,12 +99,13 @@ pub struct Discovery {
     reference_name: Option<String>,
     filepath: String,
     config: DiscoveryConfig,
+    exclude: Option<IntervalIndex>,
     stats: Stats,
     bam_threads: usize, // BGZF decode workers (SPD-2); 1 = single-threaded
 }
 
 impl Discovery {
-    pub fn new(filepath: String, bam_threads: usize, config: DiscoveryConfig) -> Self {
+    pub fn new(filepath: String, bam_threads: usize, config: DiscoveryConfig, exclude: Option<IntervalIndex>) -> Self {
         Discovery {
             temporary_breakpoints: Vec::new(),
             final_left_breakpoints: Vec::new(),
@@ -112,6 +114,7 @@ impl Discovery {
             reference_name: None,
             filepath,
             config,
+            exclude,
             stats: Stats::default(),
             bam_threads: bam_threads.max(1),
         }
@@ -120,6 +123,30 @@ impl Discovery {
     /// OBS-1 reject-counter sidecar, serialised as JSON.
     pub fn stats_json(&self) -> String {
         self.stats.to_json()
+    }
+
+    /// Contig filter for the read-scan (extract_chimeric). With an allowlist set the
+    /// name must be in it; otherwise the legacy `len(name) <= 5` + not-MT heuristic.
+    fn contig_ok_extract(&self, name: &str) -> bool {
+        match &self.config.contig_allowlist {
+            Some(set) => set.contains(name),
+            None => name.len() <= 5 && name != "MT" && name != "chrM",
+        }
+    }
+
+    /// Contig filter at output. Legacy path checks only `len(name) <= 5` (MT/chrM
+    /// clipped breakpoints were already dropped in the scan, but MT polyA mates were
+    /// historically emitted), so keep that exact behaviour when no allowlist is set.
+    fn contig_ok_output(&self, name: &str) -> bool {
+        match &self.config.contig_allowlist {
+            Some(set) => set.contains(name),
+            None => name.len() <= 5,
+        }
+    }
+
+    /// True if a breakpoint at (name, pos) falls in an exclude-BED region (SPEC-5).
+    fn excluded(&self, name: &str, pos: i64) -> bool {
+        self.exclude.as_ref().is_some_and(|ix| ix.contains(name, pos))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -155,8 +182,6 @@ impl Discovery {
         if self.temporary_breakpoints.is_empty() {
             return;
         }
-        // clone once so we can read config while mutating self.final_* below
-        let cfg = self.config.clone();
         let mut left_bps: Vec<Breakpoint> = Vec::new();
         let mut right_bps: Vec<Breakpoint> = Vec::new();
         for bp in self.temporary_breakpoints.drain(..) {
@@ -178,7 +203,7 @@ impl Discovery {
             let mut current: Vec<Breakpoint> = Vec::new();
             for bp in side_bps {
                 if let Some(last) = current.last() {
-                    if (bp.breakpoint - last.breakpoint).abs() < cfg.cluster_window {
+                    if (bp.breakpoint - last.breakpoint).abs() < self.config.cluster_window {
                         current.push(bp);
                         continue;
                     } else {
@@ -191,7 +216,7 @@ impl Discovery {
                 groups.push(current);
             }
             for g in groups {
-                if let Some(joined) = join(g, &cfg, &mut self.stats) {
+                if let Some(joined) = join(g, &self.config, &mut self.stats) {
                     if out {
                         self.final_left_breakpoints.push(joined);
                     } else {
@@ -234,10 +259,7 @@ impl Discovery {
                 self.reference_name = read.reference_name();
             }
             let ref_name = self.reference_name.as_deref().unwrap_or_default();
-            if ref_name.len() > 5 {
-                continue;
-            }
-            if ref_name == "MT" || ref_name == "chrM" {
+            if !self.contig_ok_extract(ref_name) {
                 continue;
             }
             if !read.has_cigar {
@@ -457,7 +479,7 @@ impl Discovery {
         union.sort();
         union.dedup();
         for rn in union {
-            if rn.len() > 5 {
+            if !self.contig_ok_output(&rn) {
                 continue;
             }
             if !polya_map.contains_key(&rn) {
@@ -468,7 +490,7 @@ impl Discovery {
 
         let empty: Vec<usize> = Vec::new();
         for rn in &polya_order {
-            if rn.len() > 5 {
+            if !self.contig_ok_output(rn) {
                 continue;
             }
             let mut l: Vec<&Breakpoint> = left_map.get(rn).unwrap_or(&empty).iter().map(|&i| &self.final_left_breakpoints[i]).collect();
@@ -477,6 +499,13 @@ impl Discovery {
             l.sort_by_key(|b| b.breakpoint);
             r.sort_by_key(|b| b.breakpoint);
             p.sort_by_key(|b| b.breakpoint.unwrap());
+
+            // SPEC-5: drop breakpoints inside exclude-BED regions (no-op if unset)
+            if self.exclude.is_some() {
+                l.retain(|b| !self.excluded(rn, b.breakpoint));
+                r.retain(|b| !self.excluded(rn, b.breakpoint));
+                p.retain(|b| !self.excluded(rn, b.breakpoint.unwrap()));
+            }
 
             let (mut il, mut ir, mut ip) = (0usize, 0usize, 0usize);
             while il < l.len() && ir < r.len() {

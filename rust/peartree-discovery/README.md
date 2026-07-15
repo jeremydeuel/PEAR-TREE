@@ -86,10 +86,29 @@ config key).
   be diffed against each other.
 - `extend_mates()` is a no-op in the Python (it iterates an already-emptied
   list) and is intentionally omitted here.
-- Config values (MAPQ, clip lengths, adapters, …) are compiled in from
-  `src/config.rs`, matching `src/config.py`. Making them load from a file is a
-  Stage 2 item.
-- BAM decompression is currently single-threaded; `--threads` / the
-  `bam_threads` field are reserved for the Stage 2 multithreaded-decode work.
+- Config values default to the constants in `src/config.rs` (matching the
+  generic `src/config.py`) and can be overridden at runtime — see below.
+- BAM decompression uses `--threads N` (or `PEARTREE_BAM_THREADS`) to decode
+  BGZF blocks on a worker pool; `1` (the default) keeps the single-core path.
+
+## Runtime configuration (`--config <file>`)
+
+`--config` reads a `key = value` file (`#` starts a comment); env vars override
+the file. With no config the run is **byte-identical** to the pre-config port.
+
+| key | default | effect |
+|---|---|---|
+| `min_mapq` | 40 | anchor MAPQ floor. Generic config = 40, `config_hs/mm` = 60 — pin it on real runs. Env: `PEARTREE_MIN_MAPQ` |
+| `min_evidence_reads_per_breakpoint` | 2 | consensus evidence floor |
+| `min_good_bases` | 10 | min clipped bases for a QC-passing position |
+| `exclude_same_contig_supplementary` | 1000 | supplementary-exclusion distance |
+| `cluster_window` / `tsd_min` / `tsd_max` (`max_bp_window`) | 6 / 2 / 40 | clustering + TSD-pairing windows |
+| `polya_near_dist` / `polya_far_dist` | 12 / 120 | polyA-rescue proximity band |
+| `reject_fully_mapping_reads` | true | XA/SA full-map early reject. Env: `PEARTREE_KEEP_FULLMAP=1` |
+| `contig_allowlist` / `contig_allowlist_file` | none | SPEC-5/SENS-4 primary-assembly allowlist (comma list, or one name per line). When set, replaces the `len(name) <= 5` + not-MT heuristic — recovers RefSeq/T2T names like `NC_000014.9` |
+| `exclude_bed` | none | SPEC-5 BED of regions whose breakpoints are dropped |
+
+A `<out>.stats.json` reject-counter sidecar (OBS-1) is written next to every
+output, mirroring the per-side `Breakpoint.stats` field set.
 
 [noodles]: https://github.com/zaeleus/noodles
