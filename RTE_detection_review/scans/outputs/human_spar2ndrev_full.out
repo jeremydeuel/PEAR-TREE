@@ -1,0 +1,70 @@
+=== HUMAN FULL SCAN (folder=individual): 15 individuals, 3612 files ===
+   BMH1_TG: 366 files, 3468468 clips
+   PD34200: 55 files, 878002 clips
+   PD34201: 58 files, 920320 clips
+   PD37449: 49 files, 820494 clips
+   PD37590: 60 files, 1499826 clips
+   PD40521: 400 files, 4541254 clips
+   PD40667: 381 files, 4374244 clips
+   PD41048: 320 files, 3715650 clips
+   PD43947: 277 files, 6220072 clips
+   PD43974: 332 files, 4530210 clips
+   PD44887: 31 files, 895862 clips
+   PD44890: 49 files, 1407442 clips
+   PD45517: 414 files, 6279916 clips
+   PD45534: 450 files, 6306372 clips
+   PD48402: 370 files, 4865428 clips
+Loci: 25361780   polyA-rescued loci: 801095 (3.16%)
+Clipped sequences: 50723560
+poly-A/T dominated:             5072047 (10.00%)
+low-complexity (<=2 bases):     5073393 (10.00%)
+homopolymer-dominated (>=50%):  5638184 (11.12%)
+poly-G run>=9:                  330355 (0.65%)
+short clip (<15bp):             2104363 (4.15%)
+palindrome self-fold:           137592 (0.27%)
+adapter substring:              12238 (0.02%)
+
+clips>=20bp: 42772400  unique: 10970905
+recurrent (>=5x): 1088320 distinct, 31232376 instances (73.02% of >=20bp)
+clips (>=2x within an indiv), tracked: 1647963
+  present in ALL 15 individuals: 3692   (reference-repeat / recurrent artefact)
+  present in >=50% individuals:        229631
+  present in exactly ONE individual:   781044  (47.4%)  (candidate germline/private)
+  of the >=50%-individual clips, Alu-consensus: 4104
+
+--- top 35 recurrent clipped sequences (>=20bp) with #individuals present ---
+ 41048 [ind=15] TTTTTTTTTTTTTTTTTTTT                                     polyA/T/lowcplx
+ 41027 [ind=15] TTTTTTTTTTTTTTTTTTTTT                                    polyA/T/lowcplx
+ 40178 [ind=15] AAAAAAAAAAAAAAAAAAAAA                                    polyA/T/lowcplx
+ 39777 [ind=15] AAAAAAAAAAAAAAAAAAAAAAA                                  polyA/T/lowcplx
+ 39727 [ind=15] AAAAAAAAAAAAAAAAAAAA                                     polyA/T/lowcplx
+ 39471 [ind=15] AAAAAAAAAAAAAAAAAAAAAA                                   polyA/T/lowcplx
+ 39447 [ind=15] TTTTTTTTTTTTTTTTTTTTTT                                   polyA/T/lowcplx
+ 38875 [ind=15] AAAAAAAAAAAAAAAAAAAAAAAA                                 polyA/T/lowcplx
+ 38617 [ind=15] AAAAAAAAAAAAAAAAAAAAAAAAA                                polyA/T/lowcplx
+ 37556 [ind=15] TTTTTTTTTTTTTTTTTTTTTTT                                  polyA/T/lowcplx
+ 35572 [ind=15] AAAAAAAAAAAAAAAAAAAAAAAAAA                               polyA/T/lowcplx
+ 35551 [ind=15] TTTTTTTTTTTTTTTTTTTTTTTT                                 polyA/T/lowcplx
+ 32826 [ind=15] TTTTTTTTTTTTTTTTTTTTTTTTT                                polyA/T/lowcplx
+ 31946 [ind=15] AAAAAAAAAAAAAAAAAAAAAAAAAAA                              polyA/T/lowcplx
+ 31738 [ind=15] CCTCGTGATCCGCCCGCCTCGGCCTCCCAAAGTGCTGGGATTACAGGCGTGAGCCA 
+ 31234 [ind=15] TTTTTTTTTTTTTTTTTTTTTTTTTT                               polyA/T/lowcplx
+ 30737 [ind=15] TTTTTTTTTTTTTTTTTTTTTTTTTTT                              polyA/T/lowcplx
+ 30511 [ind=15] GGCCGGGCGCGGTGGCTCACGCCTGTAATCCCAGCACTTTGGGAGGCCGAGGCGGG Alu
+ 29067 [ind=15] TTTTTTTTTTTTTTTTTTTTTTTTTTTT                             polyA/T/lowcplx
+ 28034 [ind=15] AAAAAAAAAAAAAAAAAAAAAAAAAAAA                             polyA/T/lowcplx
+ 27313 [ind=15] CTCGTGATCCGCCCGCCTCGGCCTCCCAAAGTGCTGGGATTACAGGCGTGAGCCAC 
+ 26767 [ind=15] TTTTTTTTTTTTTTTTTTTTTTTTTTTTT                            polyA/T/lowcplx
+ 26184 [ind=15] GGCCGGGCGCGGTGGCTCACGCCTGTAATCCCAGCACTTTGGGAGGCCGAGGCGGG Alu
+ 25285 [ind=15] AAAAAAAAAAAAAAAAAAAAAAAAAAAAA                            polyA/T/lowcplx
+ 23883 [ind=15] TTTTTTTTTTTTTTTTTTTTTTTTTTTTTT                           polyA/T/lowcplx
+ 22475 [ind=15] AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA                           polyA/T/lowcplx
+ 20761 [ind=15] TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT                          polyA/T/lowcplx
+ 20291 [ind=15] CCCGCCTCGGCCTCCCAAAGTGCTGGGATTACAGGCGTGAGCCACCGCGCCCGGCC 
+ 19612 [ind=15] GGCCGGGCGCGGTGGCTCACGCCTGTAATCCCAGCACTTTGGGAGGCCGAGGCGGG Alu
+ 19582 [ind=15] AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA                          polyA/T/lowcplx
+ 18137 [ind=15] TCGTGATCCGCCCGCCTCGGCCTCCCAAAGTGCTGGGATTACAGGCGTGAGCCACC 
+ 18069 [ind=15] TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT                         polyA/T/lowcplx
+ 17528 [ind=15] GGCCGGGCGCGGTGGCTCACGCCTGTAATCCCAGCACTTTGGGAGGCCGAGGCGGG Alu
+ 17247 [ind=15] AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA                         polyA/T/lowcplx
+ 17219 [ind=15] GGCCGGGCGCGGTGGCTCACGCCTGTAATCCCAGCACTTTGGGAGGCCGAGGCGGG Alu

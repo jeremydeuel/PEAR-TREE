@@ -1,0 +1,48 @@
+=== FULL SCAN: 560 files ===
+Loci: 2899436   polyA-rescued loci: 85826 (2.96%)
+Clipped sequences: 5798872
+poly-G tail (ends GGGGGG):      16140 (0.28%)
+poly-G run >=9 anywhere:        38051 (0.66%)
+adapter substring:             2322 (0.04%)
+low-complexity (<=2 bases):     692796 (11.95%)
+homopolymer-dominated (>=50%):  795284 (13.71%)
+poly-A/T dominated (>=12,>70%): 731209 (12.61%)
+short clip (<15bp):             223641 (3.86%)
+palindrome self-fold:           37626 (0.65%)
+clip GC mean: 0.404
+
+clips>=20bp: 4985511  unique: 2104918
+recurrent (>=5x): 190259 distinct seqs, 2625045 instances (52.65% of >=20bp clips, 45.27% of all clips)
+repeat-consensus among recurrent non-homopolymer clips: {'Alu': 183824, 'L1': 7362}
+
+--- top 30 recurrent clipped sequences (>=20bp) ---
+  6739  AAAAAAAAAAAAAAAAAAAAAAAA                                   polyA/T/lowcplx
+  6442  AAAAAAAAAAAAAAAAAAAAAA                                     polyA/T/lowcplx
+  6423  AAAAAAAAAAAAAAAAAAAAAAAAA                                  polyA/T/lowcplx
+  6332  AAAAAAAAAAAAAAAAAAAAAAA                                    polyA/T/lowcplx
+  6062  AAAAAAAAAAAAAAAAAAAAA                                      polyA/T/lowcplx
+  5867  AAAAAAAAAAAAAAAAAAAA                                       polyA/T/lowcplx
+  5786  TTTTTTTTTTTTTTTTTTTT                                       polyA/T/lowcplx
+  5666  TTTTTTTTTTTTTTTTTTTTTTTT                                   polyA/T/lowcplx
+  5633  TTTTTTTTTTTTTTTTTTTTTT                                     polyA/T/lowcplx
+  5543  TTTTTTTTTTTTTTTTTTTTTTT                                    polyA/T/lowcplx
+  5517  TTTTTTTTTTTTTTTTTTTTT                                      polyA/T/lowcplx
+  5406  TTTTTTTTTTTTTTTTTTTTTTTTTT                                 polyA/T/lowcplx
+  5356  TTTTTTTTTTTTTTTTTTTTTTTTTTT                                polyA/T/lowcplx
+  5332  TTTTTTTTTTTTTTTTTTTTTTTTT                                  polyA/T/lowcplx
+  5327  AAAAAAAAAAAAAAAAAAAAAAAAAA                                 polyA/T/lowcplx
+  4913  TTTTTTTTTTTTTTTTTTTTTTTTTTTT                               polyA/T/lowcplx
+  4677  GGCCGGGCGCGGTGGCTCACGCCTGTAATCCCAGCACTTTGGGAGGCCGAGGCGGGCG Alu
+  4502  AAAAAAAAAAAAAAAAAAAAAAAAAAA                                polyA/T/lowcplx
+  4453  TTTTTTTTTTTTTTTTTTTTTTTTTTTTT                              polyA/T/lowcplx
+  4215  CCTCGTGATCCGCCCGCCTCGGCCTCCCAAAGTGCTGGGATTACAGGCGTGAGCCACC 
+  4108  AAAAAAAAAAAAAAAAAAAAAAAAAAAA                               polyA/T/lowcplx
+  4055  GGCCGGGCGCGGTGGCTCACGCCTGTAATCCCAGCACTTTGGGAGGCCGAGGCGGGCG Alu
+  3895  TTTTTTTTTTTTTTTTTTTTTTTTTTTTTT                             polyA/T/lowcplx
+  3814  AAAAAAAAAAAAAAAAAAAAAAAAAAAAA                              polyA/T/lowcplx
+  3565  AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA                             polyA/T/lowcplx
+  3505  CTCGTGATCCGCCCGCCTCGGCCTCCCAAAGTGCTGGGATTACAGGCGTGAGCCACCG 
+  3361  TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT                            polyA/T/lowcplx
+  3304  AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA                            polyA/T/lowcplx
+  2998  AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA                           polyA/T/lowcplx
+  2965  GGCCGGGCGCGGTGGCTCACGCCTGTAATCCCAGCACTTTGGGAGGCCGAGGCGGG   Alu

@@ -1,0 +1,58 @@
+=== MOUSE FULL SCAN: 2074 files, 32 individuals ===
+Loci: 4279526   polyA-rescued loci: 790958 (18.48%)
+Clipped sequences: 8559052
+clip contains polyA/T run>=12:  814636 (9.52%)   <-- L1Md/SINE-like; ERV/IAP should LACK this
+poly-A/T dominated:             598092 (6.99%)
+low-complexity (<=2 bases):     755138 (8.82%)
+homopolymer-dominated (>=50%):  555502 (6.49%)
+poly-G run>=9:                  206180 (2.41%)
+short clip (<15bp):             352687 (4.12%)
+palindrome self-fold:           226008 (2.64%)
+adapter substring:              2436 (0.03%)
+
+clips>=20bp: 7260506  unique: 5291865
+recurrent (>=5x): 84297 distinct, 1735100 instances (23.90% of >=20bp)
+clips (>=2x within an indiv) present in >=50% of individuals: 601  (reference-repeat / recurrent artefact)
+clips present in exactly ONE individual (>=2x): 124401  (candidate germline / private)
+
+--- top 40 recurrent clipped sequences (>=20bp) with #individuals ---
+  1968 [ind=32] GTGAGCTCTCGCTGGCCCTTGAAAATCCGGGGGAGAGGGTGTAAATCTCGCGCCGG 
+  1921 [ind=32] GCGCCGGCCGAGGCGAGGCGCCGCGCGGAAAACCGCGGCCCGGGGGGCGGACCCGG 
+  1848 [ind=32] ACCCCCACGCCCGCCCGGGAGGCGGACGGGGGGAGAGGGAGAGCGCGGCGACGGGT 
+  1658 [ind=32] CACTGAGCCATCTCACCAGCCC                                   
+  1622 [ind=32] CCCGCGCTTCATTGAATTTCTTCACTTTGACATTCAGAGCACTGGGCAGAAATCAC 
+  1546 [ind=27] GGGGGGGGGGAAAAAAAAAGGG                                   polyG/lowcplx
+  1398 [ind=30] TTTTTTTTTTTTTTTTTTTTT                                    polyA/T/lowcplx/hasPolyA
+  1285 [ind=30] AGTGAGTGAGTGAGTGAGTGAGTGAGTGAGTGAGTG                     
+  1213 [ind=29] TTTTTTTTTTTTTTTTTTTT                                     polyA/T/lowcplx/hasPolyA
+  1086 [ind=30] TTTTTTTTTTTTTTTTTTTTTT                                   polyA/T/lowcplx/hasPolyA
+  1035 [ind=31] GTGACGCACGGTGGGGGTCCCCATCCTCGGCGCGTCC                    
+   999 [ind=31] TGATGAATGTCCTTTCTTCCTTGCCTCTCATTCCTATATTCTGAAGGTACCGATGT 
+   979 [ind=30] GTCGCCTGGAGTACTGGTCGACCTCCGAAGTTGGGGGGGAAAAAAAATGGAAGAGG 
+   957 [ind=25] TTAAAGATTTATTTATTATTATA                                  polyA/T
+   938 [ind=32] CTCCCTCGCAACGCCACCGGGGATACCACCTCTCTCCGTTCTCGCCCTCGCTCTCC 
+   917 [ind=29] AAGCAAAACCAAAAGAAAAAATATATGTCTGTTA                       polyA/T
+   887 [ind=27] TTTTTTTTTTTTTTTTTTTTTTT                                  polyA/T/lowcplx/hasPolyA
+   887 [ind=25] TTTTTTTTTTTTTTTTTTTTTTTT                                 polyA/T/lowcplx/hasPolyA
+   881 [ind=29] CAAGCTGTCATTCCAGGTAGAAGGATCTCAAAGGGTCCAGGAGGC            
+   855 [ind=29] GCGGGGAGGGGACCCGCGCCGGCACCCGCCGGGCTCCCCGGGAGCGGCCGCGACGC 
+   844 [ind=28] CGTTATGGGGTCATTTTTGGGCCACCTCCCCAGGTATGACTTCCAGGTATTCTCTG 
+   830 [ind=30] AGGTGCGCGTGTCACCGAGGCCGCCAGGATGGAGCCACTCTCACGATTCT       
+   809 [ind=31] AAAAAAAAAAAAAAAAAAAAAAA                                  polyA/T/lowcplx/hasPolyA
+   809 [ind=29] GATAAGGATTGGCTCTAAGGGCTGGGTCGGTCGGGCTGGGGCGCGAAGCGGGGCTG 
+   791 [ind=28] GCTTGCTTGCTTGCTTTTTTTTTTTTTTTT                           polyA/T/hasPolyA
+   778 [ind=27] AAAAAATATATGTCTGTTAAGCAAAACAAAGCTCACATTCTTTGTACAAA       polyA/T
+   778 [ind=31] CACTCTCACGATTCTCAACAGGGCCTGACCGCGTACAGAAATGTCCCCC        
+   766 [ind=28] TTTTTTTTTTTTTTTTTTTTTTTTTT                               polyA/T/lowcplx/hasPolyA
+   766 [ind=26] TTTCACCACAGTTGATCATGGGACACCACAGT                         
+   762 [ind=28] AAAAAAAAAAAAAAAAAAAAAAAA                                 polyA/T/lowcplx/hasPolyA
+   745 [ind=22] TTTTTTTTTTTTTTTTTTTTTTTTT                                polyA/T/lowcplx/hasPolyA
+   744 [ind=29] AGGCCCGGTGGGGAAGGTGGCTCGGGGGGGGCGGCGCGTCTCAGGGCGCGCCGAAC 
+   743 [ind=31] ACCACCGCAGGGCGACCGACCGGCCCTCGTCGACCGCCACCCCGACAACCCCGCGG 
+   735 [ind=30] ACGTCTTACACGCGTTCACGACCGGCCAGGAAGAACGCAGCAAACCGGAATCTTCT 
+   735 [ind=23] ACACAGAGAAATGATTTCTTCAATCAACTAAAACGACCTCCTAAGTTTGCCTTTTT 
+   727 [ind=27] TGAGTGAGTGAGTGAGTGAGTGAGTGAGTGAGT                        
+   725 [ind=29] AAAGGCGTGCGCCACCACGCCCGGC                                
+   709 [ind=29] AAAAAAAAAAAAAAAAAAAA                                     polyA/T/lowcplx/hasPolyA
+   704 [ind=30] AAAAAAGAAAAAAAAAAAAAAAAAA                                polyA/T/lowcplx/hasPolyA
+   700 [ind=28] GATCCACCCCTTCCGTCTGCATGCACGACACATTAACAGTATTTAAAGGTAAACGA 
