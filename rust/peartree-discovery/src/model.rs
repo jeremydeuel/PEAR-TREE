@@ -24,6 +24,10 @@ pub struct Breakpoint {
     /// (mate_is_read1, qname)
     pub mates: Vec<(bool, String)>,
     pub mate_seqs: Vec<QualitySeq>,
+    /// Feature B: mate landing sites (ref_id, 0-based pos), filled in find_mates when
+    /// `splice_hallmark`/`discordant_anchor` is on. Used by the splice/pseudogene
+    /// annotation; does not affect the main output.
+    pub mate_dests: Vec<(Option<usize>, i64)>,
     pub n_reads: usize,
 }
 
@@ -56,6 +60,7 @@ impl Breakpoint {
             mapq,
             mates: Vec::new(),
             mate_seqs: Vec::new(),
+            mate_dests: Vec::new(),
             n_reads: 1,
         }
     }

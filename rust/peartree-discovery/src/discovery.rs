@@ -629,6 +629,8 @@ impl Discovery {
     /// Validated path: a second linear pass matching mates by qname.
     fn find_mates_scan(&mut self) -> io::Result<()> {
         let (read1_mates, read2_mates, qmap) = self.get_mates();
+        // Feature B: only pay for mate-destination capture when a consumer is enabled.
+        let capture_dests = self.config.splice_hallmark || self.config.discordant_anchor;
         let min_mapq = self.config.min_mapq;
         let mut reader = open_bam(&self.filepath, self.bam_threads)?;
         let _header = reader.read_header()?;
@@ -655,12 +657,17 @@ impl Discovery {
                 BpRef::Left(i) | BpRef::Right(i) => {
                     let seq = clean_clipped_seq(&QualitySeq::new(read.seq(), read.qual()));
                     let seq = if read.is_forward() { seq } else { seq.revcomp() };
+                    // Feature B: capture the mate's landing site for the splice check.
+                    let dest = (read.reference_sequence_id, read.reference_start);
                     let bp = match bpref {
                         BpRef::Left(_) => &mut self.final_left_breakpoints[i],
                         BpRef::Right(_) => &mut self.final_right_breakpoints[i],
                         _ => unreachable!(),
                     };
                     bp.mate_seqs.push(seq);
+                    if capture_dests {
+                        bp.mate_dests.push(dest);
+                    }
                 }
             }
         }
@@ -681,6 +688,8 @@ impl Discovery {
     /// enabling. Default stays the linear scan.
     fn find_mates_fetch(&mut self) -> io::Result<()> {
         let (read1_mates, read2_mates, qmap) = self.get_mates();
+        // Feature B: only pay for mate-destination capture when a consumer is enabled.
+        let capture_dests = self.config.splice_hallmark || self.config.discordant_anchor;
         let min_mapq = self.config.min_mapq;
         let mut reader = bam::io::indexed_reader::Builder::default().build_from_path(&self.filepath)?;
         let header = reader.read_header()?;
@@ -781,12 +790,17 @@ impl Discovery {
                 BpRef::Left(i) | BpRef::Right(i) => {
                     let seq = clean_clipped_seq(&QualitySeq::new(read.seq(), read.qual()));
                     let seq = if read.is_forward() { seq } else { seq.revcomp() };
+                    // Feature B: capture the mate's landing site for the splice check.
+                    let dest = (read.reference_sequence_id, read.reference_start);
                     let bp = match bpref {
                         BpRef::Left(_) => &mut self.final_left_breakpoints[i],
                         BpRef::Right(_) => &mut self.final_right_breakpoints[i],
                         _ => unreachable!(),
                     };
                     bp.mate_seqs.push(seq);
+                    if capture_dests {
+                        bp.mate_dests.push(dest);
+                    }
                 }
             }
         }
