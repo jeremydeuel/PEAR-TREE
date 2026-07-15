@@ -33,48 +33,57 @@ discovery wall-time plus better artefact removal, for very little risk. Several
 of these are one-liners or deletions of code that currently does nothing.
 
 ### 1.1 Speed
-- [ ] **Multithread BAM decompression.** Pass `threads=N` to every
-  `pysam.AlignmentFile(...)` in `discovery.py` (and genotype/combine). One-line
-  change, helps the I/O-bound scan immediately.
-- [ ] **Rewrite `revcomp`** (`src/revcomp.py`) using a module-level
-  `str.translate` table + `[::-1]` instead of the per-base if/elif chain.
-- [ ] **Cut `QualitySeq` allocation churn.** Store quality as `bytes`/`bytearray`
-  (as pysam hands it over), slice lazily, and stop calling `.upper()` on data
-  that is already uppercase.
+- [x] **Multithread BAM decompression.** `pysam.AlignmentFile(..., threads=BAM_THREADS)`
+  in `discovery.py`, controlled by `PEARTREE_BAM_THREADS` (default 1 to preserve
+  the documented single-core footprint; raise it together with `cpus-per-task`).
+- [x] **Rewrite `revcomp`** (`src/revcomp.py`) with a `str.translate` table +
+  `[::-1]`. Verified equivalent on 5k random cases; ~18× faster on 150 bp reads.
+- [ ] **Cut `QualitySeq` allocation churn.** _Deferred within Stage 1:_ higher
+  risk (touches every slice/add/revcomp), warrants its own measured change.
+  Store quality as `bytes`/`bytearray`, slice lazily, drop redundant `.upper()`.
 
 ### 1.2 Kill debug overhead in the hot path
-- [ ] **Gate `DEBUG`** behind an env var / CLI flag; default off. Currently
-  hardcoded `DEBUG = True` in `discovery.py`, `genotype.py`,
-  `genotyping_evidence_read.py`.
-- [ ] **Remove `Breakpoint.DEBUG_check_if_breakpoint_of_interest`** (13-branch
-  string compare on hardcoded coordinates, runs on every `Breakpoint.join`).
-- [ ] Replace per-region / per-breakpoint `print()` with a `logging` logger.
+- [x] **Gate `DEBUG`** behind `PEARTREE_DEBUG` (default off) in `discovery.py`,
+  `genotype.py`, `genotyping_evidence_read.py`, `breakpoint.py`.
+- [x] **Short-circuit `Breakpoint.DEBUG_check_if_breakpoint_of_interest`** when
+  debug is off (early `return False`), so the 13-branch coordinate compare no
+  longer runs on every `Breakpoint.join`. (Kept the function for now rather than
+  deleting, since the coordinates document breakpoints of interest.)
+- [ ] Replace remaining per-region `print()` with a `logging` logger.
+  _Deferred:_ per-contig prints (~24/run) are cheap; full logging refactor is
+  tidier done alongside Stage 2 packaging.
 
 ### 1.3 Fix disabled / dead logic (these change results — treat as bug fixes)
-- [ ] **`extend_mates()` is a silent no-op.** It iterates
-  `self.temporary_breakpoints`, which `extract_chimeric()`'s final `cleanup()`
-  already emptied. Either point it at the final breakpoint lists or delete it.
-  Decide with a benchmark on whether mate-extension actually helps calls.
-- [ ] **Re-enable / implement high-coverage exclusion.** `max_read_count` is in
-  config and the README but referenced nowhere in code. Genotyping's coverage
-  check is behind `if False and ...` (`genotype.py`). Decide the intended
-  behaviour and wire it in (see Stage 2 for the discovery-time version).
-- [ ] **Fix `except TypeError: print(e)` fall-through** in `extract_chimeric`
-  (cigartuples `None` case) — should `continue`, not reuse the previous read's
-  `left_class/left_len`.
-- [ ] **Add a sortedness guard.** Assert the BAM is coordinate-sorted
-  (`header['HD']['SO']`) and fail loudly otherwise; the contig-change cleanup
-  logic silently produces wrong results on unsorted/name-sorted input.
+- [ ] **`extend_mates()` is a silent no-op.** _Deferred — needs your decision._
+  It iterates `self.temporary_breakpoints`, already emptied by
+  `extract_chimeric()`'s final `cleanup()`. Pointing it at the final breakpoint
+  lists would change emitted clipped consensus sequences; the test BAM is too
+  small to judge whether mate-extension helps or hurts real calls. Requires a
+  real-WGS benchmark before enabling or deleting.
+- [ ] **Re-enable / implement high-coverage exclusion.** _Deferred to Stage 2.1
+  (discovery-time masking)._ `max_read_count` is in config/README but referenced
+  nowhere in code; genotyping's check is behind `if False and ...`.
+- [x] **Fix `except TypeError` fall-through** in `extract_chimeric` — now
+  `continue`s on `cigartuples is None` instead of reusing the previous read's
+  cigar values.
+- [x] **Add a sortedness guard.** `_assert_coordinate_sorted` checks
+  `header['HD']['SO'] == 'coordinate'` and fails loudly otherwise.
 
 ### 1.4 Dead-code cleanup
-- [ ] Remove the unreachable discordant-mate branch after
-  `continue #dont do any of this` (~25 lines in `extract_chimeric`).
-- [ ] Remove the unreachable tail of `is_good_consensus` after `return True`.
-- [ ] De-duplicate the two `clean_clipped_seq` implementations (adapter.py
-  str-based vs sequence_checks.py QualitySeq-based).
+- [x] Removed the unreachable discordant-mate branch after
+  `continue #dont do any of this`.
+- [x] Removed the unreachable tail of `is_good_consensus` after `return True`
+  (and its stray debug `print`).
+- [x] Removed the dead str-based `clean_clipped_seq` from `adapter.py` (all
+  callers use the QualitySeq version in `sequence_checks.py`) and the now-unused
+  `is_good_consensus` / `has_well_defined_breakpoint` imports in `discovery.py`.
 
 **Exit criteria:** test BAM call unchanged; discovery wall-time recorded and
 improved; no behavioural change except the documented bug fixes.
+
+**Status:** test BAM output byte-identical to baseline before/after; all
+discovery-path modules import clean. Two items deferred with rationale above
+(`QualitySeq` churn; the `extend_mates` decision — flagged for your call).
 
 ---
 

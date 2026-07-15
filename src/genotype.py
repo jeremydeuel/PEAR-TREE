@@ -23,8 +23,9 @@ from genotyping_insertion import Insertion, GT_ARTEFACT
 from multiprocessing import Process, Queue, Pipe
 from queue import Empty
 from config import CONFIG
+import os
 
-DEBUG = True
+DEBUG = os.environ.get("PEARTREE_DEBUG", "") not in ("", "0", "false", "False")
 
 
 TERMINATION_SIGNAL = 1

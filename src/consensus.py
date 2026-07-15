@@ -82,15 +82,5 @@ def is_good_consensus(consensus_seq: List[QualitySeq]) -> bool:
                     first_n = i
                 break
     if first_n < CONFIG['discovery']['min_good_bases']:
-        print(first_n, consensus_seq.seq(), consensus_seq.qual())
-    if first_n < CONFIG['discovery']['min_good_bases']: return False
+        return False
     return True
-    for i in range(len(consensus_n)):
-        if consensus_n[i] >= CONFIG['discovery']['min_evidence_reads_per_breakpoint'] and \
-                consensus_score[i] >= CONFIG['discovery']['min_consensus_score_for_good_base']:
-            pass
-        else:
-            break
-        if i >= CONFIG['discovery']['min_good_bases']:
-            return True
-    return False

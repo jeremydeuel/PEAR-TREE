@@ -1,12 +1,17 @@
 
 CLIP_RIGHT = 1
 CLIP_LEFT = 2
+import os
 from quality_seq import QualitySeq
 from typing import Iterable, Tuple, List
 from sequence_checks import clean_clipped_seq
 from collections import Counter
 from config import CONFIG
 from consensus import find_consensus
+
+# Off by default. When off, DEBUG_check_if_breakpoint_of_interest short-circuits
+# instead of running a 13-branch coordinate compare on every Breakpoint.join.
+DEBUG = os.environ.get("PEARTREE_DEBUG", "") not in ("", "0", "false", "False")
 class Breakpoint:
     def __init__(self, side: int, reference_name: str, breakpoint: int, query_name: str,
                  clipped: QualitySeq, unclipped: QualitySeq, is_read1: bool, is_forward: bool, exclude: bool):
@@ -55,6 +60,7 @@ class Breakpoint:
     }
     @staticmethod
     def DEBUG_check_if_breakpoint_of_interest(breakpoint: 'Breakpoint') -> bool:
+        if not DEBUG: return False
         if breakpoint.reference_name == '14' and abs(breakpoint.breakpoint-35038214)<40: return True
         if breakpoint.reference_name == '6' and abs(breakpoint.breakpoint-143309573)<40: return True
         if breakpoint.reference_name == '16' and abs(breakpoint.breakpoint-51440715)<40: return True

@@ -64,14 +64,25 @@ import pysam
 from revcomp import revcomp
 import gzip
 from adapter import is_adapter
-from consensus import find_consensus, is_good_consensus
-from sequence_checks import has_well_defined_breakpoint, clean_clipped_seq
+from consensus import find_consensus
+from sequence_checks import clean_clipped_seq
 from config import CONFIG
 from quality_seq import QualitySeq
 from breakpoint import Breakpoint, CLIP_LEFT, CLIP_RIGHT
 from typing import Tuple, List, Dict
 from polyABreakpoint import PolyABreakpoint
-DEBUG = True #print debug messages
+import os
+# Enable verbose per-read/per-breakpoint debug output by setting PEARTREE_DEBUG=1.
+# Off by default: these prints are a measurable cost on a WGS-scale run.
+DEBUG = os.environ.get("PEARTREE_DEBUG", "") not in ("", "0", "false", "False")
+
+# Number of htslib threads for BGZF decompression of the input BAM. Defaults to
+# 1 to preserve the single-core resource footprint documented for discovery;
+# set PEARTREE_BAM_THREADS (and matching cpus-per-task) to speed up the scan.
+try:
+    BAM_THREADS = max(1, int(os.environ.get("PEARTREE_BAM_THREADS", "1")))
+except ValueError:
+    BAM_THREADS = 1
 
 class Discovery:
     def __init__(self):
@@ -87,6 +98,21 @@ class Discovery:
         self.reference_name : str | None = None
         #alignment file
         self.filepath : str | None = None
+
+    @staticmethod
+    def _assert_coordinate_sorted(f: 'pysam.AlignmentFile') -> None:
+        """
+        The contig-change cleanup logic assumes reads arrive grouped by contig in
+        coordinate order. An unsorted or name-sorted BAM silently produces wrong
+        results, so fail loudly instead.
+        """
+        so = f.header.get('HD', {}).get('SO') if f.header is not None else None
+        if so != 'coordinate':
+            raise ValueError(
+                f"input BAM must be coordinate-sorted (SO=coordinate), found SO={so!r}. "
+                f"Run `samtools sort` and index the file first."
+            )
+
     def cleanup(self) -> None:
         """
         Perform cleanup of the current reference name
@@ -160,7 +186,8 @@ class Discovery:
 
     def extract_chimeric(self) -> None:  # this function has side effects!
         assert self.filepath is not None
-        with pysam.AlignmentFile(self.filepath) as f:
+        with pysam.AlignmentFile(self.filepath, threads=BAM_THREADS) as f:
+            self._assert_coordinate_sorted(f)
             self.reference_name = None
             for read in f:
                 # determine if this read is a clipped read
@@ -183,8 +210,10 @@ class Discovery:
                 try:
                     left_class, left_len = read.cigartuples[0]
                     right_class, right_len = read.cigartuples[-1]
-                except TypeError as e:
-                    print(e)
+                except TypeError:
+                    # cigartuples is None (no alignment info); skip rather than
+                    # fall through and reuse the previous read's cigar values.
+                    continue
                 clip = None
                 # find cruciform dna artefacts here
 
@@ -237,32 +266,10 @@ class Discovery:
                                                 QualitySeq(read.query_sequence[-right_len:],read.query_qualities[-right_len:]),
                                            QualitySeq(read.query_sequence[:-right_len],read.query_qualities[:-right_len]), \
                                                 read.is_read1, read.is_forward, exclude_flag)
-                else: #check if there is a discordant mate
-                    continue #dont do any of this
-                    exclude_flag = False #no clipped bases, thus also not showing evidence of a cruciform dna piece
-                    if not read.is_proper_pair:
-                        if read.is_forward:
-                            if read.is_read1:
-                                self.add_breakpoint(CLIP_RIGHT, read.reference_end, read.query_name,
-                                                    QualitySeq('',[]),
-                                                    QualitySeq(read.seq, read.query_qualities),
-                                                    read.is_read1, read.is_forward, exclude_flag, False)
-                            else:
-                                self.add_breakpoint(CLIP_LEFT, read.reference_start, read.query_name,
-                                                    QualitySeq(read.seq, read.query_qualities),
-                                                    QualitySeq('', []),
-                                                    read.is_read1, read.is_forward, exclude_flag, False)
-                        else:
-                            if read.is_read1:
-                                self.add_breakpoint(CLIP_LEFT, read.reference_end, read.query_name,
-                                                    QualitySeq(read.seq, read.query_qualities),
-                                                    QualitySeq('', []),
-                                                    read.is_read1, read.is_forward, exclude_flag, False)
-                            else:
-                                self.add_breakpoint(CLIP_RIGHT, read.reference_start, read.query_name,
-                                                    QualitySeq('', []),
-                                                    QualitySeq(read.seq, read.query_qualities),
-                                                    read.is_read1, read.is_forward, exclude_flag, False)
+                # NOTE: a discordant-mate branch used to live here but was fully
+                # unreachable (guarded by `continue`); removed in PEAR-TREE2.
+                # Discordant-pair breakpoint discovery is deferred to a future
+                # stage (see PEAR-TREE2_PLAN.md).
             # final cleanup
             self.cleanup()
 
@@ -308,7 +315,7 @@ class Discovery:
 
         read1_mates, read2_mates, qmap = self.get_mates()
 
-        with pysam.AlignmentFile(self.filepath) as f:
+        with pysam.AlignmentFile(self.filepath, threads=BAM_THREADS) as f:
             for read in f:
                 if read.is_secondary: continue
                 if read.is_qcfail: continue

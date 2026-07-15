@@ -17,6 +17,7 @@
 
 
 import pysam
+import os
 from typing import Tuple
 from genotype_qscore import qscore, ARTEFACT, ALT_MATCH, REF_MATCH, RIGHT_TO_LEFT, LEFT_TO_RIGHT
 from quality_seq import QualitySeq
@@ -27,7 +28,7 @@ MATCHES_NEITHER = -1
 NO_COVERAGE_OF_BREAKPOINT = 0
 HIGH_COVERAGE = -2
 
-DEBUG = True
+DEBUG = os.environ.get("PEARTREE_DEBUG", "") not in ("", "0", "false", "False")
 
 class EvidenceRead:
     def __init__(self, read: pysam.AlignedRead):
