@@ -1,30 +1,20 @@
-//! A decoded BAM record exposing exactly the fields the discovery logic uses.
+//! A decoded alignment record exposing exactly the fields the discovery logic uses.
 //!
-//! Cheap fields (flags, mapq, reference id, cigar-derived positions/clips) are
-//! decoded eagerly in `from_record`. The heavy fields — sequence, qualities, name,
-//! SA/XA tags, and the contig name — are decoded on demand via accessor methods
-//! (SPD-1 lazy decode), so the ~majority of reads that never become a clip
-//! candidate never pay for those allocations. Flag semantics mirror pysam.
+//! Backed by `&dyn sam::alignment::Record`, so the same view works over a BAM record
+//! and a CRAM record (both implement the trait). Cheap fields (flags, mapq, reference
+//! id, cigar-derived positions/clips) are decoded eagerly in `from_record`; the heavy
+//! fields — sequence, qualities, name, SA/XA tags, contig name — are decoded on demand
+//! via accessor methods (SPD-1 lazy decode). Flag semantics mirror pysam.
 
-use noodles_bam::Record;
 use noodles_sam::alignment::record::cigar::op::Kind;
-use noodles_sam::alignment::record::data::field::Tag;
+use noodles_sam::alignment::record::data::field::{Tag, Value};
+use noodles_sam::alignment::record::Flags;
+use noodles_sam::alignment::Record as AlignmentRecord;
 use noodles_sam::Header;
 use std::io;
 
-const FLAG_PROPER_PAIR: u16 = 0x2;
-const FLAG_UNMAPPED: u16 = 0x4;
-const FLAG_MATE_UNMAPPED: u16 = 0x8;
-const FLAG_REVERSE: u16 = 0x10;
-const FLAG_READ1: u16 = 0x40;
-const FLAG_READ2: u16 = 0x80;
-const FLAG_SECONDARY: u16 = 0x100;
-const FLAG_QCFAIL: u16 = 0x200;
-const FLAG_DUPLICATE: u16 = 0x400;
-const FLAG_SUPPLEMENTARY: u16 = 0x800;
-
 pub struct BamRead<'a> {
-    record: &'a Record,
+    record: &'a dyn AlignmentRecord,
     header: &'a Header,
     /// index into the header's reference sequences (SPD-5a: compare by id, resolve
     /// the contig name string only when it changes)
@@ -59,15 +49,15 @@ impl<'a> BamRead<'a> {
     }
 
     /// Decode only the cheap fields. Sequence/qualities/name/tags/contig-name are
-    /// left to the accessor methods below.
-    pub fn from_record(record: &'a Record, header: &'a Header) -> io::Result<BamRead<'a>> {
-        let flags = u16::from(record.flags());
-        let mapped = flags & FLAG_UNMAPPED == 0;
+    /// left to the accessor methods below. Works for any `sam::alignment::Record`
+    /// (BAM or CRAM).
+    pub fn from_record(record: &'a dyn AlignmentRecord, header: &'a Header) -> io::Result<BamRead<'a>> {
+        let flags: Flags = record.flags()?;
+        let mapped = !flags.is_unmapped();
 
-        let reference_sequence_id = record.reference_sequence_id().transpose()?;
+        let reference_sequence_id = record.reference_sequence_id(header).transpose()?;
 
-        let start1 = record.alignment_start().transpose()?.map(usize::from);
-        let reference_start = start1.map(|s| (s - 1) as i64).unwrap_or(-1);
+        let reference_start = record.alignment_start().transpose()?.map(|p| usize::from(p) as i64 - 1).unwrap_or(-1);
 
         // cigar: first/last op + reference span
         let mut ref_len: i64 = 0;
@@ -93,11 +83,10 @@ impl<'a> BamRead<'a> {
         let (left_is_soft, left_len) = first.map(|(k, l)| (k == Kind::SoftClip, l)).unwrap_or((false, 0));
         let (right_is_soft, right_len) = last.map(|(k, l)| (k == Kind::SoftClip, l)).unwrap_or((false, 0));
 
-        let mapq = record.mapping_quality().map(|m| m.get()).unwrap_or(255);
+        let mapq = record.mapping_quality().transpose()?.map(|m| m.get()).unwrap_or(255);
 
-        let mate_ref_id = record.mate_reference_sequence_id().transpose()?;
-        let mate_start1 = record.mate_alignment_start().transpose()?.map(usize::from);
-        let mate_pos = mate_start1.map(|s| (s - 1) as i64).unwrap_or(-1);
+        let mate_ref_id = record.mate_reference_sequence_id(header).transpose()?;
+        let mate_pos = record.mate_alignment_start().transpose()?.map(|p| usize::from(p) as i64 - 1).unwrap_or(-1);
 
         Ok(BamRead {
             record,
@@ -109,15 +98,15 @@ impl<'a> BamRead<'a> {
             mate_ref_id,
             mate_pos,
             mapq,
-            is_read1: flags & FLAG_READ1 != 0,
-            is_read2: flags & FLAG_READ2 != 0,
-            is_reverse: flags & FLAG_REVERSE != 0,
-            is_secondary: flags & FLAG_SECONDARY != 0,
-            is_qcfail: flags & FLAG_QCFAIL != 0,
-            is_duplicate: flags & FLAG_DUPLICATE != 0,
-            is_supplementary: flags & FLAG_SUPPLEMENTARY != 0,
-            is_proper_pair: flags & FLAG_PROPER_PAIR != 0,
-            mate_is_mapped: flags & FLAG_MATE_UNMAPPED == 0,
+            is_read1: flags.is_first_segment(),
+            is_read2: flags.is_last_segment(),
+            is_reverse: flags.is_reverse_complemented(),
+            is_secondary: flags.is_secondary(),
+            is_qcfail: flags.is_qc_fail(),
+            is_duplicate: flags.is_duplicate(),
+            is_supplementary: flags.is_supplementary(),
+            is_proper_pair: flags.is_properly_segmented(),
+            mate_is_mapped: !flags.is_mate_unmapped(),
             has_cigar,
             left_is_soft,
             left_len,
@@ -133,7 +122,7 @@ impl<'a> BamRead<'a> {
     }
 
     pub fn qual(&self) -> Vec<u8> {
-        self.record.quality_scores().as_ref().to_vec()
+        self.record.quality_scores().iter().collect::<io::Result<Vec<u8>>>().unwrap_or_default()
     }
 
     pub fn query_name(&self) -> String {
@@ -155,23 +144,22 @@ impl<'a> BamRead<'a> {
     }
 
     pub fn sa(&self) -> Option<String> {
-        self.tag_string(&Tag::OTHER_ALIGNMENTS)
+        self.tag_string(Tag::OTHER_ALIGNMENTS)
     }
 
     pub fn xa(&self) -> Option<String> {
-        self.tag_string(&Tag::from([b'X', b'A']))
+        self.tag_string(Tag::from([b'X', b'A']))
     }
 
-    fn tag_string(&self, tag: &Tag) -> Option<String> {
-        match self.record.data().get(tag) {
+    fn tag_string(&self, tag: Tag) -> Option<String> {
+        match self.record.data().get(&tag) {
             Some(Ok(value)) => Some(value_to_string(&value)),
             _ => None,
         }
     }
 }
 
-fn value_to_string(value: &noodles_sam::alignment::record::data::field::Value) -> String {
-    use noodles_sam::alignment::record::data::field::Value;
+fn value_to_string(value: &Value) -> String {
     match value {
         Value::String(s) => String::from_utf8_lossy(s.as_ref()).into_owned(),
         other => format!("{:?}", other),

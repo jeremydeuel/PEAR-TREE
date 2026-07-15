@@ -24,7 +24,7 @@ use config::DiscoveryConfig;
 use discovery::Discovery;
 
 fn usage() -> ! {
-    eprintln!("usage: peartree-discovery --step discover --bam <bam> --out <out.txt.gz> [--threads N] [--config <file>]");
+    eprintln!("usage: peartree-discovery --step discover --bam <bam|cram> --out <out.txt.gz> [--threads N] [--config <file>] [--reference <ref.fa> (required for CRAM)]");
     std::process::exit(1);
 }
 
@@ -34,6 +34,7 @@ fn main() -> io::Result<()> {
     let mut out: Option<String> = None;
     let mut step: Option<String> = None;
     let mut config_path: Option<String> = None;
+    let mut reference: Option<String> = None;
     let mut threads: usize = std::env::var("PEARTREE_BAM_THREADS")
         .ok()
         .and_then(|s| s.parse().ok())
@@ -47,6 +48,7 @@ fn main() -> io::Result<()> {
             "--out" | "-o" => { out = args.get(i + 1).cloned(); i += 2; }
             "--threads" | "-@" => { threads = args.get(i + 1).and_then(|s| s.parse().ok()).unwrap_or(threads); i += 2; }
             "--config" | "-c" => { config_path = args.get(i + 1).cloned(); i += 2; }
+            "--reference" | "-T" => { reference = args.get(i + 1).cloned(); i += 2; }
             _ => { i += 1; }
         }
     }
@@ -174,9 +176,19 @@ fn main() -> io::Result<()> {
         _ => None,
     };
 
+    // CRAM input requires a reference FASTA (to decode read sequences).
+    if bam.ends_with(".cram") && reference.is_none() {
+        eprintln!("CRAM input requires a reference FASTA: pass --reference <ref.fa> (names matching the CRAM @SQ)");
+        std::process::exit(1);
+    }
+    if bam.ends_with(".cram") && (config.mate_fetch || config.contig_threads > 1) {
+        eprintln!("note: CRAM input uses the single-threaded scan path (mate_fetch / contig_threads are BAM-only)");
+    }
+
     let mut d = Discovery::new(bam, threads, config, exclude, rm_mask);
     d.set_discordant_rte(discordant_rte);
     d.set_exon_model(exon_model);
+    d.set_reference_path(reference);
     d.discovery()?;
 
     let file = File::create(&out)?;

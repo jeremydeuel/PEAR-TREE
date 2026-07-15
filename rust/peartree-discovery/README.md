@@ -29,6 +29,21 @@ The output file is identical in content to the Python discovery output. The
 input **must be coordinate-sorted** (the Python step assumes this too; the Rust
 port reads the same order).
 
+### CRAM input
+
+CRAM is read natively (via noodles-cram) — the production format. CRAM stores
+read bases as differences against the reference, so a reference FASTA is required
+and its `@SQ` names must match the CRAM header (use `--reference`):
+
+```bash
+peartree-discovery --step discover --bam <sorted.cram> --reference <ref.fa> --out <out.txt.gz>
+```
+
+`--bam` accepts either `.bam` or `.cram` (format is chosen by extension). CRAM
+uses the single-threaded scan path; the `mate_fetch` (SPD-4) and `contig_threads`
+(SPD-3) indexed-fetch optimisations are BAM-only and are ignored for CRAM. Reading
+the same alignments from BAM and from CRAM yields byte-identical discovery output.
+
 ## Equivalence testing
 
 The Python implementation is the correctness oracle. `tests/differential_test.sh`

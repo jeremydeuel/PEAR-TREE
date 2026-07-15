@@ -7,6 +7,9 @@ use std::num::NonZeroUsize;
 use noodles_bam as bam;
 use noodles_bgzf as bgzf;
 use noodles_core::{Position, Region};
+use noodles_cram as cram;
+use noodles_fasta as fasta;
+use noodles_sam::alignment::Record as AlignmentRecord;
 use noodles_sam::Header;
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -79,6 +82,55 @@ fn open_bam(path: &str, bam_threads: usize) -> io::Result<bam::io::Reader<Box<dy
         Box::new(bgzf::io::Reader::new(file))
     };
     Ok(bam::io::Reader::from(inner))
+}
+
+/// True when the input is a CRAM file (by extension).
+fn is_cram(path: &str) -> bool {
+    path.ends_with(".cram")
+}
+
+/// SPEC-3/4 coverage pre-pass per-record accumulation, shared by the BAM and CRAM
+/// scan loops. Bins read starts per contig; flushes the previous contig's bins on a
+/// contig change (input is coordinate-sorted).
+fn cov_accumulate(
+    cov: &mut Coverage,
+    cur_id: &mut Option<usize>,
+    cur_name: &mut String,
+    bins: &mut Vec<u32>,
+    read: &BamRead,
+    bin_size: i64,
+) {
+    let Some(id) = read.reference_sequence_id else { return };
+    if read.reference_start < 0 {
+        return;
+    }
+    if *cur_id != Some(id) {
+        if cur_id.is_some() {
+            cov.set_contig(std::mem::take(cur_name), std::mem::take(bins));
+        }
+        *cur_id = Some(id);
+        *cur_name = read.reference_name().unwrap_or_default();
+        *bins = Vec::new();
+    }
+    let b = (read.reference_start / bin_size) as usize;
+    if bins.len() <= b {
+        bins.resize(b + 1, 0);
+    }
+    bins[b] += 1;
+}
+
+/// Open a CRAM reader backed by a reference FASTA repository (built from the indexed
+/// reference). CRAM stores read bases as differences against the reference, so the
+/// FASTA — with names matching the CRAM header @SQ — is required to decode sequences.
+fn open_cram(path: &str, reference: Option<&str>) -> io::Result<cram::io::Reader<File>> {
+    let ref_path = reference.ok_or_else(|| {
+        io::Error::new(io::ErrorKind::InvalidInput, "CRAM input requires a reference FASTA (--reference <ref.fa>)")
+    })?;
+    let fa = fasta::io::indexed_reader::Builder::default().build_from_path(ref_path)?;
+    let repository = fasta::Repository::new(fasta::repository::adapters::IndexedReader::new(fa));
+    cram::io::reader::Builder::default()
+        .set_reference_sequence_repository(repository)
+        .build_from_path(path)
 }
 
 /// True if an alternative-alignment CIGAR (XA or SA tag) covers essentially the
@@ -159,6 +211,8 @@ pub struct Discovery {
     /// D5: exon model for the splice / processed-pseudogene annotation (from
     /// `exon_annotation`). Parent only; consumed by `splice_annotate`.
     exon_model: Option<GeneModel>,
+    /// Reference FASTA path for CRAM decoding (`--reference`); None for BAM input.
+    reference_path: Option<String>,
     stats: Stats,
     bam_threads: usize, // BGZF decode workers (SPD-2); 1 = single-threaded
 }
@@ -189,6 +243,7 @@ impl Discovery {
             discordant_clusters: Vec::new(),
             discordant_rte: None,
             exon_model: None,
+            reference_path: None,
             stats: Stats::default(),
             bam_threads: bam_threads.max(1),
         }
@@ -204,31 +259,26 @@ impl Discovery {
     /// is resolved once per contig (coordinate-sorted), so no per-read allocation.
     fn estimate_coverage(&mut self) -> io::Result<()> {
         let bin_size = self.config.coverage_bin_size.max(1);
-        let mut reader = open_bam(&self.filepath, self.bam_threads)?;
-        let header = reader.read_header()?;
-        let mut record = bam::Record::default();
         let mut cur_id: Option<usize> = None;
         let mut cur_name = String::new();
         let mut bins: Vec<u32> = Vec::new();
-        while reader.read_record(&mut record)? != 0 {
-            let read = BamRead::from_record(&record, &header)?;
-            let Some(id) = read.reference_sequence_id else { continue };
-            if read.reference_start < 0 {
-                continue;
+        if is_cram(&self.filepath) {
+            let ref_path = self.reference_path.clone();
+            let mut reader = open_cram(&self.filepath, ref_path.as_deref())?;
+            let header = reader.read_header()?;
+            for result in reader.records(&header) {
+                let rec = result?;
+                let read = BamRead::from_record(&rec, &header)?;
+                cov_accumulate(&mut self.coverage, &mut cur_id, &mut cur_name, &mut bins, &read, bin_size);
             }
-            if cur_id != Some(id) {
-                if cur_id.is_some() {
-                    self.coverage.set_contig(std::mem::take(&mut cur_name), std::mem::take(&mut bins));
-                }
-                cur_id = Some(id);
-                cur_name = read.reference_name().unwrap_or_default();
-                bins = Vec::new();
+        } else {
+            let mut reader = open_bam(&self.filepath, self.bam_threads)?;
+            let header = reader.read_header()?;
+            let mut record = bam::Record::default();
+            while reader.read_record(&mut record)? != 0 {
+                let read = BamRead::from_record(&record, &header)?;
+                cov_accumulate(&mut self.coverage, &mut cur_id, &mut cur_name, &mut bins, &read, bin_size);
             }
-            let b = (read.reference_start / bin_size) as usize;
-            if bins.len() <= b {
-                bins.resize(b + 1, 0);
-            }
-            bins[b] += 1;
         }
         if cur_id.is_some() {
             self.coverage.set_contig(cur_name, bins);
@@ -267,6 +317,11 @@ impl Discovery {
     /// D5: install the exon model used for the splice / pseudogene annotation.
     pub fn set_exon_model(&mut self, m: Option<GeneModel>) {
         self.exon_model = m;
+    }
+
+    /// Install the reference FASTA path used to decode CRAM input.
+    pub fn set_reference_path(&mut self, p: Option<String>) {
+        self.reference_path = p;
     }
 
     /// True if a breakpoint at (rn, pos) would survive the output-time masks
@@ -492,6 +547,15 @@ impl Discovery {
                 let rec = rec?;
                 self.handle_record(&rec, &header, min_mapq, reject_fullmap, &mut current_ref_id)?;
             }
+        } else if is_cram(&self.filepath) {
+            // native CRAM full scan (reference required to decode read sequences).
+            let ref_path = self.reference_path.clone();
+            let mut reader = open_cram(&self.filepath, ref_path.as_deref())?;
+            let header = reader.read_header()?;
+            for result in reader.records(&header) {
+                let rec = result?;
+                self.handle_record(&rec, &header, min_mapq, reject_fullmap, &mut current_ref_id)?;
+            }
         } else {
             let mut reader = open_bam(&self.filepath, self.bam_threads)?;
             let header = reader.read_header()?;
@@ -508,7 +572,7 @@ impl Discovery {
     /// A read-level `continue` in the original single loop is a `return Ok(())` here.
     fn handle_record(
         &mut self,
-        record: &bam::Record,
+        record: &dyn AlignmentRecord,
         header: &Header,
         min_mapq: u8,
         reject_fullmap: bool,
@@ -725,7 +789,8 @@ impl Discovery {
     }
 
     pub fn find_mates(&mut self) -> io::Result<()> {
-        if self.config.mate_fetch {
+        // SPD-4 indexed fetch is BAM-only (indexed bam reader); CRAM uses the scan.
+        if self.config.mate_fetch && !is_cram(&self.filepath) {
             self.find_mates_fetch()
         } else {
             self.find_mates_scan()
@@ -738,46 +803,73 @@ impl Discovery {
         // Feature B: only pay for mate-destination capture when a consumer is enabled.
         let capture_dests = self.config.splice_hallmark || self.config.discordant_anchor;
         let min_mapq = self.config.min_mapq;
-        let mut reader = open_bam(&self.filepath, self.bam_threads)?;
-        let _header = reader.read_header()?;
-        let mut record = bam::Record::default();
-        while reader.read_record(&mut record)? != 0 {
-            let read = BamRead::from_record(&record, &_header)?;
-            if read.is_secondary || read.is_qcfail || read.is_duplicate {
-                continue;
+        if is_cram(&self.filepath) {
+            let ref_path = self.reference_path.clone();
+            let mut reader = open_cram(&self.filepath, ref_path.as_deref())?;
+            let header = reader.read_header()?;
+            for result in reader.records(&header) {
+                let rec = result?;
+                let read = BamRead::from_record(&rec, &header)?;
+                self.apply_mate_record(&read, &read1_mates, &read2_mates, &qmap, capture_dests, min_mapq);
             }
-            // query_name is needed for every read (membership check), so decode it here.
-            let qname = read.query_name();
-            if read.is_read1 {
-                if !read1_mates.contains(&qname) {
-                    continue;
-                }
-            } else if !read2_mates.contains(&qname) {
-                continue;
-            }
-            let Some(&bpref) = qmap.get(&qname) else { continue };
-            match bpref {
-                BpRef::PolyA(i) => {
-                    self.polya[i].set_mate(&read, min_mapq);
-                }
-                BpRef::Left(i) | BpRef::Right(i) => {
-                    let seq = clean_clipped_seq(&QualitySeq::new(read.seq(), read.qual()));
-                    let seq = if read.is_forward() { seq } else { seq.revcomp() };
-                    // Feature B: capture the mate's landing site for the splice check.
-                    let dest = (read.reference_sequence_id, read.reference_start);
-                    let bp = match bpref {
-                        BpRef::Left(_) => &mut self.final_left_breakpoints[i],
-                        BpRef::Right(_) => &mut self.final_right_breakpoints[i],
-                        _ => unreachable!(),
-                    };
-                    bp.mate_seqs.push(seq);
-                    if capture_dests {
-                        bp.mate_dests.push(dest);
-                    }
-                }
+        } else {
+            let mut reader = open_bam(&self.filepath, self.bam_threads)?;
+            let header = reader.read_header()?;
+            let mut record = bam::Record::default();
+            while reader.read_record(&mut record)? != 0 {
+                let read = BamRead::from_record(&record, &header)?;
+                self.apply_mate_record(&read, &read1_mates, &read2_mates, &qmap, capture_dests, min_mapq);
             }
         }
         Ok(())
+    }
+
+    /// Per-record body of the mate scan, shared by the BAM and CRAM loops: match a
+    /// mate by qname and attach its sequence / landing site to the breakpoint (or set
+    /// the polyA mate).
+    #[allow(clippy::too_many_arguments)]
+    fn apply_mate_record(
+        &mut self,
+        read: &BamRead,
+        read1_mates: &FxHashSet<String>,
+        read2_mates: &FxHashSet<String>,
+        qmap: &FxHashMap<String, BpRef>,
+        capture_dests: bool,
+        min_mapq: u8,
+    ) {
+        if read.is_secondary || read.is_qcfail || read.is_duplicate {
+            return;
+        }
+        // query_name is needed for every read (membership check), so decode it here.
+        let qname = read.query_name();
+        if read.is_read1 {
+            if !read1_mates.contains(&qname) {
+                return;
+            }
+        } else if !read2_mates.contains(&qname) {
+            return;
+        }
+        let Some(&bpref) = qmap.get(&qname) else { return };
+        match bpref {
+            BpRef::PolyA(i) => {
+                self.polya[i].set_mate(read, min_mapq);
+            }
+            BpRef::Left(i) | BpRef::Right(i) => {
+                let seq = clean_clipped_seq(&QualitySeq::new(read.seq(), read.qual()));
+                let seq = if read.is_forward() { seq } else { seq.revcomp() };
+                // Feature B: capture the mate's landing site for the splice check.
+                let dest = (read.reference_sequence_id, read.reference_start);
+                let bp = match bpref {
+                    BpRef::Left(_) => &mut self.final_left_breakpoints[i],
+                    BpRef::Right(_) => &mut self.final_right_breakpoints[i],
+                    _ => unreachable!(),
+                };
+                bp.mate_seqs.push(seq);
+                if capture_dests {
+                    bp.mate_dests.push(dest);
+                }
+            }
+        }
     }
 
     /// SPD-4: resolve mates by indexed coordinate fetch instead of a full pass.
@@ -914,7 +1006,9 @@ impl Discovery {
     }
 
     pub fn discovery(&mut self) -> io::Result<()> {
-        if self.config.contig_threads > 1 {
+        // SPD-3 per-contig parallelism uses indexed BAM fetch; CRAM falls back to the
+        // single-threaded scan.
+        if self.config.contig_threads > 1 && !is_cram(&self.filepath) {
             return self.discovery_parallel();
         }
         if self.coverage_enabled() {
@@ -1001,8 +1095,11 @@ impl Discovery {
     /// Resolve the header's reference sequence names in id order (for the D3 mate
     /// contig lookup). Opened once per clustering pass, only when the RTE track is set.
     fn reference_names(&self) -> io::Result<Vec<String>> {
-        let mut reader = open_bam(&self.filepath, 1)?;
-        let header = reader.read_header()?;
+        let header = if is_cram(&self.filepath) {
+            open_cram(&self.filepath, self.reference_path.as_deref())?.read_header()?
+        } else {
+            open_bam(&self.filepath, 1)?.read_header()?
+        };
         Ok(header
             .reference_sequences()
             .keys()

@@ -10,13 +10,16 @@ name = "peartree-discovery"
 path = "src/main.rs"
 
 [dependencies]
-noodles-bam = "0.79"
-noodles-sam = "0.75"
-# pinned to the version noodles-bam 0.79 already resolves transitively, so no
-# version skew against bam::io::Reader (SPD-2 multithreaded BGZF decode).
-noodles-bgzf = "0.39"
-# Region type for the SPD-4 indexed mate fetch (match noodles-bam 0.79's core).
+# All noodles crates pinned to one coherent line (core 0.17, MSRV <= 1.87) so
+# there is a SINGLE noodles-sam version — cram::Record and bam::Record then share
+# the same sam::alignment::Record trait, which read.rs is generic over.
+noodles-bam = "0.80"
+noodles-sam = "0.76"
+noodles-bgzf = "0.40"
 noodles-core = "0.17"
+# native CRAM reading (real production format is CRAM); needs a reference FASTA.
+noodles-cram = "0.83"
+noodles-fasta = "0.53"
 flate2 = "1.0"
 # fast non-cryptographic hasher for the membership maps (SPD-5c). Output order
 # never depends on hash order (BAM coordinate order + union.sort()), so this is
