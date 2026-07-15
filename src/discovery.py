@@ -291,7 +291,7 @@ class Discovery:
                             continue
                         # remove right-clipped part of mapped read, if necessary
 
-                        if right_class is pysam.CSOFT_CLIP:
+                        if right_class == pysam.CSOFT_CLIP:
                             self.add_breakpoint(clip, read.reference_start, read.query_name, \
                                                 QualitySeq(read.query_sequence[:left_len], read.query_qualities[:left_len]), \
                                                 QualitySeq(read.query_sequence[left_len:-right_len],read.query_qualities[left_len:-right_len]), \
@@ -305,7 +305,7 @@ class Discovery:
                         if is_adapter(read.query_sequence[-right_len:][:CONFIG['discovery']['min_clip_len']]):
                             continue
                         # remove left-clipped part of mapped read, if necessary
-                        if left_class is pysam.CSOFT_CLIP:
+                        if left_class == pysam.CSOFT_CLIP:
                             self.add_breakpoint(clip, read.reference_end, read.query_name, \
                                                 QualitySeq(read.query_sequence[-right_len:],read.query_qualities[-right_len:]), \
                                            QualitySeq(read.query_sequence[left_len:-right_len], read.query_qualities[left_len:-right_len]), \
