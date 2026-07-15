@@ -6,7 +6,7 @@ use std::num::NonZeroUsize;
 
 use noodles_bam as bam;
 use noodles_bgzf as bgzf;
-use noodles_core::{Position, Region};
+use noodles_core::Region;
 use noodles_cram as cram;
 use noodles_fasta as fasta;
 use noodles_sam::alignment::Record as AlignmentRecord;
@@ -87,6 +87,15 @@ fn open_bam(path: &str, bam_threads: usize) -> io::Result<bam::io::Reader<Box<dy
 /// True when the input is a CRAM file (by extension).
 fn is_cram(path: &str) -> bool {
     path.ends_with(".cram")
+}
+
+/// True when a coordinate index (`.bai` or `.csi`) sits next to the BAM. Contig-level
+/// parallelism (SPD-3/SPD-4c) needs an index to fetch each contig independently; without
+/// one the single-threaded scan is used so a default `--threads > 1` stays safe on
+/// un-indexed input.
+fn has_bam_index(path: &str) -> bool {
+    std::path::Path::new(&format!("{path}.bai")).exists()
+        || std::path::Path::new(&format!("{path}.csi")).exists()
 }
 
 /// SPEC-3/4 coverage pre-pass per-record accumulation, shared by the BAM and CRAM
@@ -191,11 +200,6 @@ pub struct Discovery {
     exclude: Option<IntervalIndex>,
     rm_mask: Option<IntervalIndex>,
     coverage: Coverage,
-    /// SPD-4: (qname, target-mate-is-read1) -> (mate_ref_id, mate_pos), recorded
-    /// during the scan so mates can be fetched by coordinate. Keyed by the target
-    /// read number so both reads of a pair (each a breakpoint read) are kept, not
-    /// overwritten. Only populated when `mate_fetch` is on.
-    mate_coords: FxHashMap<(String, bool), (usize, i64)>,
     /// SPD-3: when set, extract_chimeric processes only this contig (indexed fetch).
     /// Used by the parallel per-contig workers; None = the full single-threaded scan.
     only_contig: Option<usize>,
@@ -237,7 +241,6 @@ impl Discovery {
             exclude,
             rm_mask,
             coverage,
-            mate_coords: FxHashMap::default(),
             only_contig: None,
             discordant_obs: Vec::new(),
             discordant_clusters: Vec::new(),
@@ -581,18 +584,23 @@ impl Discovery {
         let read = BamRead::from_record(record, header)?;
 
         if read.mapq < min_mapq {
-            if let Some(b) = PolyABreakpoint::find_polya(&read) {
-                // SPD-4: record the polyA read's mate coordinate too
-                if self.config.mate_fetch {
-                    if let Some(mref) = read.mate_ref_id {
-                        if read.mate_pos >= 0 {
-                            self.mate_coords.insert((read.query_name(), !read.is_read1), (mref, read.mate_pos));
-                        }
-                    }
+            // Mate-anchored rescue: keep a soft-clipped read below the MAPQ floor if its
+            // mate maps uniquely (proper pair, MQ >= min_mapq). Mirrors Python
+            // src/discovery.py. Otherwise the read only survives as a polyA mate.
+            let has_clip = (read.left_is_soft && read.left_len >= MIN_CLIP_LEN)
+                || (read.right_is_soft && read.right_len >= MIN_CLIP_LEN);
+            let rescued = self.config.mate_anchor_rescue
+                && has_clip
+                && read.is_proper_pair
+                && read.mate_is_mapped
+                && read.mq().map_or(false, |mq| mq >= min_mapq);
+            if !rescued {
+                if let Some(b) = PolyABreakpoint::find_polya(&read) {
+                    self.polya.push(b);
                 }
-                self.polya.push(b);
+                return Ok(());
             }
-            return Ok(());
+            // else: fall through and process this clip as a breakpoint
         }
         if read.is_secondary || read.is_qcfail || read.is_duplicate {
             return Ok(());
@@ -701,14 +709,6 @@ impl Discovery {
         // surviving clip candidate: now decode the heavy fields (SPD-1).
         let seq = read.seq();
         let qname = read.query_name();
-        // SPD-4: remember where this read's mate is, so it can be fetched later.
-        if self.config.mate_fetch {
-            if let Some(mref) = read.mate_ref_id {
-                if read.mate_pos >= 0 {
-                    self.mate_coords.insert((qname.clone(), !read.is_read1), (mref, read.mate_pos));
-                }
-            }
-        }
         let full = QualitySeq::new(seq.clone(), read.qual());
         let n = seq.len();
 
@@ -789,12 +789,15 @@ impl Discovery {
     }
 
     pub fn find_mates(&mut self) -> io::Result<()> {
-        // SPD-4 indexed fetch is BAM-only (indexed bam reader); CRAM uses the scan.
-        if self.config.mate_fetch && !is_cram(&self.filepath) {
-            self.find_mates_fetch()
-        } else {
-            self.find_mates_scan()
-        }
+        // The second (mate) pass is a single linear decode of the file. For BAM the
+        // decode is already parallelised by `bam_threads` (N-way BGZF), which beats a
+        // contig-partitioned scan (big chromosomes dominate and unbalance the workers);
+        // for CRAM the scan is single-threaded. Two alternatives were tried and dropped:
+        // per-mate indexed point-fetch (one query per mate, ~1e4-1e5 genome-wide — far
+        // slower than one scan) and a contig-parallel scan (slower than BGZF-serial on
+        // BAM, and the CRAM index query returned a different record set than the linear
+        // scan — not byte-identical). The linear scan stays the validated path.
+        self.find_mates_scan()
     }
 
     /// Validated path: a second linear pass matching mates by qname.
@@ -872,143 +875,11 @@ impl Discovery {
         }
     }
 
-    /// SPD-4: resolve mates by indexed coordinate fetch instead of a full pass.
-    /// Fetches each mate's primary at its recorded PNEXT plus every SA-tag
-    /// supplementary locus, then processes them in coordinate order to reproduce the
-    /// linear scan's mate ordering. Verified byte-identical to the scan on *complete*
-    /// BAMs (the synthetic polyA / large sets).
-    ///
-    /// ⚠ Assumes a complete BAM: a supplementary mate is reached only via its
-    /// primary's SA tag, so if a mate's primary is absent (e.g. a coordinate-subset
-    /// BAM like test_data/test.bam, where a supplementary at 13:32992169 has its
-    /// primary sliced out) that supplementary MATE line is missed. This is the exact
-    /// case the plan gates behind the real-WGS differential — validate there before
-    /// enabling. Default stays the linear scan.
-    fn find_mates_fetch(&mut self) -> io::Result<()> {
-        let (read1_mates, read2_mates, qmap) = self.get_mates();
-        // Feature B: only pay for mate-destination capture when a consumer is enabled.
-        let capture_dests = self.config.splice_hallmark || self.config.discordant_anchor;
-        let min_mapq = self.config.min_mapq;
-        let mut reader = bam::io::indexed_reader::Builder::default().build_from_path(&self.filepath)?;
-        let header = reader.read_header()?;
-        let ref_names: Vec<Vec<u8>> = header
-            .reference_sequences()
-            .keys()
-            .map(|k| {
-                let b: &[u8] = k.as_ref();
-                b.to_vec()
-            })
-            .collect();
-
-        // initial fetch targets: the recorded coordinate of each needed mate. The
-        // read1_mates want read1 (key true); read2_mates want read2 (key false).
-        let mut queue: Vec<(usize, i64)> = Vec::new();
-        for q in read1_mates.iter() {
-            if let Some(&c) = self.mate_coords.get(&(q.clone(), true)) {
-                queue.push(c);
-            }
-        }
-        for q in read2_mates.iter() {
-            if let Some(&c) = self.mate_coords.get(&(q.clone(), false)) {
-                queue.push(c);
-            }
-        }
-        queue.sort_unstable();
-        queue.dedup();
-
-        // fetch targets (and SA loci they reveal), collecting each matching alignment
-        // once, keyed by (ref, pos, qname, is_read1) to dedup overlapping fetches.
-        let mut collected: Vec<(usize, i64, bam::Record)> = Vec::new();
-        let mut seen: FxHashSet<(usize, i64, String, bool)> = FxHashSet::default();
-        let mut queued: FxHashSet<(usize, i64)> = queue.iter().copied().collect();
-        while let Some((rid, pos)) = queue.pop() {
-            if rid >= ref_names.len() || pos < 0 {
-                continue;
-            }
-            let start = Position::try_from(pos as usize + 1)
-                .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
-            let region = Region::new(ref_names[rid].clone(), start..=start);
-            for rec in reader.query(&header, &region)? {
-                let rec = rec?;
-                let read = BamRead::from_record(&rec, &header)?;
-                if read.is_secondary || read.is_qcfail || read.is_duplicate {
-                    continue;
-                }
-                let qn = read.query_name();
-                let wanted = (read.is_read1 && read1_mates.contains(&qn))
-                    || (read.is_read2 && read2_mates.contains(&qn));
-                if !wanted {
-                    continue;
-                }
-                let key = (read.reference_sequence_id.unwrap_or(rid), read.reference_start, qn.clone(), read.is_read1);
-                if !seen.insert(key) {
-                    continue;
-                }
-                // enqueue this read's SA supplementary loci
-                if let Some(sa) = read.sa() {
-                    for part in sa.split(';') {
-                        if part.is_empty() {
-                            continue;
-                        }
-                        let f: Vec<&str> = part.split(',').collect();
-                        if f.len() >= 2 {
-                            if let (Some(sid), Ok(sp)) = (
-                                ref_names.iter().position(|n| n.as_slice() == f[0].as_bytes()),
-                                f[1].parse::<i64>(),
-                            ) {
-                                let t = (sid, sp - 1);
-                                if queued.insert(t) {
-                                    queue.push(t);
-                                }
-                            }
-                        }
-                    }
-                }
-                collected.push((read.reference_sequence_id.unwrap_or(rid), read.reference_start, rec));
-            }
-        }
-
-        // process in coordinate order (stable) to match the linear scan
-        collected.sort_by_key(|(rid, pos, _)| (*rid, *pos));
-        for (_, _, rec) in &collected {
-            let read = BamRead::from_record(rec, &header)?;
-            let qn = read.query_name();
-            if read.is_read1 {
-                if !read1_mates.contains(&qn) {
-                    continue;
-                }
-            } else if !read2_mates.contains(&qn) {
-                continue;
-            }
-            let Some(&bpref) = qmap.get(&qn) else { continue };
-            match bpref {
-                BpRef::PolyA(i) => {
-                    self.polya[i].set_mate(&read, min_mapq);
-                }
-                BpRef::Left(i) | BpRef::Right(i) => {
-                    let seq = clean_clipped_seq(&QualitySeq::new(read.seq(), read.qual()));
-                    let seq = if read.is_forward() { seq } else { seq.revcomp() };
-                    // Feature B: capture the mate's landing site for the splice check.
-                    let dest = (read.reference_sequence_id, read.reference_start);
-                    let bp = match bpref {
-                        BpRef::Left(_) => &mut self.final_left_breakpoints[i],
-                        BpRef::Right(_) => &mut self.final_right_breakpoints[i],
-                        _ => unreachable!(),
-                    };
-                    bp.mate_seqs.push(seq);
-                    if capture_dests {
-                        bp.mate_dests.push(dest);
-                    }
-                }
-            }
-        }
-        Ok(())
-    }
-
     pub fn discovery(&mut self) -> io::Result<()> {
-        // SPD-3 per-contig parallelism uses indexed BAM fetch; CRAM falls back to the
-        // single-threaded scan.
-        if self.config.contig_threads > 1 && !is_cram(&self.filepath) {
+        // SPD-3 per-contig parallelism uses indexed BAM fetch; CRAM and un-indexed BAM
+        // fall back to the single-threaded scan (which still gets N-way BGZF decode via
+        // bam_threads). Both paths are validated byte-identical on the real WGS BAM.
+        if self.config.contig_threads > 1 && !is_cram(&self.filepath) && has_bam_index(&self.filepath) {
             return self.discovery_parallel();
         }
         if self.coverage_enabled() {
@@ -1169,9 +1040,6 @@ impl Discovery {
             self.final_right_breakpoints.append(&mut w.final_right_breakpoints);
             self.polya.append(&mut w.polya);
             self.stats.merge(&w.stats);
-            for (k, v) in w.mate_coords {
-                self.mate_coords.insert(k, v);
-            }
             self.discordant_obs.append(&mut w.discordant_obs);
         }
         self.find_mates()?;
@@ -1180,7 +1048,7 @@ impl Discovery {
     }
 
     /// One SPD-3 worker: run extract_chimeric over a single contig and return the
-    /// worker (owning that contig's breakpoints / polyA / stats / mate_coords).
+    /// worker (owning that contig's breakpoints / polyA / stats).
     fn process_contig(filepath: &str, cid: usize, config: &DiscoveryConfig, coverage: &Coverage) -> io::Result<Discovery> {
         let mut w = Discovery::new(filepath.to_string(), 1, config.clone(), None, None);
         w.only_contig = Some(cid);

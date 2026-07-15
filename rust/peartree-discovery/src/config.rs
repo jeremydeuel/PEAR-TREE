@@ -66,6 +66,14 @@ pub struct DiscoveryConfig {
     pub polya_near_dist: i64,
     pub polya_far_dist: i64,
     pub reject_fully_mapping_reads: bool,
+    /// Mate-anchored rescue: keep a soft-clipped read below `min_mapq` if it is a proper
+    /// pair whose mate maps uniquely (mate MAPQ `MQ` tag >= `min_mapq`). The unique mate
+    /// anchors the breakpoint, recovering insertions into low-mapability-but-mate-unique
+    /// flanks without lowering the global MAPQ floor (centromeric artefacts have BOTH
+    /// mates low-MAPQ). Needs the `MQ` tag from `samtools fixmate`. Off by default (a
+    /// behaviour change; enable via `--config` / `PEARTREE_MATE_RESCUE` after a real-WGS
+    /// check). Byte-identical to Python `src/discovery.py`.
+    pub mate_anchor_rescue: bool,
     /// SPEC-5/SENS-4: explicit primary-assembly allowlist. When `Some`, a contig is
     /// processed iff its name is in the set (replacing the `len(name) > 5` + MT/chrM
     /// heuristic). When `None`, the legacy heuristic applies, so output is unchanged.
@@ -109,13 +117,9 @@ pub struct DiscoveryConfig {
     pub rm_self_mask: bool,
     pub rm_track: Option<String>,
     pub rm_divergence_max: f64,
-    /// SPD-4: resolve mates with an indexed coordinate fetch (+ their SA-tag
-    /// supplementary loci) instead of a second full BAM pass. Off by default (the
-    /// linear scan is the validated path). ⚠ byte-identity of the SA/ordering paths
-    /// needs the real-WGS differential; the local test BAMs only cover primary mates.
-    pub mate_fetch: bool,
-    /// SPD-3: process contigs in parallel across this many worker threads (1 = the
-    /// validated single-threaded path). Requires the mate fetch (needs an index).
+    /// SPD-3: process contigs in parallel across this many worker threads for the extract
+    /// pass (BAM only, requires a `.bai`/`.csi` index). 1 = the validated single-threaded
+    /// path. The mate pass stays a single linear scan (N-way BGZF decode for BAM).
     pub contig_threads: usize,
     // --- Feature A: discordant-mate anchoring (all off/neutral by default) ---
     /// Master switch: collect discordant read pairs as an evidence source so a
@@ -163,6 +167,7 @@ impl Default for DiscoveryConfig {
             polya_near_dist: POLYA_NEAR_DIST,
             polya_far_dist: POLYA_FAR_DIST,
             reject_fully_mapping_reads: reject_fully_mapping_reads(),
+            mate_anchor_rescue: false,
             contig_allowlist: None,
             exclude_bed: None,
             coverage_mask: false,
@@ -180,7 +185,6 @@ impl Default for DiscoveryConfig {
             rm_self_mask: false,
             rm_track: None,
             rm_divergence_max: 5.0,
-            mate_fetch: false,
             contig_threads: 1,
             discordant_anchor: false,
             discordant_max_tlen: 1000,
@@ -244,6 +248,7 @@ impl DiscoveryConfig {
             "polya_near_dist" => self.polya_near_dist = parse_num(val)?,
             "polya_far_dist" => self.polya_far_dist = parse_num(val)?,
             "reject_fully_mapping_reads" => self.reject_fully_mapping_reads = parse_bool(val)?,
+            "mate_anchor_rescue" => self.mate_anchor_rescue = parse_bool(val)?,
             // comma-separated inline allowlist, e.g. "1,2,...,X,Y,MT"
             "contig_allowlist" => {
                 self.contig_allowlist = Some(val.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()).map(String::from).collect())
@@ -275,7 +280,6 @@ impl DiscoveryConfig {
             "rm_self_mask" => self.rm_self_mask = parse_bool(val)?,
             "rm_track" => self.rm_track = Some(val.to_string()),
             "rm_divergence_max" => self.rm_divergence_max = parse_num(val)?,
-            "mate_fetch" => self.mate_fetch = parse_bool(val)?,
             "contig_threads" => self.contig_threads = parse_num(val)?,
             "discordant_anchor" => self.discordant_anchor = parse_bool(val)?,
             "discordant_max_tlen" => self.discordant_max_tlen = parse_num(val)?,
@@ -300,6 +304,12 @@ impl DiscoveryConfig {
         // PEARTREE_KEEP_FULLMAP=1 keeps full-mapping reads (env wins over the file).
         if matches!(std::env::var("PEARTREE_KEEP_FULLMAP").as_deref(), Ok("1") | Ok("true") | Ok("True")) {
             self.reject_fully_mapping_reads = false;
+        }
+        // PEARTREE_MATE_RESCUE toggles mate-anchored rescue (env wins over the file).
+        match std::env::var("PEARTREE_MATE_RESCUE").as_deref() {
+            Ok("1") | Ok("true") | Ok("True") => self.mate_anchor_rescue = true,
+            Ok("0") | Ok("false") | Ok("False") => self.mate_anchor_rescue = false,
+            _ => {}
         }
         Ok(())
     }

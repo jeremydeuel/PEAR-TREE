@@ -35,11 +35,12 @@ fn main() -> io::Result<()> {
     let mut step: Option<String> = None;
     let mut config_path: Option<String> = None;
     let mut reference: Option<String> = None;
+    // 0 = auto (resolved from available parallelism after arg parsing). An explicit
+    // `--threads`/`-@` or PEARTREE_BAM_THREADS overrides, including `--threads 1`.
     let mut threads: usize = std::env::var("PEARTREE_BAM_THREADS")
         .ok()
         .and_then(|s| s.parse().ok())
-        .unwrap_or(1);
-
+        .unwrap_or(0);
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
@@ -64,13 +65,30 @@ fn main() -> io::Result<()> {
         std::process::exit(1);
     }
 
-    let config = match DiscoveryConfig::load(config_path.as_deref()) {
+    let mut config = match DiscoveryConfig::load(config_path.as_deref()) {
         Ok(c) => c,
         Err(e) => {
             eprintln!("config error: {e}");
             std::process::exit(1);
         }
     };
+
+    // SPD-6: resolve the thread count (auto = min(8, available cores)) and route it to
+    // the right parallelism knob. On indexed BAM, `--threads N` drives contig-level
+    // parallelism (SPD-3, the big win); `discovery()` falls back to the single-threaded
+    // scan with N-way BGZF decode when there is no index, and CRAM stays single-threaded
+    // until native CRAM parallelism lands. An explicit `contig_threads` in a config file
+    // wins. Output is byte-identical either way.
+    if threads == 0 {
+        threads = std::thread::available_parallelism().map(|n| n.get().min(8)).unwrap_or(1);
+    }
+    threads = threads.max(1);
+    // SPD-6: on indexed BAM, `--threads N` drives contig-level parallel extract (SPD-3);
+    // the mate pass and CRAM stay single-threaded (with N-way BGZF decode for BAM). An
+    // explicit `contig_threads` in a config file wins. Output is byte-identical either way.
+    if !bam.ends_with(".cram") && config.contig_threads <= 1 && threads > 1 {
+        config.contig_threads = threads;
+    }
 
     // SPEC-5: build the exclude-BED interval index up front so a bad path fails fast.
     let exclude = match config.exclude_bed.as_deref() {
@@ -124,11 +142,18 @@ fn main() -> io::Result<()> {
     if config.rm_self_mask {
         eprintln!("RM self-mask: ON (divergence <= {})", config.rm_divergence_max);
     }
-    if config.mate_fetch {
-        eprintln!("mate resolution: indexed fetch (SPD-4)");
-    }
     if config.contig_threads > 1 {
-        eprintln!("contig parallelism: {} threads (SPD-3)", config.contig_threads);
+        let indexed = std::path::Path::new(&format!("{bam}.bai")).exists()
+            || std::path::Path::new(&format!("{bam}.csi")).exists();
+        if indexed {
+            eprintln!("contig parallelism: {} threads (SPD-3 extract)", config.contig_threads);
+        } else {
+            eprintln!(
+                "contig parallelism requested ({} threads) but no .bai/.csi index found — \
+                 falling back to single-threaded scan with {}-way BGZF decode",
+                config.contig_threads, threads
+            );
+        }
     }
     if config.discordant_anchor {
         eprintln!(
@@ -180,9 +205,6 @@ fn main() -> io::Result<()> {
     if bam.ends_with(".cram") && reference.is_none() {
         eprintln!("CRAM input requires a reference FASTA: pass --reference <ref.fa> (names matching the CRAM @SQ)");
         std::process::exit(1);
-    }
-    if bam.ends_with(".cram") && (config.mate_fetch || config.contig_threads > 1) {
-        eprintln!("note: CRAM input uses the single-threaded scan path (mate_fetch / contig_threads are BAM-only)");
     }
 
     let mut d = Discovery::new(bam, threads, config, exclude, rm_mask);

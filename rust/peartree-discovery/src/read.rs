@@ -83,7 +83,16 @@ impl<'a> BamRead<'a> {
         let (left_is_soft, left_len) = first.map(|(k, l)| (k == Kind::SoftClip, l)).unwrap_or((false, 0));
         let (right_is_soft, right_len) = last.map(|(k, l)| (k == Kind::SoftClip, l)).unwrap_or((false, 0));
 
-        let mapq = record.mapping_quality().transpose()?.map(|m| m.get()).unwrap_or(255);
+        // An unmapped read's MAPQ is meaningless; pysam/samtools/BAM all report 0 for it.
+        // noodles-bam returns Some(0) but noodles-cram returns None here, and defaulting
+        // None to 255 would let an unmapped read spuriously pass the MAPQ gate on the CRAM
+        // path (it would then be dropped for lacking a CIGAR, silently losing polyA
+        // evidence). Force 0 for unmapped reads so BAM and CRAM decode identically.
+        let mapq = if mapped {
+            record.mapping_quality().transpose()?.map(|m| m.get()).unwrap_or(255)
+        } else {
+            0
+        };
 
         let mate_ref_id = record.mate_reference_sequence_id(header).transpose()?;
         let mate_pos = record.mate_alignment_start().transpose()?.map(|p| usize::from(p) as i64 - 1).unwrap_or(-1);
@@ -151,6 +160,15 @@ impl<'a> BamRead<'a> {
         self.tag_string(Tag::from([b'X', b'A']))
     }
 
+    /// Mate mapping quality (`MQ` integer tag, added by `samtools fixmate`). None if the
+    /// tag is absent or not an integer. Used by mate-anchored rescue.
+    pub fn mq(&self) -> Option<u8> {
+        match self.record.data().get(&Tag::from([b'M', b'Q'])) {
+            Some(Ok(value)) => value_to_u8(&value),
+            _ => None,
+        }
+    }
+
     fn tag_string(&self, tag: Tag) -> Option<String> {
         match self.record.data().get(&tag) {
             Some(Ok(value)) => Some(value_to_string(&value)),
@@ -164,4 +182,18 @@ fn value_to_string(value: &Value) -> String {
         Value::String(s) => String::from_utf8_lossy(s.as_ref()).into_owned(),
         other => format!("{:?}", other),
     }
+}
+
+/// Extract an unsigned mapping-quality from any BAM integer aux value, clamped to u8.
+fn value_to_u8(value: &Value) -> Option<u8> {
+    let n: i64 = match value {
+        Value::UInt8(v) => *v as i64,
+        Value::Int8(v) => *v as i64,
+        Value::UInt16(v) => *v as i64,
+        Value::Int16(v) => *v as i64,
+        Value::UInt32(v) => *v as i64,
+        Value::Int32(v) => *v as i64,
+        _ => return None,
+    };
+    Some(n.clamp(0, 255) as u8)
 }
