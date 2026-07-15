@@ -142,27 +142,39 @@ recall on the test/validation set.
 
 ## Stage 3 — Rust rewrite of discovery only (weeks, higher effort)
 
-Once the algorithm and filters are settled in Stage 2, port **discovery only**
-to Rust. Do not rewrite combine/genotype/annotate — they are subprocess- and
-I/O-bound glue where Python is fine and where the fiddly, still-evolving
-filtering logic lives.
+Port **discovery only** to Rust. Do not rewrite combine/genotype/annotate — they
+are subprocess- and I/O-bound glue where Python is fine and where the fiddly,
+still-evolving filtering logic lives.
 
-- [ ] Implement discovery with [`rust-htslib`](https://github.com/rust-bio/rust-htslib)
-  or [`noodles`](https://github.com/zaeleus/noodles) + [`rayon`](https://github.com/rayon-rs/rayon)
-  for per-contig parallelism.
-- [ ] **Emit the exact existing `.txt.gz` breakpoint format** so the Rust binary
-  is a drop-in replacement for step 1 in the current pipeline.
-- [ ] Port the Stage-2 discovery-time artefact filters.
-- [ ] Ship as a standalone binary invoked by the existing orchestration.
-- [ ] **Equivalence test:** Rust and Python discovery must produce the same
-  breakpoint set (modulo documented improvements) on the test BAM and at least
-  one real WGS BAM before switch-over.
+> **Brought forward** ahead of Stage 2 at the user's request. Implemented in
+> `rust/peartree-discovery/` (see its README).
 
-Expected: ~20–50× over the current Python discovery.
+- [x] Implemented discovery with [`noodles`](https://github.com/zaeleus/noodles)
+  (pure Rust — no htslib build dependency, cluster-friendly). `rayon` per-contig
+  parallelism deferred to the Stage 2 work (the port is currently single-pass,
+  single-threaded, matching the Python control flow).
+- [x] **Emits the exact existing `.txt.gz` breakpoint format** — a faithful,
+  byte-for-byte port of the current Python behaviour (quirks included, so it can
+  be diffed against the Python baseline). `extend_mates()` no-op omitted.
+- [ ] Port the Stage-2 discovery-time artefact filters (after Stage 2 exists).
+- [x] Ships as a standalone binary; drop-in for `--step discover`.
+- [~] **Equivalence test:** byte-identical to Python on `test_data/test.bam` and
+  two synthetic inputs (multi-contig ordering + `MT`/long-contig skips; polyA
+  rescue). Reusable harness: `rust/peartree-discovery/tests/differential_test.sh`.
+  **Still pending: a real WGS BAM** — run the harness on the cluster before
+  switch-over (polyA-heavy, adapter-heavy, high-coverage regions get real
+  coverage only there).
 
-**Exit criteria:** Rust discovery matches Python output on the validation set and
-is adopted as the default step-1 implementation; Python discovery kept as a
-reference/fallback until confidence is high.
+Expected: ~20–50× over the current Python discovery (not yet measured — the
+local test data is too small; startup dominates).
+
+**Exit criteria:** Rust discovery matches Python output on the validation set
+**including at least one real WGS BAM**, and is adopted as the default step-1
+implementation; Python discovery kept as the reference/fallback until confidence
+is high.
+
+**Status:** byte-identical on all local differential tests; real-WGS validation
+outstanding. Python discovery remains the reference implementation until then.
 
 ---
 
