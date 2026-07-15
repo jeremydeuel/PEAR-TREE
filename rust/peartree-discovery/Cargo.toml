@@ -15,6 +15,8 @@ noodles-sam = "0.75"
 # pinned to the version noodles-bam 0.79 already resolves transitively, so no
 # version skew against bam::io::Reader (SPD-2 multithreaded BGZF decode).
 noodles-bgzf = "0.39"
+# Region type for the SPD-4 indexed mate fetch (match noodles-bam 0.79's core).
+noodles-core = "0.17"
 flate2 = "1.0"
 # fast non-cryptographic hasher for the membership maps (SPD-5c). Output order
 # never depends on hash order (BAM coordinate order + union.sort()), so this is

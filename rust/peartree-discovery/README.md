@@ -116,6 +116,7 @@ the file. With no config the run is **byte-identical** to the pre-config port.
 | `hallmark_score` | false | SENS-5: write `<out>.hallmarks.tsv` (poly-A purity, TSD length, EN motif) per insertion. NON-GATING — main output unchanged |
 | `short_polya_clip` / `short_polya_min_clip` | false / 7 | SENS-8: allow clips down to N bp when the clipped consensus is a pure poly-A/T terminus |
 | `rm_self_mask` / `rm_track` / `rm_divergence_max` | false / none / 5.0 | SPEC-7: drop breakpoints inside a *young* RepeatMasker element (percent divergence ≤ max) from `rm_track` (`.out[.gz]`) — divergence-gated, not family membership. Track must match the BAM assembly; hs1 tracks are in-repo, supply GRCh38/GRCm39 tracks for those |
+| `mate_fetch` | false | SPD-4: resolve mates by indexed coordinate fetch (+ SA-tag supplementary loci) instead of a second full pass. Needs a `.bai`. ⚠ byte-identical only on complete BAMs — **validate on the real-WGS differential before enabling** |
 
 SPEC-3/4 add one lightweight coverage pre-pass over the BAM; it only runs when one
 of those gates is enabled, so the default path is unchanged.

@@ -1,7 +1,11 @@
 //! Port of src/quality_seq.py + src/revcomp.py
 //!
-//! A DNA sequence (ASCII bytes) paired with a per-base quality/score track
-//! (i32, because consensus scores can exceed the 0-255 phred range).
+//! A DNA sequence (ASCII bytes) paired with a per-base quality/score track.
+//!
+//! SPD-5b: the track is `u8`. Read qualities are already 0-255. Consensus scores
+//! (delta-best) can exceed 255, but `fastq()` clamps every score >= 93 to the same
+//! character (126), so `find_consensus` stores `min(score, 255)` — byte-identical
+//! output at a quarter of the per-read memory of the former `i32` track.
 
 #[inline]
 pub fn complement(b: u8) -> u8 {
@@ -19,11 +23,11 @@ pub fn revcomp_bytes(seq: &[u8]) -> Vec<u8> {
 #[derive(Clone, Debug)]
 pub struct QualitySeq {
     pub seq: Vec<u8>,
-    pub qual: Vec<i32>,
+    pub qual: Vec<u8>,
 }
 
 impl QualitySeq {
-    pub fn new(seq: Vec<u8>, qual: Vec<i32>) -> Self {
+    pub fn new(seq: Vec<u8>, qual: Vec<u8>) -> Self {
         assert_eq!(seq.len(), qual.len());
         QualitySeq { seq, qual }
     }
@@ -93,7 +97,7 @@ impl QualitySeq {
         out.push_str(std::str::from_utf8(&self.seq).unwrap());
         out.push_str("\n+\n");
         for &q in &self.qual {
-            let mut c = q + 33;
+            let mut c = q as i32 + 33; // widen: q + 33 can exceed u8
             if c > 126 { c = 126; }
             out.push(c as u8 as char);
         }

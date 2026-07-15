@@ -91,7 +91,7 @@ pub fn find_consensus(seqs: &[QualitySeq], tolerant: bool) -> QualitySeq {
     let max_len = uppers.iter().map(|s| s.len()).max().unwrap_or(0);
 
     let mut consensus_seq: Vec<u8> = Vec::new();
-    let mut consensus_score: Vec<i32> = Vec::new();
+    let mut consensus_score: Vec<u8> = Vec::new();
     for position in 0..max_len {
         // base_stat keyed A,T,G,C in that fixed order (matches Python dict order)
         let mut stat: [(u8, i64); 4] = [(b'A', 0), (b'T', 0), (b'G', 0), (b'C', 0)];
@@ -121,7 +121,9 @@ pub fn find_consensus(seqs: &[QualitySeq], tolerant: bool) -> QualitySeq {
             sorted[0].1 - sorted[1].1 - sorted[2].1 - sorted[3].1
         };
         if delta > 0 {
-            consensus_score.push(delta as i32);
+            // cap at 255: fastq() maps every score >= 93 to the same char, so this
+            // is output-identical to storing the wider score (SPD-5b).
+            consensus_score.push(delta.min(255) as u8);
             consensus_seq.push(sorted[0].0);
         } else {
             break; // only extract seq to the first ambiguous base

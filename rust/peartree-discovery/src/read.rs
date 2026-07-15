@@ -32,6 +32,9 @@ pub struct BamRead<'a> {
     pub mapped: bool,
     pub reference_start: i64, // 0-based
     pub reference_end: i64,   // 0-based, exclusive
+    /// mate coordinate (RNEXT/PNEXT) for the SPD-4 mate fetch
+    pub mate_ref_id: Option<usize>,
+    pub mate_pos: i64, // 0-based, -1 if unset
     pub mapq: u8,
     pub is_read1: bool,
     pub is_read2: bool,
@@ -92,6 +95,10 @@ impl<'a> BamRead<'a> {
 
         let mapq = record.mapping_quality().map(|m| m.get()).unwrap_or(255);
 
+        let mate_ref_id = record.mate_reference_sequence_id().transpose()?;
+        let mate_start1 = record.mate_alignment_start().transpose()?.map(usize::from);
+        let mate_pos = mate_start1.map(|s| (s - 1) as i64).unwrap_or(-1);
+
         Ok(BamRead {
             record,
             header,
@@ -99,6 +106,8 @@ impl<'a> BamRead<'a> {
             mapped,
             reference_start,
             reference_end,
+            mate_ref_id,
+            mate_pos,
             mapq,
             is_read1: flags & FLAG_READ1 != 0,
             is_read2: flags & FLAG_READ2 != 0,
@@ -123,8 +132,8 @@ impl<'a> BamRead<'a> {
         self.record.sequence().iter().collect()
     }
 
-    pub fn qual(&self) -> Vec<i32> {
-        self.record.quality_scores().as_ref().iter().map(|&q| q as i32).collect()
+    pub fn qual(&self) -> Vec<u8> {
+        self.record.quality_scores().as_ref().to_vec()
     }
 
     pub fn query_name(&self) -> String {

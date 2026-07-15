@@ -109,6 +109,14 @@ pub struct DiscoveryConfig {
     pub rm_self_mask: bool,
     pub rm_track: Option<String>,
     pub rm_divergence_max: f64,
+    /// SPD-4: resolve mates with an indexed coordinate fetch (+ their SA-tag
+    /// supplementary loci) instead of a second full BAM pass. Off by default (the
+    /// linear scan is the validated path). ⚠ byte-identity of the SA/ordering paths
+    /// needs the real-WGS differential; the local test BAMs only cover primary mates.
+    pub mate_fetch: bool,
+    /// SPD-3: process contigs in parallel across this many worker threads (1 = the
+    /// validated single-threaded path). Requires the mate fetch (needs an index).
+    pub contig_threads: usize,
 }
 
 impl Default for DiscoveryConfig {
@@ -141,6 +149,8 @@ impl Default for DiscoveryConfig {
             rm_self_mask: false,
             rm_track: None,
             rm_divergence_max: 5.0,
+            mate_fetch: false,
+            contig_threads: 1,
         }
     }
 }
@@ -223,6 +233,8 @@ impl DiscoveryConfig {
             "rm_self_mask" => self.rm_self_mask = parse_bool(val)?,
             "rm_track" => self.rm_track = Some(val.to_string()),
             "rm_divergence_max" => self.rm_divergence_max = parse_num(val)?,
+            "mate_fetch" => self.mate_fetch = parse_bool(val)?,
+            "contig_threads" => self.contig_threads = parse_num(val)?,
             other => eprintln!("warning: ignoring unknown config key '{other}'"),
         }
         Ok(())

@@ -6,6 +6,7 @@ use std::num::NonZeroUsize;
 
 use noodles_bam as bam;
 use noodles_bgzf as bgzf;
+use noodles_core::{Position, Region};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::config::*;
@@ -103,6 +104,11 @@ pub struct Discovery {
     exclude: Option<IntervalIndex>,
     rm_mask: Option<IntervalIndex>,
     coverage: Coverage,
+    /// SPD-4: (qname, target-mate-is-read1) -> (mate_ref_id, mate_pos), recorded
+    /// during the scan so mates can be fetched by coordinate. Keyed by the target
+    /// read number so both reads of a pair (each a breakpoint read) are kept, not
+    /// overwritten. Only populated when `mate_fetch` is on.
+    mate_coords: FxHashMap<(String, bool), (usize, i64)>,
     stats: Stats,
     bam_threads: usize, // BGZF decode workers (SPD-2); 1 = single-threaded
 }
@@ -127,6 +133,7 @@ impl Discovery {
             exclude,
             rm_mask,
             coverage,
+            mate_coords: FxHashMap::default(),
             stats: Stats::default(),
             bam_threads: bam_threads.max(1),
         }
@@ -315,6 +322,14 @@ impl Discovery {
 
             if read.mapq < min_mapq {
                 if let Some(b) = PolyABreakpoint::find_polya(&read) {
+                    // SPD-4: record the polyA read's mate coordinate too
+                    if self.config.mate_fetch {
+                        if let Some(mref) = read.mate_ref_id {
+                            if read.mate_pos >= 0 {
+                                self.mate_coords.insert((read.query_name(), !read.is_read1), (mref, read.mate_pos));
+                            }
+                        }
+                    }
                     self.polya.push(b);
                 }
                 continue;
@@ -393,6 +408,14 @@ impl Discovery {
             // surviving clip candidate: now decode the heavy fields (SPD-1).
             let seq = read.seq();
             let qname = read.query_name();
+            // SPD-4: remember where this read's mate is, so it can be fetched later.
+            if self.config.mate_fetch {
+                if let Some(mref) = read.mate_ref_id {
+                    if read.mate_pos >= 0 {
+                        self.mate_coords.insert((qname.clone(), !read.is_read1), (mref, read.mate_pos));
+                    }
+                }
+            }
             let full = QualitySeq::new(seq.clone(), read.qual());
             let n = seq.len();
 
@@ -475,6 +498,15 @@ impl Discovery {
     }
 
     pub fn find_mates(&mut self) -> io::Result<()> {
+        if self.config.mate_fetch {
+            self.find_mates_fetch()
+        } else {
+            self.find_mates_scan()
+        }
+    }
+
+    /// Validated path: a second linear pass matching mates by qname.
+    fn find_mates_scan(&mut self) -> io::Result<()> {
         let (read1_mates, read2_mates, qmap) = self.get_mates();
         let min_mapq = self.config.min_mapq;
         let mut reader = open_bam(&self.filepath, self.bam_threads)?;
@@ -495,6 +527,132 @@ impl Discovery {
                 continue;
             }
             let Some(&bpref) = qmap.get(&qname) else { continue };
+            match bpref {
+                BpRef::PolyA(i) => {
+                    self.polya[i].set_mate(&read, min_mapq);
+                }
+                BpRef::Left(i) | BpRef::Right(i) => {
+                    let seq = clean_clipped_seq(&QualitySeq::new(read.seq(), read.qual()));
+                    let seq = if read.is_forward() { seq } else { seq.revcomp() };
+                    let bp = match bpref {
+                        BpRef::Left(_) => &mut self.final_left_breakpoints[i],
+                        BpRef::Right(_) => &mut self.final_right_breakpoints[i],
+                        _ => unreachable!(),
+                    };
+                    bp.mate_seqs.push(seq);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// SPD-4: resolve mates by indexed coordinate fetch instead of a full pass.
+    /// Fetches each mate's primary at its recorded PNEXT plus every SA-tag
+    /// supplementary locus, then processes them in coordinate order to reproduce the
+    /// linear scan's mate ordering. Verified byte-identical to the scan on *complete*
+    /// BAMs (the synthetic polyA / large sets).
+    ///
+    /// ⚠ Assumes a complete BAM: a supplementary mate is reached only via its
+    /// primary's SA tag, so if a mate's primary is absent (e.g. a coordinate-subset
+    /// BAM like test_data/test.bam, where a supplementary at 13:32992169 has its
+    /// primary sliced out) that supplementary MATE line is missed. This is the exact
+    /// case the plan gates behind the real-WGS differential — validate there before
+    /// enabling. Default stays the linear scan.
+    fn find_mates_fetch(&mut self) -> io::Result<()> {
+        let (read1_mates, read2_mates, qmap) = self.get_mates();
+        let min_mapq = self.config.min_mapq;
+        let mut reader = bam::io::indexed_reader::Builder::default().build_from_path(&self.filepath)?;
+        let header = reader.read_header()?;
+        let ref_names: Vec<Vec<u8>> = header
+            .reference_sequences()
+            .keys()
+            .map(|k| {
+                let b: &[u8] = k.as_ref();
+                b.to_vec()
+            })
+            .collect();
+
+        // initial fetch targets: the recorded coordinate of each needed mate. The
+        // read1_mates want read1 (key true); read2_mates want read2 (key false).
+        let mut queue: Vec<(usize, i64)> = Vec::new();
+        for q in read1_mates.iter() {
+            if let Some(&c) = self.mate_coords.get(&(q.clone(), true)) {
+                queue.push(c);
+            }
+        }
+        for q in read2_mates.iter() {
+            if let Some(&c) = self.mate_coords.get(&(q.clone(), false)) {
+                queue.push(c);
+            }
+        }
+        queue.sort_unstable();
+        queue.dedup();
+
+        // fetch targets (and SA loci they reveal), collecting each matching alignment
+        // once, keyed by (ref, pos, qname, is_read1) to dedup overlapping fetches.
+        let mut collected: Vec<(usize, i64, bam::Record)> = Vec::new();
+        let mut seen: FxHashSet<(usize, i64, String, bool)> = FxHashSet::default();
+        let mut queued: FxHashSet<(usize, i64)> = queue.iter().copied().collect();
+        while let Some((rid, pos)) = queue.pop() {
+            if rid >= ref_names.len() || pos < 0 {
+                continue;
+            }
+            let start = Position::try_from(pos as usize + 1)
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+            let region = Region::new(ref_names[rid].clone(), start..=start);
+            for rec in reader.query(&header, &region)? {
+                let rec = rec?;
+                let read = BamRead::from_record(&rec, &header)?;
+                if read.is_secondary || read.is_qcfail || read.is_duplicate {
+                    continue;
+                }
+                let qn = read.query_name();
+                let wanted = (read.is_read1 && read1_mates.contains(&qn))
+                    || (read.is_read2 && read2_mates.contains(&qn));
+                if !wanted {
+                    continue;
+                }
+                let key = (read.reference_sequence_id.unwrap_or(rid), read.reference_start, qn.clone(), read.is_read1);
+                if !seen.insert(key) {
+                    continue;
+                }
+                // enqueue this read's SA supplementary loci
+                if let Some(sa) = read.sa() {
+                    for part in sa.split(';') {
+                        if part.is_empty() {
+                            continue;
+                        }
+                        let f: Vec<&str> = part.split(',').collect();
+                        if f.len() >= 2 {
+                            if let (Some(sid), Ok(sp)) = (
+                                ref_names.iter().position(|n| n.as_slice() == f[0].as_bytes()),
+                                f[1].parse::<i64>(),
+                            ) {
+                                let t = (sid, sp - 1);
+                                if queued.insert(t) {
+                                    queue.push(t);
+                                }
+                            }
+                        }
+                    }
+                }
+                collected.push((read.reference_sequence_id.unwrap_or(rid), read.reference_start, rec));
+            }
+        }
+
+        // process in coordinate order (stable) to match the linear scan
+        collected.sort_by_key(|(rid, pos, _)| (*rid, *pos));
+        for (_, _, rec) in &collected {
+            let read = BamRead::from_record(rec, &header)?;
+            let qn = read.query_name();
+            if read.is_read1 {
+                if !read1_mates.contains(&qn) {
+                    continue;
+                }
+            } else if !read2_mates.contains(&qn) {
+                continue;
+            }
+            let Some(&bpref) = qmap.get(&qn) else { continue };
             match bpref {
                 BpRef::PolyA(i) => {
                     self.polya[i].set_mate(&read, min_mapq);

@@ -252,6 +252,7 @@ dependencies = [
  "flate2",
  "noodles-bam",
  "noodles-bgzf",
+ "noodles-core",
  "noodles-sam",
  "rustc-hash",
 ]
