@@ -1,3 +1,3 @@
-# combined-ON run (the honest test): multiple toggles at once
-min_mapq = 30
-min_evidence_reads_per_breakpoint = 3
+# combined-ON run: both coverage gates together (the honest test)
+coverage_mask = true
+adaptive_evidence = true

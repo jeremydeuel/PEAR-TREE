@@ -72,6 +72,16 @@ pub struct DiscoveryConfig {
     pub contig_allowlist: Option<FxHashSet<String>>,
     /// SPEC-5: path to a BED file of regions to drop breakpoints in. `None` = no-op.
     pub exclude_bed: Option<String>,
+    /// SPEC-3: drop breakpoints whose local coverage exceeds `coverage_mask_multiplier`
+    /// times the genome-wide median (pileup mask). Off by default.
+    pub coverage_mask: bool,
+    pub coverage_mask_multiplier: f64,
+    /// SPEC-4: scale the evidence floor by local/median coverage (never below the
+    /// base `min_evidence_reads_per_breakpoint`). Off by default.
+    pub adaptive_evidence: bool,
+    /// shared coverage-estimator parameters (SPEC-3/4)
+    pub coverage_bin_size: i64,
+    pub coverage_sample_size: usize,
 }
 
 impl Default for DiscoveryConfig {
@@ -89,6 +99,11 @@ impl Default for DiscoveryConfig {
             reject_fully_mapping_reads: reject_fully_mapping_reads(),
             contig_allowlist: None,
             exclude_bed: None,
+            coverage_mask: false,
+            coverage_mask_multiplier: 5.0,
+            adaptive_evidence: false,
+            coverage_bin_size: 500,
+            coverage_sample_size: 3000,
         }
     }
 }
@@ -156,6 +171,11 @@ impl DiscoveryConfig {
                 )
             }
             "exclude_bed" => self.exclude_bed = Some(val.to_string()),
+            "coverage_mask" => self.coverage_mask = parse_bool(val)?,
+            "coverage_mask_multiplier" => self.coverage_mask_multiplier = parse_num(val)?,
+            "adaptive_evidence" => self.adaptive_evidence = parse_bool(val)?,
+            "coverage_bin_size" => self.coverage_bin_size = parse_num(val)?,
+            "coverage_sample_size" => self.coverage_sample_size = parse_num(val)?,
             other => eprintln!("warning: ignoring unknown config key '{other}'"),
         }
         Ok(())

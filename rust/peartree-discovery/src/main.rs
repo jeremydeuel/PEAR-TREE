@@ -3,6 +3,7 @@
 //! Emits the same custom FASTQ-based .txt.gz breakpoint format.
 
 mod config;
+mod coverage;
 mod discovery;
 mod filters;
 mod intervals;
@@ -91,6 +92,12 @@ fn main() -> io::Result<()> {
     }
     if config.exclude_bed.is_some() {
         eprintln!("exclude-bed: {}", config.exclude_bed.as_deref().unwrap());
+    }
+    if config.coverage_mask {
+        eprintln!("coverage mask: ON (> {}x median)", config.coverage_mask_multiplier);
+    }
+    if config.adaptive_evidence {
+        eprintln!("adaptive evidence floor: ON");
     }
 
     let mut d = Discovery::new(bam, threads, config, exclude);

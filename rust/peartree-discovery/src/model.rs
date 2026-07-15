@@ -120,7 +120,7 @@ fn rescue_polya(mut bp: Breakpoint) -> Rescue {
 
 /// Port of Breakpoint.join. Consumes the group of breakpoints in a <6bp window
 /// and returns a single consensus breakpoint, or None if filtered out.
-pub fn join(mut breakpoints: Vec<Breakpoint>, cfg: &DiscoveryConfig, stats: &mut Stats) -> Option<Breakpoint> {
+pub fn join(mut breakpoints: Vec<Breakpoint>, cfg: &DiscoveryConfig, evidence_floor: usize, stats: &mut Stats) -> Option<Breakpoint> {
     if breakpoints.len() < 2 {
         let bp = breakpoints.pop().unwrap();
         let side = bp.side;
@@ -173,7 +173,7 @@ pub fn join(mut breakpoints: Vec<Breakpoint>, cfg: &DiscoveryConfig, stats: &mut
 
     let (best_bp, n) = most_common_first(&bps);
 
-    if n < cfg.min_evidence_reads_per_breakpoint {
+    if n < evidence_floor {
         // try polyA rescue on the individual breakpoints; first hit wins
         for bp in breakpoints.into_iter() {
             let side_bp = bp.side;

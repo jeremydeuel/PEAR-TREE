@@ -1,0 +1,2 @@
+# SPEC-4 coverage-adaptive evidence floor
+adaptive_evidence = true

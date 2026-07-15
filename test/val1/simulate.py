@@ -120,6 +120,29 @@ def simulate(args):
             truth.append((contig, L, R, cls, tsd, alt, ref, vaf))
             idx += 1
 
+    # pileup artefacts: high local coverage + a spurious clipped pair, far from real
+    # insertions and NOT in truth. These are the false positives SPEC-3 (coverage
+    # mask) and SPEC-4 (adaptive evidence floor) must remove.
+    for a in range(args.n_artefacts):
+        contig = contigs[a % len(contigs)]
+        ti = tid[contig]
+        A = 5_000_000 + a * 100_000
+        pileup = rng.randint(args.artefact_cov_min, args.artefact_cov_max)
+        for k in range(pileup):
+            st = A + (k % 400)  # starts within one 500 bp bin, aligned with the breakpoints below
+            records.append(make_read(hdr, ti, f"art_{contig}_{A}_p{k}", rnd_seq(rng, ref_m),
+                                     st, f"{ref_m}M", 60, flag=0x1 | 0x40))
+        tsd = rng.randint(args.tsd_min, args.tsd_max)
+        # each junction's reads must share seq so a (false) consensus forms
+        seq_r = rnd_seq(rng, anchor_m) + rnd_seq(rng, clip_s)
+        seq_l = rnd_seq(rng, clip_s) + rnd_seq(rng, anchor_m)
+        for k in range(2):  # spurious RIGHT breakpoint at A+tsd
+            records.append(make_read(hdr, ti, f"art_{contig}_{A}_R{k}", seq_r,
+                                     (A + tsd) - anchor_m, f"{anchor_m}M{clip_s}S", 60, flag=0x1 | 0x40))
+        for k in range(2):  # spurious LEFT breakpoint at A
+            records.append(make_read(hdr, ti, f"art_{contig}_{A}_L{k}", seq_l,
+                                     A, f"{clip_s}S{anchor_m}M", 60, flag=0x1 | 0x40))
+
     records.sort(key=lambda a: (a.reference_id, a.reference_start))
     with pysam.AlignmentFile(args.out_bam, "wb", header=hdr) as out:
         for a in records:
@@ -148,6 +171,9 @@ def main():
     p.add_argument("--alt-max", type=int, default=8)
     p.add_argument("--ref-min", type=int, default=5)
     p.add_argument("--ref-max", type=int, default=40)
+    p.add_argument("--n-artefacts", type=int, default=0, help="pileup false-positive regions (not in truth)")
+    p.add_argument("--artefact-cov-min", type=int, default=150)
+    p.add_argument("--artefact-cov-max", type=int, default=300)
     simulate(p.parse_args())
 
 

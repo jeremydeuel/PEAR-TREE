@@ -1,0 +1,2 @@
+# SPEC-3 pileup mask
+coverage_mask = true

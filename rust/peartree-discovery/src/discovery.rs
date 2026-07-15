@@ -9,6 +9,7 @@ use noodles_bgzf as bgzf;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::config::*;
+use crate::coverage::Coverage;
 use crate::filters::{clean_clipped_seq, is_adapter};
 use crate::intervals::IntervalIndex;
 use crate::model::{join, Breakpoint};
@@ -100,12 +101,14 @@ pub struct Discovery {
     filepath: String,
     config: DiscoveryConfig,
     exclude: Option<IntervalIndex>,
+    coverage: Coverage,
     stats: Stats,
     bam_threads: usize, // BGZF decode workers (SPD-2); 1 = single-threaded
 }
 
 impl Discovery {
     pub fn new(filepath: String, bam_threads: usize, config: DiscoveryConfig, exclude: Option<IntervalIndex>) -> Self {
+        let coverage = Coverage::new(config.coverage_bin_size);
         Discovery {
             temporary_breakpoints: Vec::new(),
             final_left_breakpoints: Vec::new(),
@@ -115,9 +118,70 @@ impl Discovery {
             filepath,
             config,
             exclude,
+            coverage,
             stats: Stats::default(),
             bam_threads: bam_threads.max(1),
         }
+    }
+
+    /// True when either coverage-based gate (SPEC-3/SPEC-4) is enabled.
+    fn coverage_enabled(&self) -> bool {
+        self.config.coverage_mask || self.config.adaptive_evidence
+    }
+
+    /// SPEC-3/4 pre-pass: bin read starts per contig and compute the median depth,
+    /// so the global median is known before the per-contig cleanups run. Contig name
+    /// is resolved once per contig (coordinate-sorted), so no per-read allocation.
+    fn estimate_coverage(&mut self) -> io::Result<()> {
+        let bin_size = self.config.coverage_bin_size.max(1);
+        let mut reader = open_bam(&self.filepath, self.bam_threads)?;
+        let header = reader.read_header()?;
+        let mut record = bam::Record::default();
+        let mut cur_id: Option<usize> = None;
+        let mut cur_name = String::new();
+        let mut bins: Vec<u32> = Vec::new();
+        while reader.read_record(&mut record)? != 0 {
+            let read = BamRead::from_record(&record, &header)?;
+            let Some(id) = read.reference_sequence_id else { continue };
+            if read.reference_start < 0 {
+                continue;
+            }
+            if cur_id != Some(id) {
+                if cur_id.is_some() {
+                    self.coverage.set_contig(std::mem::take(&mut cur_name), std::mem::take(&mut bins));
+                }
+                cur_id = Some(id);
+                cur_name = read.reference_name().unwrap_or_default();
+                bins = Vec::new();
+            }
+            let b = (read.reference_start / bin_size) as usize;
+            if bins.len() <= b {
+                bins.resize(b + 1, 0);
+            }
+            bins[b] += 1;
+        }
+        if cur_id.is_some() {
+            self.coverage.set_contig(cur_name, bins);
+        }
+        self.coverage.finalize(self.config.coverage_sample_size);
+        Ok(())
+    }
+
+    /// SPEC-4: evidence floor for a breakpoint at `pos`, scaled by local/median
+    /// coverage but never below the base `min_evidence_reads_per_breakpoint`.
+    fn evidence_floor(&self, pos: i64) -> usize {
+        let base = self.config.min_evidence_reads_per_breakpoint;
+        if !self.config.adaptive_evidence {
+            return base;
+        }
+        let med = self.coverage.median();
+        if med <= 0.0 {
+            return base;
+        }
+        let name = self.reference_name.as_deref().unwrap_or_default();
+        let local = self.coverage.local(name, pos) as f64;
+        let scaled = (base as f64 * (local / med)).round() as i64;
+        scaled.max(base as i64) as usize
     }
 
     /// OBS-1 reject-counter sidecar, serialised as JSON.
@@ -216,7 +280,8 @@ impl Discovery {
                 groups.push(current);
             }
             for g in groups {
-                if let Some(joined) = join(g, &self.config, &mut self.stats) {
+                let floor = self.evidence_floor(g[0].breakpoint);
+                if let Some(joined) = join(g, &self.config, floor, &mut self.stats) {
                     if out {
                         self.final_left_breakpoints.push(joined);
                     } else {
@@ -440,6 +505,9 @@ impl Discovery {
     }
 
     pub fn discovery(&mut self) -> io::Result<()> {
+        if self.coverage_enabled() {
+            self.estimate_coverage()?;
+        }
         self.extract_chimeric()?;
         self.find_mates()?;
         // extend_mates() is a no-op in the Python (operates on the already-emptied
@@ -505,6 +573,14 @@ impl Discovery {
                 l.retain(|b| !self.excluded(rn, b.breakpoint));
                 r.retain(|b| !self.excluded(rn, b.breakpoint));
                 p.retain(|b| !self.excluded(rn, b.breakpoint.unwrap()));
+            }
+
+            // SPEC-3: drop breakpoints in local-coverage pileups (> multiplier x median)
+            if self.config.coverage_mask && self.coverage.median() > 0.0 {
+                let thr = self.config.coverage_mask_multiplier * self.coverage.median();
+                l.retain(|b| (self.coverage.local(rn, b.breakpoint) as f64) <= thr);
+                r.retain(|b| (self.coverage.local(rn, b.breakpoint) as f64) <= thr);
+                p.retain(|b| (self.coverage.local(rn, b.breakpoint.unwrap()) as f64) <= thr);
             }
 
             let (mut il, mut ir, mut ip) = (0usize, 0usize, 0usize);

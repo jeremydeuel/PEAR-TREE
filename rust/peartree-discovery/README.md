@@ -107,6 +107,12 @@ the file. With no config the run is **byte-identical** to the pre-config port.
 | `reject_fully_mapping_reads` | true | XA/SA full-map early reject. Env: `PEARTREE_KEEP_FULLMAP=1` |
 | `contig_allowlist` / `contig_allowlist_file` | none | SPEC-5/SENS-4 primary-assembly allowlist (comma list, or one name per line). When set, replaces the `len(name) <= 5` + not-MT heuristic — recovers RefSeq/T2T names like `NC_000014.9` |
 | `exclude_bed` | none | SPEC-5 BED of regions whose breakpoints are dropped |
+| `coverage_mask` / `coverage_mask_multiplier` | false / 5.0 | SPEC-3 pileup mask: drop breakpoints whose local coverage exceeds N× the genome-wide median |
+| `adaptive_evidence` | false | SPEC-4: scale the evidence floor by local/median coverage (never below `min_evidence_reads_per_breakpoint`) |
+| `coverage_bin_size` / `coverage_sample_size` | 500 / 3000 | shared SPEC-3/4 coverage-estimator bin size and median subsample bound |
+
+SPEC-3/4 add one lightweight coverage pre-pass over the BAM; it only runs when one
+of those gates is enabled, so the default path is unchanged.
 
 A `<out>.stats.json` reject-counter sidecar (OBS-1) is written next to every
 output, mirroring the per-side `Breakpoint.stats` field set.
