@@ -226,20 +226,56 @@ class Discovery:
         return
 
 
+    @staticmethod
+    def _mate_anchors_uniquely(read, min_mapq: int) -> bool:
+        """
+        True if the read's mate is a confident, unique anchor for the locus: the pair
+        is proper (mate mapped, expected orientation/insert) and the mate's mapping
+        quality (MQ tag, added by `samtools fixmate`) clears min_mapq. Used to rescue a
+        soft-clipped read whose *own* short anchor scored below min_mapq — the unique
+        mate pins the locus, so the clipped junction is still trustworthy. Centromeric /
+        satellite artefacts do NOT benefit: there both mates are low-MAPQ.
+        """
+        if not (read.is_paired and read.is_proper_pair):
+            return False
+        if not read.has_tag('MQ'):
+            return False
+        try:
+            return int(read.get_tag('MQ')) >= min_mapq
+        except (ValueError, TypeError):
+            return False
+
     def extract_chimeric(self) -> None:  # this function has side effects!
         assert self.filepath is not None
         reject_fullmap = CONFIG['discovery'].get('reject_fully_mapping_reads', True) and \
             os.environ.get('PEARTREE_KEEP_FULLMAP', '') not in ('1', 'true', 'True')
+        mate_rescue = CONFIG['discovery'].get('mate_anchor_rescue', False)
+        _mr_env = os.environ.get('PEARTREE_MATE_RESCUE', '')
+        if _mr_env in ('1', 'true', 'True'):
+            mate_rescue = True
+        elif _mr_env in ('0', 'false', 'False'):
+            mate_rescue = False
+        min_mapq = CONFIG['discovery']['min_mapq']
+        min_clip = CONFIG['discovery']['min_clip_len']
         with pysam.AlignmentFile(self.filepath, threads=BAM_THREADS) as f:
             self._assert_coordinate_sorted(f)
             self.reference_name = None
             for read in f:
                 # determine if this read is a clipped read
-                if read.mapping_quality < CONFIG['discovery']['min_mapq']:
-                    if b := PolyABreakpoint.findPolyA(read):
-                        self.polyA.append(b)
-                        #print(f"found valid polyA in mapq={read.mapq} with sequence {str(b.clipped)}")
-                    continue
+                if read.mapping_quality < min_mapq:
+                    # mate-anchored rescue: keep a soft-clipped read below the MAPQ floor
+                    # if its mate maps uniquely — the unique mate anchors the breakpoint.
+                    ct = read.cigartuples
+                    has_clip = bool(ct) and (
+                        (ct[0][0] == pysam.CSOFT_CLIP and ct[0][1] >= min_clip) or
+                        (ct[-1][0] == pysam.CSOFT_CLIP and ct[-1][1] >= min_clip))
+                    if not (mate_rescue and has_clip and
+                            self._mate_anchors_uniquely(read, min_mapq)):
+                        if b := PolyABreakpoint.findPolyA(read):
+                            self.polyA.append(b)
+                            #print(f"found valid polyA in mapq={read.mapq} with sequence {str(b.clipped)}")
+                        continue
+                    # else: fall through and process this clip as a breakpoint
                 if read.is_secondary: continue
                 if read.is_qcfail: continue
                 if read.is_duplicate: continue

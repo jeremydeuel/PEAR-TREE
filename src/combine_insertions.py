@@ -77,12 +77,27 @@ def combine_insertions(input_files, insertions_genotyping_file, combined_inserti
         print(f"running bowtie2 {CONFIG['combine_insertions']['bowtie2_executable']} with index {CONFIG['combine_insertions']['bowtie2_index']}")
         cmd = f"{CONFIG['combine_insertions']['bowtie2_executable']} {insertions_fasta} -x {CONFIG['combine_insertions']['bowtie2_index']} --end-to-end --sensitive --threads {threads} --qc-filter | {CONFIG['combine_insertions']['samtools_executable']} view -F 4 -b -o {insertion_bam}"
         os.system(cmd)
+    # A consensus (aligned + clipped) counts as "maps entirely to the reference" only if
+    # it aligns end-to-end CLEANLY. A genuine insertion junction can be forced end-to-end
+    # against a reference that lacks the insertion only by opening an insertion (the
+    # element) >= the clip length, at a poor alignment score; a real assembly-discordance /
+    # reference-contiguous read aligns with no such gap and a near-perfect score. Requiring
+    # a clean alignment stops us discarding full-length Alu/SVA and 3'-transduction junctions
+    # (their consensus otherwise force-aligns with a big I to a paralogous copy).
+    max_clean_ins = CONFIG['combine_insertions'].get('clean_remap_max_insertion',
+                                                     CONFIG['discovery']['min_clip_len'])
+    min_clean_as = CONFIG['combine_insertions'].get('clean_remap_min_as', -15)
     filter_reads = set()
     with pysam.AlignmentFile(insertion_bam) as f:
         for read in f:
-            filter_reads.add(read.query_name[:-2])
+            if read.is_unmapped:
+                continue
+            max_ins = max((length for op, length in (read.cigartuples or []) if op == pysam.CINS), default=0)
+            align_score = read.get_tag('AS') if read.has_tag('AS') else -999
+            if max_ins < max_clean_ins and align_score >= min_clean_as:
+                filter_reads.add(read.query_name[:-2])
     print(
-        f"detected {len(filter_reads)} insertions where at least one end maps entirely to the reference genome, removing these (since they can not be chimeric)...")
+        f"detected {len(filter_reads)} insertions where at least one end maps cleanly (no inserted block) to the reference genome, removing these (since they can not be chimeric)...")
     insertions = [i for i in insertions if i.name not in filter_reads]
 
     print(f"now re-mapping in local mode all clipped parts of reads")

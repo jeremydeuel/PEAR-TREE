@@ -85,11 +85,54 @@ class Insertion:
         self.left_dfams = []
         self.right_maps = []
         self.left_maps = []
+        # exon hits of the mapped clips, for processed-pseudogene detection:
+        # each is (gene_id, exon_start, exon_end). Empty unless an exon track is configured.
+        self.right_exons = []
+        self.left_exons = []
         # extract inserted sequences
     def has_right_polyA(self):
         return re.search(r"[ACGT]t{6}", self.right_seq)
     def has_left_polyA(self):
         return re.search(r"a{6}[ACGT]", self.left_seq)
+
+    # RepeatMasker classes that are retrotransposons (the only things retrotransposition
+    # produces). A clip mapping to any of these is RTE-consistent; a clip mapping only to
+    # unique / non-RTE sequence is not.
+    _RTE_REPCLASSES = ("LINE", "SINE", "LTR", "Retroposon")
+
+    def _pseudogene(self):
+        """Processed-pseudogene signature: the inserted mRNA's clips map into exon(s) of a
+        single gene (L1 machinery retrotransposes a spliced, poly-adenylated transcript).
+        Returns (gene_id, n_distinct_exons, has_polyA) or None. Two distinct exons of one
+        gene (introns skipped) is the strong splice signal; a single exon needs a poly-A
+        tail to be called (else a lone exon overlap is not specific). Empty (no call) unless
+        an exon track is configured. The multi-exon *mate-splice* test stays in discovery
+        (Feature B / splice_hallmark); this is the annotate-stage, clip-level complement."""
+        genes = {}
+        for g, s, e in self.left_exons + self.right_exons:
+            genes.setdefault(g, set()).add((s, e))
+        if not genes:
+            return None
+        g = max(genes, key=lambda k: len(genes[k]))
+        nexon = len(genes[g])
+        has_polya = bool(self.has_left_polyA() or self.has_right_polyA())
+        if nexon >= 2:
+            return (g, nexon, has_polya)
+        if nexon == 1 and has_polya:
+            return (g, 1, True)
+        return None
+
+    def _maps_uniquely_to_nonrte(self, maps, min_mapq=30):
+        """True if a clip maps uniquely (MAPQ >= min_mapq) to a locus carrying no
+        retrotransposon annotation — i.e. a unique genomic partner locus, the signature of a
+        rearrangement (e.g. a chromosomal translocation) rather than a dispersed RTE. A
+        single-copy RTE maps to its RTE-annotated source, so it does NOT trip this."""
+        for pos, qual, rmsks, strand in maps:
+            if qual is None or qual < min_mapq:
+                continue
+            if not any(getattr(r, 'repClass', None) in self._RTE_REPCLASSES for r in (rmsks or [])):
+                return True
+        return False
 
     def get_fasta(self) -> str:
         """
@@ -115,21 +158,21 @@ class Insertion:
                         # 1) polyA on the other side
                         if self.has_left_polyA():
                             DEBUG and print(f"      has left polyA -> accepted")
-                            return "L1"
+                            return f"polyA < {m}"
                         else:
                             DEBUG and print(f"      does not have left polyA -> rejected, checking left dfams")
                         # 2) L1 element on the other side
                         for m2 in self.left_dfams:
                             if "L1" in m2.model:
                                 DEBUG and print(f"      found another L1 ({m2.model}) in left defams -> accepted.")
-                                return m.model
+                                return f"{m2} <- {m}"
                         DEBUG and print(f"      does not have a suitable left dfam, checking mappings.")
                         # 3) match near an L1 element on the other side.
                         for pos, qual, rmsks, strand in self.left_maps:
                             for r in rmsks:
                                 if r.repFamily == "L1":
                                     DEBUG and print(f"      found a suitable rmsk annotation ({r}) in left mapping -> accepted.")
-                                    return m.model
+                                    return f"{r}({strand}) <- {m}"
                     else:
                         DEBUG and print(f"    - detected RIGHT dfam model {m.model} on strand {m.strand}, checking...")
                         # dont ignore strands for Alus and since these should have the same orientation
@@ -138,13 +181,13 @@ class Insertion:
                         if m.strand == "+" and self.has_left_polyA():
                             DEBUG and print(
                                 f"      found a suitable polyA in the left mapping -> accepted.")
-                            return m.model
+                            return f"polyA <- {m}"
                         # 2) same element on the other side, oriented in the same direction
                         for m2 in self.left_dfams:
                             if m2.is_active and m2.model[:3] == m.model[:3] and m2.strand == m.strand:
                                 DEBUG and print(
                                     f"      found a suitable model in the left dfams ({m2.model} on strand {m2.strand}) in the left mapping -> accepted.")
-                                return m.model
+                                return f"{m2} <- {m}"
                         # 3) match near an L1 element on the other side.
                         for pos, qual, rmsks, strand in self.left_maps:
                             for r in rmsks:
@@ -153,7 +196,7 @@ class Insertion:
                                     if (strand == "+") ^ (r.strand == "+") == (m.strand == "-"):
                                         DEBUG and print(
                                             f"      found a suitable mapping in the left dfams ({r} on strand {r.strand}, mapping is on strand {strand})-> accepted.")
-                                        return m.model
+                                        return f"{r}({strand}) <- {m}"
             for m in self.left_dfams:
                 if True or m.is_active:
                     if "L1" in m.model:
@@ -163,7 +206,7 @@ class Insertion:
                         # 1) polyA on the other side
                         if self.has_right_polyA():
                             DEBUG and print(f"      has right polyA -> accepted")
-                            return "L1"
+                            return f"{m} -> polyA"
                         # 2) L1 element on the other side
                         # ignore, already covered above.
                         # 3) match near an L1 element on the other side.
@@ -172,14 +215,14 @@ class Insertion:
                                 if r.repFamily == "L1":
                                     DEBUG and print(
                                         f"      found a suitable rmsk annotation ({r}) in right mapping -> accepted.")
-                                    return m.model
+                                    return f"{m} -> {r}({strand})"
                     else:
                         # dont ignore strands for Alus and since these should have the same orientation
                         # accept this in three conditions
                         # 1) the other side has a polyA, but only if the RTE is on reverse
                         DEBUG and print(f"    - detected left dfam model {m.model} on strand {m.strand}, checking...")
                         if m.strand == "-" and self.has_right_polyA():
-                            return m.model
+                            return f"{m} -> polyA"
                         # 2) same element on the other side, oriented in the same direction
                         # ignore, already covered above.
                         # 3) match near an L1 element on the other side.
@@ -188,7 +231,7 @@ class Insertion:
                                 if r.repName[:3] == m.model[:3]:
                                     # check same strand
                                     if (strand == "+") ^ (r.strand == "+") == (m.strand == "-"):
-                                        return m.model
+                                        return f"{m} -> {r}({strand})"
         # check elements only mapped, but not identified by dfam
         l1_map_check = False
         for pos, qual, rmsks, strand in self.left_maps:
@@ -227,6 +270,29 @@ class Insertion:
                     if self.has_left_polyA(): return r.repName
                     if r.repName[:3] in plus_elements:
                         return r.repName
+        # --- processed-pseudogene annotation (non-gating) ---
+        # A retrotransposed spliced mRNA: not an RTE (no Dfam/rmsk RTE hit above), but its
+        # clips map into exon(s) of a gene, with a poly-A tail. Checked before the SV flag
+        # because a pseudogene clip is a unique non-RTE map too — this is the more specific
+        # explanation.
+        pg = self._pseudogene()
+        if pg:
+            gene, nexon, has_polya = pg
+            detail = f"{nexon} exons" if nexon >= 2 else "1 exon + polyA"
+            return f"processed pseudogene of {gene} ({detail})"
+        # --- annotation-only non-RTE structural-variant flag (non-gating; nothing removed) ---
+        # This call could not be explained as a retrotransposition above. If NEITHER junction
+        # carries a poly-A tail AND a clip maps uniquely to a locus with no retrotransposon
+        # annotation, it looks like a rearrangement partner (a chromosomal translocation
+        # joining two loci), not an insertion. It is only FLAGGED for review, never dropped:
+        # the cross-locus pointer alone cannot separate a translocation from a single-copy RTE
+        # or a transduction, so we lean on the RTE hallmarks instead — a single-copy RTE maps
+        # to its RTE-annotated source and a transduction keeps its poly-A, so both are resolved
+        # above and never reach here.
+        if (not self.has_left_polyA() and not self.has_right_polyA()
+                and (self._maps_uniquely_to_nonrte(self.left_maps)
+                     or self._maps_uniquely_to_nonrte(self.right_maps))):
+            return 'unknown (possible non-RTE SV, e.g. translocation)'
         return 'unknown'
 
 
@@ -396,6 +462,52 @@ class VariantAnnotationContainer:
         print(f"imported {n_rmsk} rmsk entries for LINE, SINE and LTRs from {rmsk_library_path}")
         return rmsk_library
 
+    def read_exons(self, exon_path):
+        """Read a gene-exon BED (contig<TAB>start<TAB>end<TAB>gene_id, 0-based half-open;
+        plain or gzipped) into {contig: [(start, end, gene_id), ...]} sorted by start, for
+        processed-pseudogene detection. Same format as discovery Feature B's exon track."""
+        print(f"reading exon annotation {exon_path}")
+        lib = {}
+        n = 0
+        opener = gzip.open if str(exon_path).endswith(".gz") else open
+        with opener(exon_path, 'rt') as fh:
+            for line in fh:
+                line = line.rstrip("\n")
+                if not line or line[0] == '#':
+                    continue
+                f = line.split("\t")
+                if len(f) < 4:
+                    continue
+                contig, start, end, gene = f[0], int(f[1]), int(f[2]), f[3]
+                lib.setdefault(contig, []).append((start, end, gene))
+                n += 1
+        for contig in lib:
+            lib[contig].sort()
+        print(f"imported {n} exons for {len(lib)} contigs from {exon_path}")
+        return lib
+
+    def get_exon(self, exon_library: dict, pos: tuple, pad: int = 100) -> list:
+        """Exons overlapping the mapped clip position (+/- pad). Returns (gene, start, end)."""
+        seqname, p = pos
+        exons = exon_library.get(seqname)
+        if not exons:
+            return []
+        lo, hi = 0, len(exons)
+        while lo < hi - 1:                       # binary search to the neighbourhood by start
+            mid = (lo + hi) // 2
+            if exons[mid][0] < p - 500:
+                lo = mid
+            else:
+                hi = mid
+        out = []
+        for i in range(lo, len(exons)):
+            s, e, gene = exons[i]
+            if s > p + pad:
+                break
+            if e >= p - pad:                     # exon interval overlaps [p-pad, p+pad]
+                out.append((gene, s, e))
+        return out
+
     def get_rmsk(self, rmsk_library: dict[str, RepeatMasker_Annotation], pos: tuple[str, int, str]) -> list[RepeatMasker_Annotation]:
         seqname, start = pos
         if not seqname in rmsk_library.keys():
@@ -414,10 +526,10 @@ class VariantAnnotationContainer:
         for lpos in range(lpos, len(rmsk_library[seqname])):
             if rmsk_library[seqname][lpos].start > start+8500: continue
             delta_start = rmsk_library[seqname][lpos].start - start
-            if delta_start > 500: continue
+            if delta_start > 100: continue
             delta_end = rmsk_library[seqname][lpos].end - start
-            if delta_end < -500: continue
-            if delta_end > -500 and delta_start < 500:
+            if delta_end < -100: continue
+            if delta_end > -100 and delta_start < 100:
                 output.append(rmsk_library[seqname][lpos])
         return output
 
@@ -437,6 +549,8 @@ class VariantAnnotationContainer:
         #    lo = None
         lo = None
         rmsk_library = self.read_rmsk(CONFIG['annotate']['rmsk'])
+        exon_path = CONFIG['annotate'].get('exon_annotation')
+        exon_library = self.read_exons(exon_path) if exon_path else {}
 
         rightn = 0
         leftn = 0
@@ -447,10 +561,13 @@ class VariantAnnotationContainer:
                 #if read.is_supplementary: continue
                 if read.is_unmapped: continue
                 local_rmsks = None
+                local_exons = []
                 insertion = read.query_name[:-2]
                 if not insertion in self.insertions.keys(): continue
                 if (read.query_name[-1] == "R") ^ read.is_forward:
                     local_rmsks = self.get_rmsk(rmsk_library, (read.reference_name, read.reference_start))
+                    if exon_library:
+                        local_exons = self.get_exon(exon_library, (read.reference_name, read.reference_start))
                     if lo is not None:
                         co = lo.convert_coordinate(read.reference_name, read.reference_start,
                                                    '+' if read.is_forward else '-')
@@ -458,6 +575,8 @@ class VariantAnnotationContainer:
                         co = [(read.reference_name, read.reference_start, '+' if read.is_forward else '-')]
                 else:
                     local_rmsks = self.get_rmsk(rmsk_library, (read.reference_name, read.reference_end))
+                    if exon_library:
+                        local_exons = self.get_exon(exon_library, (read.reference_name, read.reference_end))
                     if lo is not None:
                         co = lo.convert_coordinate(read.reference_name, read.reference_end,
                                                    '+' if read.is_forward else '-')
@@ -467,10 +586,14 @@ class VariantAnnotationContainer:
                     if read.query_name[-1] == "R":
                         rightn += 1
                         self.insertions[insertion].right_maps.append((f"{co[0][0]}:{co[0][1]}{co[0][2]}", read.mapping_quality, local_rmsks, co[0][2]))
+                        if read.mapping_quality >= 20:  # exon hits only from confidently-placed clips
+                            self.insertions[insertion].right_exons.extend(local_exons)
                     elif read.query_name[-1] == "L":
                         leftn += 1
                         self.insertions[insertion].left_maps.append((f"{co[0][0]}:{co[0][1]}{co[0][2]}", read.mapping_quality, local_rmsks,
                                                                         co[0][2]))
+                        if read.mapping_quality >= 20:
+                            self.insertions[insertion].left_exons.extend(local_exons)
                     else:
                         raise ValueError(f"Unknown insertion side {read.query_name}, expected R or L.")
         print(f"imported {rightn} right mappings and {leftn} left mappings.")
