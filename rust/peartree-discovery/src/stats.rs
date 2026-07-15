@@ -26,6 +26,12 @@ pub struct SideStats {
 pub struct Stats {
     pub left: SideStats,
     pub right: SideStats,
+    // Feature A discordant-anchor counters (global, not per-side). All 0 unless
+    // `discordant_anchor` is on, so the default sidecar gains only zero-valued keys.
+    pub disc_obs: u64,
+    pub disc_clusters: u64,
+    pub disc_paired: u64,
+    pub disc_rejected_rte: u64,
 }
 
 impl Stats {
@@ -50,14 +56,28 @@ impl Stats {
             dst.polymer += src.polymer;
             dst.passed += src.passed;
         }
+        self.disc_obs += other.disc_obs;
+        self.disc_clusters += other.disc_clusters;
+        self.disc_paired += other.disc_paired;
+        self.disc_rejected_rte += other.disc_rejected_rte;
     }
 
-    /// Serialise to JSON. Field names match the Python keys exactly (incl. `rescued_pA`).
+    /// Serialise to JSON. The `left`/`right` field names match the Python keys
+    /// exactly (incl. `rescued_pA`); the `discordant` block is a Rust-only addition
+    /// for Feature A (Python has no equivalent), zero-valued unless enabled.
     pub fn to_json(&self) -> String {
         format!(
-            "{{\n  \"left\": {},\n  \"right\": {}\n}}\n",
+            "{{\n  \"left\": {},\n  \"right\": {},\n  \"discordant\": {}\n}}\n",
             side_json(&self.left),
-            side_json(&self.right)
+            side_json(&self.right),
+            self.discordant_json()
+        )
+    }
+
+    fn discordant_json(&self) -> String {
+        format!(
+            "{{\"obs\": {}, \"clusters\": {}, \"paired\": {}, \"rejected_rte\": {}}}",
+            self.disc_obs, self.disc_clusters, self.disc_paired, self.disc_rejected_rte
         )
     }
 }

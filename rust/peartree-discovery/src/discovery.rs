@@ -32,6 +32,24 @@ enum Emit<'a> {
     Pa(&'a PolyABreakpoint),
 }
 
+/// Feature A: one discordant read-pair observation — a confidently-placed anchor
+/// read whose mate is discordant (different contig, or far away on the same one).
+/// Its innermost coordinate votes for an insertion breakpoint on the given `role`
+/// side (a forward anchor bounds the insertion on its right → fills the LEFT/smaller
+/// coordinate; a reverse anchor → the RIGHT/larger coordinate). `mate_ref_id`/
+/// `mate_pos` record where the mate landed, for the D3 RTE-origin check.
+// Fields are populated here (D1) and consumed by the clustering / rescue (D2) and
+// the mate-origin RTE check (D3); allow the interim dead-code until those land.
+#[derive(Clone)]
+#[allow(dead_code)]
+struct DiscordantObs {
+    contig: String,
+    role: i32, // CLIP_LEFT or CLIP_RIGHT
+    pos: i64,
+    mate_ref_id: Option<usize>,
+    mate_pos: i64,
+}
+
 /// Open the BAM as a record reader. With `bam_threads > 1` the BGZF blocks are
 /// decoded on a worker pool (SPD-2); otherwise the single-threaded decoder is used,
 /// preserving the documented single-core footprint. Both yield identical records in
@@ -113,6 +131,9 @@ pub struct Discovery {
     /// SPD-3: when set, extract_chimeric processes only this contig (indexed fetch).
     /// Used by the parallel per-contig workers; None = the full single-threaded scan.
     only_contig: Option<usize>,
+    /// Feature A: discordant read-pair observations collected during the scan (only
+    /// when `discordant_anchor` is on). Persist across contigs like `polya`.
+    discordant_obs: Vec<DiscordantObs>,
     stats: Stats,
     bam_threads: usize, // BGZF decode workers (SPD-2); 1 = single-threaded
 }
@@ -139,6 +160,7 @@ impl Discovery {
             coverage,
             mate_coords: FxHashMap::default(),
             only_contig: None,
+            discordant_obs: Vec::new(),
             stats: Stats::default(),
             bam_threads: bam_threads.max(1),
         }
@@ -392,6 +414,39 @@ impl Discovery {
         if !self.contig_ok_extract(ref_name) {
             return Ok(());
         }
+
+        // Feature A: collect a discordant read-pair observation from this primary,
+        // high-MAPQ, contig-OK anchor. Discordant = paired-but-not-proper with a
+        // mapped mate on a different contig, or far away on the same one (mate strand
+        // is not in the record, so the non-FR criterion is intentionally omitted).
+        // Independent of the clip logic below, so a read may also become a breakpoint.
+        if self.config.discordant_anchor
+            && !read.is_proper_pair
+            && read.mate_is_mapped
+            && !read.is_supplementary
+        {
+            if let Some(mref) = read.mate_ref_id {
+                let same_contig = read.reference_sequence_id == read.mate_ref_id;
+                let discordant = !same_contig
+                    || (read.mate_pos - read.reference_start).abs() > self.config.discordant_max_tlen;
+                if discordant && read.mate_pos >= 0 {
+                    let (role, pos) = if read.is_reverse {
+                        (CLIP_RIGHT, read.reference_start)
+                    } else {
+                        (CLIP_LEFT, read.reference_end)
+                    };
+                    self.discordant_obs.push(DiscordantObs {
+                        contig: ref_name.to_string(),
+                        role,
+                        pos,
+                        mate_ref_id: Some(mref),
+                        mate_pos: read.mate_pos,
+                    });
+                    self.stats.disc_obs += 1;
+                }
+            }
+        }
+
         if !read.has_cigar {
             return Ok(());
         }
@@ -776,6 +831,7 @@ impl Discovery {
             for (k, v) in w.mate_coords {
                 self.mate_coords.insert(k, v);
             }
+            self.discordant_obs.append(&mut w.discordant_obs);
         }
         self.find_mates()
     }
