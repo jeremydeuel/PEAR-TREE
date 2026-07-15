@@ -38,9 +38,16 @@ of these are one-liners or deletions of code that currently does nothing.
   the documented single-core footprint; raise it together with `cpus-per-task`).
 - [x] **Rewrite `revcomp`** (`src/revcomp.py`) with a `str.translate` table +
   `[::-1]`. Verified equivalent on 5k random cases; ~18× faster on 150 bp reads.
-- [ ] **Cut `QualitySeq` allocation churn.** _Deferred within Stage 1:_ higher
-  risk (touches every slice/add/revcomp), warrants its own measured change.
-  Store quality as `bytes`/`bytearray`, slice lazily, drop redundant `.upper()`.
+- [x] **Cut `QualitySeq` allocation churn.** Kept the **list** backing (consensus
+  scores exceed the 0-255 phred range, and — measured — an `array('i')` backing
+  was ~2× *slower* to build at read length, so `bytes`/`array` were rejected).
+  Instead: store the quality list by reference instead of copying it on every
+  slice/upper/revcomp result (only copy when handed a non-list such as pysam's
+  `array('B')`); short-circuit `upper()`/`lower()` when the sequence is already
+  in case; reverse with `[::-1]`. ~1.4× faster on the read-length hot path.
+  Verified behaviourally identical to the original across 20k randomised cases
+  (incl. out-of-phred-range scores and empty seqs); discovery output and the
+  genotype call remain byte-identical.
 
 ### 1.2 Kill debug overhead in the hot path
 - [x] **Gate `DEBUG`** behind `PEARTREE_DEBUG` (default off) in `discovery.py`,
