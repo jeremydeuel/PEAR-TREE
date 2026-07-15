@@ -12,6 +12,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::config::*;
 use crate::coverage::Coverage;
+use crate::exons::GeneModel;
 use crate::filters::{clean_clipped_seq, is_adapter};
 use crate::intervals::IntervalIndex;
 use crate::model::{join, Breakpoint};
@@ -155,6 +156,9 @@ pub struct Discovery {
     /// D3: RTE track for the mate-origin check (from `discordant_rte_track`). Set on
     /// the parent only (clustering runs after the SPD-3 merge); workers leave it None.
     discordant_rte: Option<IntervalIndex>,
+    /// D5: exon model for the splice / processed-pseudogene annotation (from
+    /// `exon_annotation`). Parent only; consumed by `splice_annotate`.
+    exon_model: Option<GeneModel>,
     stats: Stats,
     bam_threads: usize, // BGZF decode workers (SPD-2); 1 = single-threaded
 }
@@ -184,6 +188,7 @@ impl Discovery {
             discordant_obs: Vec::new(),
             discordant_clusters: Vec::new(),
             discordant_rte: None,
+            exon_model: None,
             stats: Stats::default(),
             bam_threads: bam_threads.max(1),
         }
@@ -257,6 +262,107 @@ impl Discovery {
     /// D3: install the RTE track used for the discordant mate-origin check.
     pub fn set_discordant_rte(&mut self, ix: Option<IntervalIndex>) {
         self.discordant_rte = ix;
+    }
+
+    /// D5: install the exon model used for the splice / pseudogene annotation.
+    pub fn set_exon_model(&mut self, m: Option<GeneModel>) {
+        self.exon_model = m;
+    }
+
+    /// True if a breakpoint at (rn, pos) would survive the output-time masks
+    /// (contig-OK + SPEC-5/3/7), i.e. it is actually emitted.
+    fn bp_visible(&self, rn: &str, pos: i64) -> bool {
+        if !self.contig_ok_output(rn) || self.excluded(rn, pos) {
+            return false;
+        }
+        if self.config.coverage_mask && self.coverage.median() > 0.0 {
+            let thr = self.config.coverage_mask_multiplier * self.coverage.median();
+            if self.coverage.local(rn, pos) as f64 > thr {
+                return false;
+            }
+        }
+        if let Some(rm) = &self.rm_mask {
+            if rm.contains(rn, pos) {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// D5 (Feature B): scan output-visible breakpoints for the processed-pseudogene
+    /// signature — mates hitting >= `splice_min_exons` distinct exons of one gene while
+    /// skipping the introns between them — and return the `<out>.splice.tsv` body
+    /// (empty unless `splice_hallmark` is on with an exon model). Non-gating: the main
+    /// output is untouched.
+    pub fn splice_annotate(&self) -> io::Result<Vec<u8>> {
+        let mut buf: Vec<u8> = Vec::new();
+        if !self.config.splice_hallmark {
+            return Ok(buf);
+        }
+        let Some(model) = &self.exon_model else { return Ok(buf) };
+        let names = self.reference_names().unwrap_or_default();
+        writeln!(buf, "contig\tbreakpoint\tside\tgene\tn_exons\tintron_bp\tspan_bp")?;
+        for (side, bps) in [("LEFT", &self.final_left_breakpoints), ("RIGHT", &self.final_right_breakpoints)] {
+            for bp in bps.iter() {
+                if !self.bp_visible(&bp.reference_name, bp.breakpoint) {
+                    continue;
+                }
+                self.splice_row(&mut buf, model, &names, side, bp)?;
+            }
+        }
+        Ok(buf)
+    }
+
+    /// Emit a splice row for one breakpoint if its mate destinations span multiple
+    /// exons of a single gene with an intron skipped.
+    fn splice_row(&self, buf: &mut Vec<u8>, model: &GeneModel, names: &[String], side: &str, bp: &Breakpoint) -> io::Result<()> {
+        // per gene: distinct exon ranks hit, and the min-begin / max-end / summed
+        // exon length over those exons.
+        struct GeneHit {
+            ranks: FxHashSet<usize>,
+            min_begin: i64,
+            max_end: i64,
+            exon_len: FxHashMap<usize, i64>,
+        }
+        let mut genes: FxHashMap<String, GeneHit> = FxHashMap::default();
+        for &(mref, mpos) in &bp.mate_dests {
+            let Some(id) = mref else { continue };
+            let Some(name) = names.get(id) else { continue };
+            if let Some(exon) = model.lookup(name, mpos) {
+                let g = genes.entry(exon.gene.clone()).or_insert_with(|| GeneHit {
+                    ranks: FxHashSet::default(),
+                    min_begin: i64::MAX,
+                    max_end: i64::MIN,
+                    exon_len: FxHashMap::default(),
+                });
+                g.ranks.insert(exon.rank);
+                g.min_begin = g.min_begin.min(exon.begin);
+                g.max_end = g.max_end.max(exon.end);
+                g.exon_len.insert(exon.rank, exon.end - exon.begin);
+            }
+        }
+        for (gene, h) in genes {
+            if h.ranks.len() < self.config.splice_min_exons {
+                continue;
+            }
+            let span = h.max_end - h.min_begin;
+            let summed: i64 = h.exon_len.values().sum();
+            // intron skipped: the genomic span exceeds the summed exon lengths.
+            if span > summed {
+                writeln!(
+                    buf,
+                    "{}\t{}\t{}\t{}\t{}\t{}\t{}",
+                    bp.reference_name,
+                    bp.breakpoint,
+                    side,
+                    gene,
+                    h.ranks.len(),
+                    span - summed,
+                    span
+                )?;
+            }
+        }
+        Ok(())
     }
 
     /// Contig filter for the read-scan (extract_chimeric). With an allowlist set the

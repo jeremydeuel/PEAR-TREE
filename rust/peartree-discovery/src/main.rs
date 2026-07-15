@@ -5,6 +5,7 @@
 mod config;
 mod coverage;
 mod discovery;
+mod exons;
 mod filters;
 mod intervals;
 mod model;
@@ -157,8 +158,25 @@ fn main() -> io::Result<()> {
         std::process::exit(1);
     }
 
+    // D5: build the exon model for the splice / processed-pseudogene annotation.
+    let exon_model = match (config.splice_hallmark, config.exon_annotation.as_deref()) {
+        (true, Some(p)) => match exons::GeneModel::load(p) {
+            Ok(m) => Some(m),
+            Err(e) => {
+                eprintln!("cannot read exon_annotation {p}: {e}");
+                std::process::exit(1);
+            }
+        },
+        (true, None) => {
+            eprintln!("splice_hallmark is on but exon_annotation is not set");
+            std::process::exit(1);
+        }
+        _ => None,
+    };
+
     let mut d = Discovery::new(bam, threads, config, exclude, rm_mask);
     d.set_discordant_rte(discordant_rte);
+    d.set_exon_model(exon_model);
     d.discovery()?;
 
     let file = File::create(&out)?;
@@ -180,6 +198,14 @@ fn main() -> io::Result<()> {
         let hm_path = format!("{out}.hallmarks.tsv");
         std::fs::write(&hm_path, &hallmarks)?;
         eprintln!("hallmarks: {hm_path}");
+    }
+
+    // D5: splice / processed-pseudogene annotation sidecar (only when enabled).
+    let splice = d.splice_annotate()?;
+    if !splice.is_empty() {
+        let sp_path = format!("{out}.splice.tsv");
+        std::fs::write(&sp_path, &splice)?;
+        eprintln!("splice: {sp_path}");
     }
 
     eprintln!("done.");
