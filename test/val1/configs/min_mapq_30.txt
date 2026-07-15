@@ -1,0 +1,2 @@
+# lower anchor MAPQ floor (SENS-2-style lever; real key)
+min_mapq = 30

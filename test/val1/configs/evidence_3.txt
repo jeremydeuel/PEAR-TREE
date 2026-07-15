@@ -1,0 +1,2 @@
+# stricter evidence floor
+min_evidence_reads_per_breakpoint = 3
