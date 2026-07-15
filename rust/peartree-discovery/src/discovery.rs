@@ -1,9 +1,12 @@
 //! Port of src/discovery.py (Discovery).
 
-use std::collections::{HashMap, HashSet};
-use std::io::{self, Write};
+use std::fs::File;
+use std::io::{self, Read, Write};
+use std::num::NonZeroUsize;
 
 use noodles_bam as bam;
+use noodles_bgzf as bgzf;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::config::*;
 use crate::filters::{clean_clipped_seq, is_adapter};
@@ -11,6 +14,7 @@ use crate::model::{join, Breakpoint};
 use crate::polya::PolyABreakpoint;
 use crate::qseq::{revcomp_bytes, QualitySeq};
 use crate::read::BamRead;
+use crate::stats::Stats;
 
 #[derive(Clone, Copy)]
 enum BpRef {
@@ -22,6 +26,21 @@ enum BpRef {
 enum Emit<'a> {
     Bp(&'a Breakpoint),
     Pa(&'a PolyABreakpoint),
+}
+
+/// Open the BAM as a record reader. With `bam_threads > 1` the BGZF blocks are
+/// decoded on a worker pool (SPD-2); otherwise the single-threaded decoder is used,
+/// preserving the documented single-core footprint. Both yield identical records in
+/// identical order, so output stays byte-identical.
+fn open_bam(path: &str, bam_threads: usize) -> io::Result<bam::io::Reader<Box<dyn Read>>> {
+    let file = File::open(path)?;
+    let inner: Box<dyn Read> = if bam_threads > 1 {
+        let wc = NonZeroUsize::new(bam_threads).unwrap_or(NonZeroUsize::MIN);
+        Box::new(bgzf::io::MultithreadedReader::with_worker_count(wc, file))
+    } else {
+        Box::new(bgzf::io::Reader::new(file))
+    };
+    Ok(bam::io::Reader::from(inner))
 }
 
 /// True if an alternative-alignment CIGAR (XA or SA tag) covers essentially the
@@ -53,9 +72,9 @@ fn alt_is_full_length(cigar: &str) -> bool {
 
 /// True if the read has any XA/SA alternative alignment spanning the whole read.
 /// Such reads map contiguously elsewhere and are not genuine junctions.
-fn maps_fully_elsewhere(read: &BamRead) -> bool {
+fn maps_fully_elsewhere(read: &BamRead<'_>) -> bool {
     // (tag string, index of the CIGAR field within a comma-separated entry)
-    for (tag, cigar_idx) in [(&read.xa, 2usize), (&read.sa, 3usize)] {
+    for (tag, cigar_idx) in [(read.xa(), 2usize), (read.sa(), 3usize)] {
         if let Some(s) = tag {
             for entry in s.split(';') {
                 if entry.is_empty() {
@@ -78,12 +97,13 @@ pub struct Discovery {
     polya: Vec<PolyABreakpoint>,
     reference_name: Option<String>,
     filepath: String,
-    #[allow(dead_code)]
-    bam_threads: usize, // reserved for Stage 2 multithreaded BGZF decode
+    config: DiscoveryConfig,
+    stats: Stats,
+    bam_threads: usize, // BGZF decode workers (SPD-2); 1 = single-threaded
 }
 
 impl Discovery {
-    pub fn new(filepath: String, bam_threads: usize) -> Self {
+    pub fn new(filepath: String, bam_threads: usize, config: DiscoveryConfig) -> Self {
         Discovery {
             temporary_breakpoints: Vec::new(),
             final_left_breakpoints: Vec::new(),
@@ -91,8 +111,15 @@ impl Discovery {
             polya: Vec::new(),
             reference_name: None,
             filepath,
+            config,
+            stats: Stats::default(),
             bam_threads: bam_threads.max(1),
         }
+    }
+
+    /// OBS-1 reject-counter sidecar, serialised as JSON.
+    pub fn stats_json(&self) -> String {
+        self.stats.to_json()
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -128,6 +155,8 @@ impl Discovery {
         if self.temporary_breakpoints.is_empty() {
             return;
         }
+        // clone once so we can read config while mutating self.final_* below
+        let cfg = self.config.clone();
         let mut left_bps: Vec<Breakpoint> = Vec::new();
         let mut right_bps: Vec<Breakpoint> = Vec::new();
         for bp in self.temporary_breakpoints.drain(..) {
@@ -149,7 +178,7 @@ impl Discovery {
             let mut current: Vec<Breakpoint> = Vec::new();
             for bp in side_bps {
                 if let Some(last) = current.last() {
-                    if (bp.breakpoint - last.breakpoint).abs() < 6 {
+                    if (bp.breakpoint - last.breakpoint).abs() < cfg.cluster_window {
                         current.push(bp);
                         continue;
                     } else {
@@ -162,7 +191,7 @@ impl Discovery {
                 groups.push(current);
             }
             for g in groups {
-                if let Some(joined) = join(g) {
+                if let Some(joined) = join(g, &cfg, &mut self.stats) {
                     if out {
                         self.final_left_breakpoints.push(joined);
                     } else {
@@ -174,15 +203,17 @@ impl Discovery {
     }
 
     pub fn extract_chimeric(&mut self) -> io::Result<()> {
-        let mut reader = bam::io::reader::Builder::default().build_from_path(&self.filepath)?;
+        let mut reader = open_bam(&self.filepath, self.bam_threads)?;
         let header = reader.read_header()?;
-        let reject_fullmap = reject_fully_mapping_reads();
+        let reject_fullmap = self.config.reject_fully_mapping_reads;
+        let min_mapq = self.config.min_mapq;
         self.reference_name = None;
-        for result in reader.records() {
-            let record = result?;
+        let mut current_ref_id: Option<usize> = None;
+        let mut record = bam::Record::default();
+        while reader.read_record(&mut record)? != 0 {
             let read = BamRead::from_record(&record, &header)?;
 
-            if read.mapq < MIN_MAPQ {
+            if read.mapq < min_mapq {
                 if let Some(b) = PolyABreakpoint::find_polya(&read) {
                     self.polya.push(b);
                 }
@@ -191,14 +222,18 @@ impl Discovery {
             if read.is_secondary || read.is_qcfail || read.is_duplicate {
                 continue;
             }
-            let ref_name = match &read.reference_name {
-                Some(r) => r.clone(),
+            // SPD-5a: detect contig change by integer reference id; resolve the name
+            // string only when it changes, not for every read.
+            let ref_id = match read.reference_sequence_id {
+                Some(id) => id,
                 None => continue, // high-mapq unmapped: skip (would crash pysam)
             };
-            if self.reference_name.as_deref() != Some(ref_name.as_str()) {
+            if current_ref_id != Some(ref_id) {
                 self.cleanup();
-                self.reference_name = Some(ref_name.clone());
+                current_ref_id = Some(ref_id);
+                self.reference_name = read.reference_name();
             }
+            let ref_name = self.reference_name.as_deref().unwrap_or_default();
             if ref_name.len() > 5 {
                 continue;
             }
@@ -241,7 +276,7 @@ impl Discovery {
             // cruciform / short-indel exclusion via SA tag
             let mut exclude_flag = false;
             if read.is_supplementary {
-                if let Some(sa) = &read.sa {
+                if let Some(sa) = read.sa() {
                     for part in sa.split(';') {
                         if part.is_empty() {
                             continue;
@@ -249,7 +284,7 @@ impl Discovery {
                         let fields: Vec<&str> = part.split(',').collect();
                         if fields.len() >= 2 && fields[0] == ref_name {
                             if let Ok(start) = fields[1].parse::<i64>() {
-                                if (read.reference_start - start).abs() < EXCLUDE_SAME_CONTIG_SUPPLEMENTARY {
+                                if (read.reference_start - start).abs() < self.config.exclude_same_contig_supplementary {
                                     exclude_flag = true;
                                 }
                             }
@@ -258,12 +293,15 @@ impl Discovery {
                 }
             }
 
-            let full = QualitySeq::new(read.seq.clone(), read.qual.clone());
-            let n = read.seq.len();
+            // surviving clip candidate: now decode the heavy fields (SPD-1).
+            let seq = read.seq();
+            let qname = read.query_name();
+            let full = QualitySeq::new(seq.clone(), read.qual());
+            let n = seq.len();
 
             if clip == CLIP_LEFT {
                 // adapter check on the last MIN_CLIP_LEN of the clipped part, revcomped
-                let clip_part = &read.seq[..left_len];
+                let clip_part = &seq[..left_len];
                 let sub = &clip_part[clip_part.len().saturating_sub(MIN_CLIP_LEN)..];
                 if is_adapter(&revcomp_bytes(sub)) {
                     continue;
@@ -274,10 +312,10 @@ impl Discovery {
                 } else {
                     full.pyslice(Some(left_len as isize), None)
                 };
-                self.add_breakpoint(clip, read.reference_start, &read.query_name, clipped, unclipped, read.is_read1, read.is_forward(), exclude_flag);
+                self.add_breakpoint(clip, read.reference_start, &qname, clipped, unclipped, read.is_read1, read.is_forward(), exclude_flag);
             } else {
                 // CLIP_RIGHT: adapter check on the first MIN_CLIP_LEN of the clipped part
-                let clip_part = &read.seq[n - right_len..];
+                let clip_part = &seq[n - right_len..];
                 let sub = &clip_part[..clip_part.len().min(MIN_CLIP_LEN)];
                 if is_adapter(sub) {
                     continue;
@@ -288,17 +326,17 @@ impl Discovery {
                 } else {
                     full.pyslice(None, Some(-(right_len as isize)))
                 };
-                self.add_breakpoint(clip, read.reference_end, &read.query_name, clipped, unclipped, read.is_read1, read.is_forward(), exclude_flag);
+                self.add_breakpoint(clip, read.reference_end, &qname, clipped, unclipped, read.is_read1, read.is_forward(), exclude_flag);
             }
         }
         self.cleanup();
         Ok(())
     }
 
-    fn get_mates(&self) -> (HashSet<String>, HashSet<String>, HashMap<String, BpRef>) {
-        let mut read1_bp: HashSet<String> = HashSet::new();
-        let mut read2_bp: HashSet<String> = HashSet::new();
-        let mut qmap: HashMap<String, BpRef> = HashMap::new();
+    fn get_mates(&self) -> (FxHashSet<String>, FxHashSet<String>, FxHashMap<String, BpRef>) {
+        let mut read1_bp: FxHashSet<String> = FxHashSet::default();
+        let mut read2_bp: FxHashSet<String> = FxHashSet::default();
+        let mut qmap: FxHashMap<String, BpRef> = FxHashMap::default();
 
         for (idx, bp) in self.final_left_breakpoints.iter().enumerate() {
             for (read_1, qname) in &bp.mates {
@@ -331,7 +369,7 @@ impl Discovery {
                 read1_bp.insert(pa.qname.clone());
             }
         }
-        let union: HashSet<String> = read1_bp.intersection(&read2_bp).cloned().collect();
+        let union: FxHashSet<String> = read1_bp.intersection(&read2_bp).cloned().collect();
         for q in &union {
             read1_bp.remove(q);
             read2_bp.remove(q);
@@ -341,28 +379,31 @@ impl Discovery {
 
     pub fn find_mates(&mut self) -> io::Result<()> {
         let (read1_mates, read2_mates, qmap) = self.get_mates();
-        let mut reader = bam::io::reader::Builder::default().build_from_path(&self.filepath)?;
+        let min_mapq = self.config.min_mapq;
+        let mut reader = open_bam(&self.filepath, self.bam_threads)?;
         let _header = reader.read_header()?;
-        for result in reader.records() {
-            let record = result?;
+        let mut record = bam::Record::default();
+        while reader.read_record(&mut record)? != 0 {
             let read = BamRead::from_record(&record, &_header)?;
             if read.is_secondary || read.is_qcfail || read.is_duplicate {
                 continue;
             }
+            // query_name is needed for every read (membership check), so decode it here.
+            let qname = read.query_name();
             if read.is_read1 {
-                if !read1_mates.contains(&read.query_name) {
+                if !read1_mates.contains(&qname) {
                     continue;
                 }
-            } else if !read2_mates.contains(&read.query_name) {
+            } else if !read2_mates.contains(&qname) {
                 continue;
             }
-            let Some(&bpref) = qmap.get(&read.query_name) else { continue };
+            let Some(&bpref) = qmap.get(&qname) else { continue };
             match bpref {
                 BpRef::PolyA(i) => {
-                    self.polya[i].set_mate(&read);
+                    self.polya[i].set_mate(&read, min_mapq);
                 }
                 BpRef::Left(i) | BpRef::Right(i) => {
-                    let seq = clean_clipped_seq(&QualitySeq::new(read.seq.clone(), read.qual.clone()));
+                    let seq = clean_clipped_seq(&QualitySeq::new(read.seq(), read.qual()));
                     let seq = if read.is_forward() { seq } else { seq.revcomp() };
                     let bp = match bpref {
                         BpRef::Left(_) => &mut self.final_left_breakpoints[i],
@@ -387,7 +428,7 @@ impl Discovery {
     pub fn output<W: Write>(&self, writer: &mut W) -> io::Result<()> {
         // group by reference, preserving the Python dict-key ordering of polyA
         let mut polya_order: Vec<String> = Vec::new();
-        let mut polya_map: HashMap<String, Vec<usize>> = HashMap::new();
+        let mut polya_map: FxHashMap<String, Vec<usize>> = FxHashMap::default();
         for (i, pa) in self.polya.iter().enumerate() {
             let (rn, bp) = (pa.reference_name.as_ref(), pa.breakpoint);
             let (Some(rn), Some(_)) = (rn, bp) else { continue };
@@ -397,11 +438,11 @@ impl Discovery {
             }
             polya_map.get_mut(rn).unwrap().push(i);
         }
-        let mut left_map: HashMap<String, Vec<usize>> = HashMap::new();
+        let mut left_map: FxHashMap<String, Vec<usize>> = FxHashMap::default();
         for (i, bp) in self.final_left_breakpoints.iter().enumerate() {
             left_map.entry(bp.reference_name.clone()).or_default().push(i);
         }
-        let mut right_map: HashMap<String, Vec<usize>> = HashMap::new();
+        let mut right_map: FxHashMap<String, Vec<usize>> = FxHashMap::default();
         for (i, bp) in self.final_right_breakpoints.iter().enumerate() {
             right_map.entry(bp.reference_name.clone()).or_default().push(i);
         }
@@ -440,22 +481,22 @@ impl Discovery {
             let (mut il, mut ir, mut ip) = (0usize, 0usize, 0usize);
             while il < l.len() && ir < r.len() {
                 let tsd = r[ir].breakpoint - l[il].breakpoint;
-                if tsd < 2 {
-                    while ip < p.len() && p[ip].breakpoint.unwrap() - l[il].breakpoint < 12 {
+                if tsd < self.config.tsd_min {
+                    while ip < p.len() && p[ip].breakpoint.unwrap() - l[il].breakpoint < self.config.polya_near_dist {
                         ip += 1;
                     }
-                    if ip != p.len() && p[ip].breakpoint.unwrap() - l[il].breakpoint < 120 && p[ip].clip == CLIP_RIGHT {
+                    if ip != p.len() && p[ip].breakpoint.unwrap() - l[il].breakpoint < self.config.polya_far_dist && p[ip].clip == CLIP_RIGHT {
                         print_output(writer, Emit::Bp(l[il]), Emit::Pa(p[ip]))?;
                         il += 1;
                         continue;
                     }
                     ir += 1;
                     continue;
-                } else if tsd > 40 {
-                    while ip < p.len() && r[ir].breakpoint - p[ip].breakpoint.unwrap() > 120 {
+                } else if tsd > self.config.tsd_max {
+                    while ip < p.len() && r[ir].breakpoint - p[ip].breakpoint.unwrap() > self.config.polya_far_dist {
                         ip += 1;
                     }
-                    if ip != p.len() && r[ir].breakpoint - p[ip].breakpoint.unwrap() > 12 && p[ip].clip == CLIP_LEFT {
+                    if ip != p.len() && r[ir].breakpoint - p[ip].breakpoint.unwrap() > self.config.polya_near_dist && p[ip].clip == CLIP_LEFT {
                         print_output(writer, Emit::Pa(p[ip]), Emit::Bp(r[ir]))?;
                         ir += 1;
                         continue;

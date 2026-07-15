@@ -1,5 +1,10 @@
-//! A decoded BAM record with exactly the fields the discovery logic uses,
-//! decoupled from noodles. Flag semantics mirror pysam.
+//! A decoded BAM record exposing exactly the fields the discovery logic uses.
+//!
+//! Cheap fields (flags, mapq, reference id, cigar-derived positions/clips) are
+//! decoded eagerly in `from_record`. The heavy fields — sequence, qualities, name,
+//! SA/XA tags, and the contig name — are decoded on demand via accessor methods
+//! (SPD-1 lazy decode), so the ~majority of reads that never become a clip
+//! candidate never pay for those allocations. Flag semantics mirror pysam.
 
 use noodles_bam::Record;
 use noodles_sam::alignment::record::cigar::op::Kind;
@@ -18,8 +23,12 @@ const FLAG_QCFAIL: u16 = 0x200;
 const FLAG_DUPLICATE: u16 = 0x400;
 const FLAG_SUPPLEMENTARY: u16 = 0x800;
 
-pub struct BamRead {
-    pub reference_name: Option<String>,
+pub struct BamRead<'a> {
+    record: &'a Record,
+    header: &'a Header,
+    /// index into the header's reference sequences (SPD-5a: compare by id, resolve
+    /// the contig name string only when it changes)
+    pub reference_sequence_id: Option<usize>,
     pub mapped: bool,
     pub reference_start: i64, // 0-based
     pub reference_end: i64,   // 0-based, exclusive
@@ -33,33 +42,26 @@ pub struct BamRead {
     pub is_supplementary: bool,
     pub is_proper_pair: bool,
     pub mate_is_mapped: bool,
-    pub query_name: String,
-    pub seq: Vec<u8>,
-    pub qual: Vec<i32>,
     pub has_cigar: bool,
     pub left_is_soft: bool,
     pub left_len: usize,
     pub right_is_soft: bool,
     pub right_len: usize,
-    pub sa: Option<String>,
-    pub xa: Option<String>,
 }
 
-impl BamRead {
+impl<'a> BamRead<'a> {
     #[inline]
     pub fn is_forward(&self) -> bool {
         !self.is_reverse
     }
 
-    pub fn from_record(record: &Record, header: &Header) -> io::Result<BamRead> {
+    /// Decode only the cheap fields. Sequence/qualities/name/tags/contig-name are
+    /// left to the accessor methods below.
+    pub fn from_record(record: &'a Record, header: &'a Header) -> io::Result<BamRead<'a>> {
         let flags = u16::from(record.flags());
         let mapped = flags & FLAG_UNMAPPED == 0;
 
-        let refs = header.reference_sequences();
-        let rid = record.reference_sequence_id().transpose()?;
-        let reference_name = rid
-            .and_then(|id| refs.get_index(id))
-            .map(|(name, _)| String::from_utf8_lossy(name.as_ref()).into_owned());
+        let reference_sequence_id = record.reference_sequence_id().transpose()?;
 
         let start1 = record.alignment_start().transpose()?.map(usize::from);
         let reference_start = start1.map(|s| (s - 1) as i64).unwrap_or(-1);
@@ -88,28 +90,12 @@ impl BamRead {
         let (left_is_soft, left_len) = first.map(|(k, l)| (k == Kind::SoftClip, l)).unwrap_or((false, 0));
         let (right_is_soft, right_len) = last.map(|(k, l)| (k == Kind::SoftClip, l)).unwrap_or((false, 0));
 
-        let seq: Vec<u8> = record.sequence().iter().collect();
-        let qual: Vec<i32> = record.quality_scores().as_ref().iter().map(|&q| q as i32).collect();
-
-        let query_name = record
-            .name()
-            .map(|n| String::from_utf8_lossy(n.as_ref()).into_owned())
-            .unwrap_or_default();
-
-        let data = record.data();
-        let sa = match data.get(&Tag::OTHER_ALIGNMENTS).transpose()? {
-            Some(value) => Some(value_to_string(&value)),
-            None => None,
-        };
-        let xa = match data.get(&Tag::from([b'X', b'A'])).transpose()? {
-            Some(value) => Some(value_to_string(&value)),
-            None => None,
-        };
-
         let mapq = record.mapping_quality().map(|m| m.get()).unwrap_or(255);
 
         Ok(BamRead {
-            reference_name,
+            record,
+            header,
+            reference_sequence_id,
             mapped,
             reference_start,
             reference_end,
@@ -123,17 +109,55 @@ impl BamRead {
             is_supplementary: flags & FLAG_SUPPLEMENTARY != 0,
             is_proper_pair: flags & FLAG_PROPER_PAIR != 0,
             mate_is_mapped: flags & FLAG_MATE_UNMAPPED == 0,
-            query_name,
-            seq,
-            qual,
             has_cigar,
             left_is_soft,
             left_len,
             right_is_soft,
             right_len,
-            sa,
-            xa,
         })
+    }
+
+    // --- lazy heavy fields (decode on demand) ---
+
+    pub fn seq(&self) -> Vec<u8> {
+        self.record.sequence().iter().collect()
+    }
+
+    pub fn qual(&self) -> Vec<i32> {
+        self.record.quality_scores().as_ref().iter().map(|&q| q as i32).collect()
+    }
+
+    pub fn query_name(&self) -> String {
+        self.record
+            .name()
+            .map(|n| String::from_utf8_lossy(n.as_ref()).into_owned())
+            .unwrap_or_default()
+    }
+
+    /// Resolve the contig name from the header by reference id (SPD-5a). None for
+    /// unmapped reads.
+    pub fn reference_name(&self) -> Option<String> {
+        self.reference_sequence_id.and_then(|id| {
+            self.header
+                .reference_sequences()
+                .get_index(id)
+                .map(|(name, _)| String::from_utf8_lossy(name.as_ref()).into_owned())
+        })
+    }
+
+    pub fn sa(&self) -> Option<String> {
+        self.tag_string(&Tag::OTHER_ALIGNMENTS)
+    }
+
+    pub fn xa(&self) -> Option<String> {
+        self.tag_string(&Tag::from([b'X', b'A']))
+    }
+
+    fn tag_string(&self, tag: &Tag) -> Option<String> {
+        match self.record.data().get(tag) {
+            Some(Ok(value)) => Some(value_to_string(&value)),
+            _ => None,
+        }
     }
 }
 

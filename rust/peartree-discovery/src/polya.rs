@@ -65,9 +65,9 @@ fn find_parts(seq: &[u8], polya: bool) -> (Option<i64>, Option<i64>, i64) {
 }
 
 impl PolyABreakpoint {
-    fn new(read: &BamRead, polya: bool) -> PolyABreakpoint {
-        let seq = QualitySeq::new(read.seq.clone(), read.qual.clone());
-        let (first_inside, first_outside, polya_len) = find_parts(&read.seq, polya);
+    fn new(read: &BamRead<'_>, polya: bool, raw_seq: &[u8]) -> PolyABreakpoint {
+        let seq = QualitySeq::new(raw_seq.to_vec(), read.qual());
+        let (first_inside, first_outside, polya_len) = find_parts(raw_seq, polya);
         debug_assert!(polya_len >= POLYA_CUTOFF as i64);
 
         let clip = if read.is_forward() ^ polya { CLIP_RIGHT } else { CLIP_LEFT };
@@ -94,7 +94,7 @@ impl PolyABreakpoint {
 
         PolyABreakpoint {
             polya,
-            qname: read.query_name.clone(),
+            qname: read.query_name(),
             is_forward: read.is_forward(),
             is_read1: read.is_read1,
             reference_name: None,
@@ -109,9 +109,9 @@ impl PolyABreakpoint {
     }
 
     /// Port of PolyABreakpoint.setMate.
-    pub fn set_mate(&mut self, mate: &BamRead) {
-        self.reference_name = mate.reference_name.clone();
-        if mate.mapq < MIN_MAPQ {
+    pub fn set_mate(&mut self, mate: &BamRead<'_>, min_mapq: u8) {
+        self.reference_name = mate.reference_name();
+        if mate.mapq < min_mapq {
             return;
         }
         if !mate.mapped {
@@ -128,28 +128,30 @@ impl PolyABreakpoint {
 
     /// Port of PolyABreakpoint.findPolyA. Returns a PolyABreakpoint with a valid
     /// clipped sequence, or None.
-    pub fn find_polya(read: &BamRead) -> Option<PolyABreakpoint> {
+    pub fn find_polya(read: &BamRead<'_>) -> Option<PolyABreakpoint> {
         if read.is_proper_pair {
             return None;
         }
         if !read.mate_is_mapped {
             return None;
         }
+        // decode sequence only after the cheap flag gates (SPD-1)
+        let raw = read.seq();
         let polya_seq = [b'A'; POLYA_CUTOFF];
         let polyt_seq = [b'T'; POLYA_CUTOFF];
-        let b = if contains(&read.seq, &polya_seq) {
+        let b = if contains(&raw, &polya_seq) {
             if read.is_reverse {
-                if read.is_read2 { Some(PolyABreakpoint::new(read, true)) } else { None }
+                if read.is_read2 { Some(PolyABreakpoint::new(read, true, &raw)) } else { None }
             } else if read.is_read1 {
-                Some(PolyABreakpoint::new(read, true))
+                Some(PolyABreakpoint::new(read, true, &raw))
             } else {
                 None
             }
-        } else if contains(&read.seq, &polyt_seq) {
+        } else if contains(&raw, &polyt_seq) {
             if read.is_reverse {
-                if read.is_read1 { Some(PolyABreakpoint::new(read, false)) } else { None }
+                if read.is_read1 { Some(PolyABreakpoint::new(read, false, &raw)) } else { None }
             } else if read.is_read2 {
-                Some(PolyABreakpoint::new(read, false))
+                Some(PolyABreakpoint::new(read, false, &raw))
             } else {
                 None
             }

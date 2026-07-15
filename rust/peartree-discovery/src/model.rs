@@ -3,6 +3,7 @@
 use crate::config::*;
 use crate::filters::{clean_clipped_seq, find_consensus};
 use crate::qseq::QualitySeq;
+use crate::stats::Stats;
 
 #[derive(Clone)]
 pub struct Breakpoint {
@@ -78,44 +79,68 @@ fn most_common_first(values: &[i64]) -> (i64, usize) {
     (order[best], counts[best])
 }
 
+/// Outcome of a polyA-tail rescue attempt. Distinguishes the three Python paths so
+/// OBS-1 can count them exactly: a rescued breakpoint (`rescued_pA`), a non-polyA
+/// solo (`too_few`), and a polyA whose cleaned clip fell below min_clip_len — which
+/// Python returns as None **without** incrementing any counter.
+enum Rescue {
+    Rescued(Breakpoint),
+    TooShort,
+    NotPolyA,
+}
+
 /// polyA-tail rescue for a single (solo or low-support) breakpoint. Mutates and
-/// returns the breakpoint if it qualifies, else None. Mirrors the two rescue
-/// blocks in Breakpoint.join.
-fn rescue_polya(mut bp: Breakpoint) -> Option<Breakpoint> {
+/// returns the breakpoint if it qualifies. Mirrors the two rescue blocks in
+/// Breakpoint.join. Counter bookkeeping is left to the caller (see `join`).
+fn rescue_polya(mut bp: Breakpoint) -> Rescue {
     if bp.side == CLIP_LEFT && bp.clipped.pyslice(Some(-8), None).eq_bytes(b"AAAAAAAA") {
         bp.clipped = clean_clipped_seq(&bp.clipped.revcomp());
         if bp.clipped.len() < MIN_CLIP_LEN {
-            return None;
+            return Rescue::TooShort;
         }
         if bp.is_forward == Some(false) {
             bp.has_mate = true;
             bp.mates = vec![(!(bp.is_read1.unwrap_or(false)), bp.query_name.clone().unwrap_or_default())];
         }
-        return Some(bp);
+        Rescue::Rescued(bp)
     } else if bp.side == CLIP_RIGHT && bp.clipped.pyslice(None, Some(8)).eq_bytes(b"TTTTTTTT") {
         bp.clipped = clean_clipped_seq(&bp.clipped);
         if bp.clipped.len() < MIN_CLIP_LEN {
-            return None;
+            return Rescue::TooShort;
         }
         if bp.is_forward == Some(true) {
             bp.has_mate = true;
             bp.mates = vec![(!(bp.is_read1.unwrap_or(false)), bp.query_name.clone().unwrap_or_default())];
         }
-        return Some(bp);
+        Rescue::Rescued(bp)
+    } else {
+        Rescue::NotPolyA
     }
-    None
 }
 
 /// Port of Breakpoint.join. Consumes the group of breakpoints in a <6bp window
 /// and returns a single consensus breakpoint, or None if filtered out.
-pub fn join(mut breakpoints: Vec<Breakpoint>) -> Option<Breakpoint> {
+pub fn join(mut breakpoints: Vec<Breakpoint>, cfg: &DiscoveryConfig, stats: &mut Stats) -> Option<Breakpoint> {
     if breakpoints.len() < 2 {
         let bp = breakpoints.pop().unwrap();
-        return rescue_polya(bp);
+        let side = bp.side;
+        return match rescue_polya(bp) {
+            Rescue::Rescued(b) => {
+                stats.side_mut(side).rescued_pa += 1;
+                Some(b)
+            }
+            // polyA candidate whose clip cleaned below min_clip_len: Python counts nothing
+            Rescue::TooShort => None,
+            Rescue::NotPolyA => {
+                stats.side_mut(side).too_few += 1;
+                None
+            }
+        };
     }
 
     // if any breakpoint has the exclude flag, poison the whole group
     if breakpoints.iter().any(|b| b.exclude) {
+        stats.side_mut(breakpoints[0].side).excluded += 1;
         return None;
     }
 
@@ -137,26 +162,35 @@ pub fn join(mut breakpoints: Vec<Breakpoint>) -> Option<Breakpoint> {
         if side == CLIP_RIGHT && bp.is_forward == Some(true) {
             bp.has_mate = true;
         }
-        if bp.bp_precise && bp.clipped.len() >= MIN_GOOD_BASES {
+        if bp.bp_precise && bp.clipped.len() >= cfg.min_good_bases {
             bps.push(bp.breakpoint);
         }
     }
     if bps.is_empty() {
+        stats.side_mut(side).too_few_after_filter += 1;
         return None;
     }
 
     let (best_bp, n) = most_common_first(&bps);
 
-    if n < MIN_EVIDENCE_READS_PER_BREAKPOINT {
+    if n < cfg.min_evidence_reads_per_breakpoint {
         // try polyA rescue on the individual breakpoints; first hit wins
         for bp in breakpoints.into_iter() {
             let side_bp = bp.side;
             let is_a = side_bp == CLIP_LEFT && bp.clipped.pyslice(Some(-8), None).eq_bytes(b"AAAAAAAA");
             let is_t = side_bp == CLIP_RIGHT && bp.clipped.pyslice(None, Some(8)).eq_bytes(b"TTTTTTTT");
             if is_a || is_t {
-                return rescue_polya(bp);
+                return match rescue_polya(bp) {
+                    Rescue::Rescued(b) => {
+                        stats.side_mut(side).rescued_pa += 1;
+                        Some(b)
+                    }
+                    // guard above guarantees polyA, so NotPolyA is unreachable here
+                    Rescue::TooShort | Rescue::NotPolyA => None,
+                };
             }
         }
+        stats.side_mut(side).too_few_after_filter += 1;
         return None;
     }
 
@@ -219,9 +253,11 @@ pub fn join(mut breakpoints: Vec<Breakpoint>) -> Option<Breakpoint> {
     let clipped_cons = find_consensus(&clipped);
     let unclipped_cons = find_consensus(&unclipped);
     if clipped_cons.len() <= MIN_CLIP_LEN {
+        stats.side_mut(side).clipped_failed += 1;
         return None;
     }
     if unclipped_cons.len() <= 40 {
+        stats.side_mut(side).unclipped_failed += 1;
         return None;
     }
     // reject n-polymer at the breakpoint (n = 1..=4)
@@ -230,6 +266,7 @@ pub fn join(mut breakpoints: Vec<Breakpoint>) -> Option<Breakpoint> {
         let reps = 24 / nn;
         let query: Vec<u8> = base.seq.iter().cycle().take(base.seq.len() * reps).copied().collect();
         if unclipped_cons.pyslice(None, Some(24)).eq_bytes(&query) {
+            stats.side_mut(side).polymer += 1;
             return None;
         }
     }
@@ -247,5 +284,6 @@ pub fn join(mut breakpoints: Vec<Breakpoint>) -> Option<Breakpoint> {
     );
     b.mates = mates;
     b.n_reads = clipped.len();
+    stats.side_mut(side).passed += 1;
     Some(b)
 }
