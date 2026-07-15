@@ -89,6 +89,9 @@ class Insertion:
         # each is (gene_id, exon_start, exon_end). Empty unless an exon track is configured.
         self.right_exons = []
         self.left_exons = []
+        # discovery splice-hallmark evidence (Feature B), aggregated by combine_insertions:
+        # each is (gene_id, side, n_exons) — mates span >= n_exons exons of one gene.
+        self.splice_hits = []
         # extract inserted sequences
     def has_right_polyA(self):
         return re.search(r"[ACGT]t{6}", self.right_seq)
@@ -146,6 +149,13 @@ class Insertion:
         """
         This function aggregates all information available to come to a conclusion
         """
+        # Discovery splice-hallmark (Feature B): mate reads span >= 2 exons of a single gene
+        # with the introns skipped — the definitive processed-pseudogene signal, which the
+        # clip-level exon check below cannot see (annotate's clips are the terminal 5' exon +
+        # 3' poly-A). Reported first, even when the terminal clips did not map.
+        if self.splice_hits:
+            gene, side, nex = max(self.splice_hits, key=lambda x: x[2])
+            return f"processed pseudogene of {gene} (splice: {nex} exons, discovery mates)"
         if len(self.right_dfams)==0 and len(self.left_dfams)==0 and len(self.right_maps)==0 and len(self.left_maps)==0:
             return 'artefact'
         if len(self.right_dfams)>0:
@@ -309,6 +319,7 @@ class VariantAnnotationContainer:
         if not os.path.exists(self.insertions_file):
             raise FileNotFoundError(f"Insertions file {self.insertions_file} not found")
         self.read_insertions()
+        self.read_splice()
         if not os.path.exists(self.genotyping_file):
             raise FileNotFoundError(f"Genotyping file {self.genotyping_file} not found")
         self.read_genotyping()
@@ -320,6 +331,32 @@ class VariantAnnotationContainer:
         if not os.path.exists(self.sam_file) or os.path.getsize(self.sam_file) == 0:
             self.generate_sam_file()
         self.read_sam()
+
+    def read_splice(self):
+        """Attach discovery splice-hallmark (Feature B) evidence to the insertions. The
+        sidecar `<combined>.splice.tsv` is written by combine_insertions (which re-keys the
+        per-discovery-file splice rows onto the combined insertion names). Optional: absent
+        when splice_hallmark was off during discovery, so this is a no-op then."""
+        path = (self.insertions_file[:-7] if self.insertions_file.endswith(".txt.gz")
+                else self.insertions_file) + ".splice.tsv"
+        if not os.path.exists(path):
+            return
+        n = 0
+        with open(path) as fh:
+            fh.readline()  # header: insertion gene side n_exons intron_bp span_bp
+            for line in fh:
+                p = line.rstrip("\n").split("\t")
+                if len(p) < 4:
+                    continue
+                name, gene, side = p[0], p[1], p[2]
+                try:
+                    nex = int(p[3])
+                except ValueError:
+                    continue
+                if name in self.insertions:
+                    self.insertions[name].splice_hits.append((gene, side, nex))
+                    n += 1
+        print(f"attached {n} discovery splice-hallmark rows from {path}")
 
     def read_insertions(self):
         """

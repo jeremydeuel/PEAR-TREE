@@ -28,6 +28,52 @@ from combine_insertions_get_sequence import get_sequence
 from sequence_checks import sequence_matching_score
 from collections import Counter
 
+def _splice_sidecar(path):
+    """`<combined>.txt.gz` -> `<combined>.splice.tsv` (shared by combine + annotate)."""
+    return (path[:-7] if path.endswith(".txt.gz") else path) + ".splice.tsv"
+
+
+def write_combined_splice(input_files, insertions, combined_insertions, window=25):
+    """Re-key discovery's per-file `<file>.splice.tsv` sidecars (Feature B / splice_hallmark:
+    mate reads spanning >= splice_min_exons exons of one gene, introns skipped) onto the
+    surviving COMBINED insertions, by the combined insertion name, so stage-4 annotate can
+    attach the processed-pseudogene evidence. Writes `<combined>.splice.tsv`. No-op (writes
+    nothing) when no discovery splice sidecar exists (splice_hallmark off) -> fully backward
+    compatible."""
+    src = {}  # contig -> [(breakpoint, side, gene, n_exons, intron_bp, span_bp)]
+    found = False
+    for f in input_files:
+        sp = f + ".splice.tsv"
+        if not os.path.exists(sp):
+            continue
+        found = True
+        with open(sp) as fh:
+            fh.readline()  # header: contig breakpoint side gene n_exons intron_bp span_bp
+            for line in fh:
+                p = line.rstrip("\n").split("\t")
+                if len(p) < 7:
+                    continue
+                try:
+                    src.setdefault(p[0], []).append((int(p[1]), p[2], p[3], int(p[4]), int(p[5]), int(p[6])))
+                except ValueError:
+                    continue
+    if not found:
+        return
+    out_path = _splice_sidecar(combined_insertions)
+    n = 0
+    with open(out_path, "w") as out:
+        out.write("insertion\tgene\tside\tn_exons\tintron_bp\tspan_bp\n")
+        for i in insertions:
+            for (bp, side, gene, nex, intron, span) in src.get(i.reference_name, []):
+                pos = i.right_pos if side == "RIGHT" else i.left_pos
+                if pos is None:
+                    continue
+                if abs(bp - pos) <= window:
+                    out.write(f"{i.name}\t{gene}\t{side}\t{nex}\t{intron}\t{span}\n")
+                    n += 1
+    print(f"aggregated {n} discovery splice-hallmark rows -> {out_path}")
+
+
 def combine_insertions(input_files, insertions_genotyping_file, combined_insertions, insertions_fasta, insertion_bam, threads):
 
     all_insertions = []
@@ -144,6 +190,9 @@ def combine_insertions(input_files, insertions_genotyping_file, combined_inserti
         f.writelines(
             [f'{i.right_consensus.fastq(f"{i.name}:R")}' for i in insertions if i.type is TYPE_LEFT_POLYA])
     print(f'wrote {len([i for i in insertions if i.name not in filter_reads])} insertions to insertions.txt.gz')
+    # carry discovery's splice-hallmark (Feature B) evidence forward, re-keyed onto the
+    # combined insertion names, for stage-4 processed-pseudogene annotation.
+    write_combined_splice(input_files, insertions, combined_insertions)
     n_excluded = 0
     n_included = 0
     with gzip.open(insertions_genotyping_file, 'wt') as f:
