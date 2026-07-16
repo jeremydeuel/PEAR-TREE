@@ -231,6 +231,23 @@ cmd_combine() {
     log "combining ${#files[@]} discovery files ($n_missing samples had no data)"
     [ "${#files[@]}" -gt 0 ] || { echo "no discovery files at all — aborting" >&2; exit 1; }
 
+    # ASSEMBLY GATE. Unlike discovery, combine_insertions is assembly-specific: it
+    # reads flanks from genome_2bit and lifts hs1 clip hits back with a chain. A
+    # mismatched config produces plausible, silently wrong coordinates — no error.
+    # So prove the config matches the actual data before spending the cycles.
+    local a_sample a_bam
+    for a_sample in $(sed -e 's/\.txt\.gz$//' -e 's#.*/##' <<<"$(printf '%s\n' "${files[@]}")"); do
+        a_bam="$(bam_path "$PROJECT_ID" "$a_sample")"
+        [ -s "$a_bam" ] && break || a_bam=""
+    done
+    if [ -n "$a_bam" ]; then
+        log "verifying config against the data ($a_bam)"
+        bash "$PT_ROOT/cluster/install.sh" check-config --bam "$a_bam" --pt-root "$PT_ROOT" \
+            || { echo "assembly/config check FAILED — refusing to combine" >&2; exit 1; }
+    else
+        log "WARNING: no staged BAM left to verify the assembly against — proceeding unchecked"
+    fi
+
     "$VENV/bin/python" "$PT_ROOT/src/main.py" --step combine_insertions \
         --discovery_files "${files[@]}" --out "insertions/$PATIENT_ID" --threads "$CI_CORES"
 

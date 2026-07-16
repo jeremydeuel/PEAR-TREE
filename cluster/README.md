@@ -52,6 +52,52 @@ bash cluster/build.sh          # -> peartree-discovery + peartree-genotype relea
 > `src/config.py` is intentionally **not** in the repo (gitignored). The Rust discovery
 > step does not use it. The Python combine/genotype steps do — create it in step 5.
 
+### install.sh — check what's present, fetch what isn't
+
+```bash
+bash cluster/install.sh check   --bam <a real BAM>   # verify only; exits 1 if anything is missing
+bash cluster/install.sh install --bam <a real BAM>   # same, but downloads what's missing
+bash cluster/install.sh install --bam <BAM> --annotate   # also the step-3 (annotate) resources
+bash cluster/install.sh detect-assembly <BAM>        # -> hg19 | hg38 | mm10 | mm39
+```
+
+Passing `--bam` is what makes the check meaningful: the assembly is read from the
+BAM rather than assumed. It checks the toolchain (samtools, bowtie2, the two Rust
+binaries, the venv) and the three assembly-specific references, printing a ready-to-paste
+`config['combine_insertions']` block when everything lines up. Downloads come from UCSC
+goldenPath; run it on the **head node** (compute nodes have no outbound internet).
+
+**Supported BAM assemblies**, and what each needs:
+
+| BAM assembly | `genome_2bit` | clips remap to | `bowtie2_index2_lo` (chain) |
+|---|---|---|---|
+| hg19 (= GRCh37/hs37d5) | `hg19.2bit` | hs1 | `hs1ToHg19.over.chain.gz` |
+| hg38 | `hg38.2bit` | hs1 | `hs1ToHg38.over.chain.gz` |
+| mm10 (= GRCm38) | `mm10.2bit` | mm39 | `mm39ToMm10.over.chain.gz` |
+| mm39 (= GRCm39) | `mm39.2bit` | mm39 | *identity chain, synthesised* |
+
+Assemblies are identified by **chr1 length**, not contig name — so a GRCh37 BAM naming
+it `1` and an hg19 BAM naming it `chr1` both resolve to `hg19`, which is right: they are
+the same coordinates. hs37d5 only adds decoy contigs, so it takes the hg19 resources too.
+
+For **mm39** the remap target *is* the BAM assembly, so there is nothing to lift and no
+chain to download; `install.sh` synthesises a per-contig identity chain from
+`mm39.chrom.sizes` (pyliftover always wants a chain). Verified: every coordinate maps to
+itself.
+
+The **bowtie2 index is built, not downloaded** (UCSC doesn't ship one). If it's missing:
+`bash cluster/install.sh build-index hs1` submits a 16-core / 64 GB / `long` job (~3 h).
+Once per species, not per run.
+
+> **Why this gate exists.** Discovery and genotyping only ever read the BAM, so they don't
+> care about the assembly. `combine_insertions` does: it reads reference flanks from
+> `genome_2bit` and lifts hs1 clip hits back onto the BAM's coordinates through the chain.
+> Point either at the wrong assembly and **you get no error — you get plausible, silently
+> wrong coordinates.** So `pipeline.sh` re-derives the assembly from a staged BAM and
+> asserts `src/config.py` matches *before* combine runs (`install.sh check-config --bam …`).
+> It compares basenames, so where you keep your references doesn't matter. Escape hatch for
+> an unusual layout: `PT_SKIP_ASSEMBLY_CHECK=1`.
+
 ## 1. File list (exclude the staging duplicates)
 
 ```bash
