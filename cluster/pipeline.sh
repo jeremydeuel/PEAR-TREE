@@ -58,12 +58,21 @@ SAMTOOLS_MODULE="${SAMTOOLS_MODULE:-samtools-1.19}"
 # --- resources (tuned from the PD44579 run) -----------------------------------
 STAGE_THROTTLE="${STAGE_THROTTLE:-20}"   # concurrent stageBam.pl -> bounds iRODS + Lustre I/O
 GT_THROTTLE="${GT_THROTTLE:-30}"
+# Budgets below are MEASURED on the full PD44579 run (174 colonies x 30,025 loci,
+# GRCh37 30x WGS), not guessed. Peak RSS from the LSF reports, with headroom:
+#   discovery          12.2 GB peak, ~16-24 min/colony  -> 16 GB
+#   combine_insertions 15.5 GB peak, 854 s on 8 cores    -> 24 GB  (was 64 GB: 4x over)
+#   genotype (Rust)    140 MB peak (!), ~17 min/colony   ->  2 GB  (was 8 GB: 57x over)
+#   combine_genotypes   1.3 GB peak, 456 s               ->  8 GB  (was 32 GB: 24x over)
+# Over-provisioning is not free: rusage[mem] RESERVES memory, so an inflated GT_MEM
+# throttles how many array elements the scheduler will co-locate. Re-measure on new
+# data before trusting these (pilot.sh reports discovery's peak).
 SD_MEM="${SD_MEM:-16000}"                # discovery peaked at 12.2 GB on PD44579
-CI_MEM="${CI_MEM:-64000}"; CI_CORES="${CI_CORES:-8}"
-GT_MEM="${GT_MEM:-8000}"
-CG_MEM="${CG_MEM:-32000}"; CG_CORES="${CG_CORES:-8}"
-AN_MEM="${AN_MEM:-32000}"; AN_CORES="${AN_CORES:-4}"
-QUEUE="${QUEUE:-normal}"                 # 12 h wall
+CI_MEM="${CI_MEM:-24000}"; CI_CORES="${CI_CORES:-8}"
+GT_MEM="${GT_MEM:-2000}"                 # Rust genotyper is memory-trivial: 140 MB measured
+CG_MEM="${CG_MEM:-8000}"; CG_CORES="${CG_CORES:-8}"
+AN_MEM="${AN_MEM:-32000}"; AN_CORES="${AN_CORES:-4}"   # not yet measured
+QUEUE="${QUEUE:-normal}"                 # 12 h wall; full PD44579 run fits comfortably
 
 log() { echo "[$(date +%H:%M:%S)] $*"; }
 

@@ -6,6 +6,7 @@
 #   install.sh check   [--bam B | --assembly A] [--annotate]   verify, download nothing
 #   install.sh install [--bam B | --assembly A] [--annotate]   verify and fetch what is missing
 #   install.sh build-index <hs1|mm39>       download the fasta and bowtie2-build it (slow)
+#   install.sh build-exons <asm> [--bam B]  build the Feature B exon model from Ensembl (~2 min)
 #
 # WHY THE ASSEMBLY MATTERS. Discovery and genotyping are assembly-agnostic — they
 # only ever read the BAM. combine_insertions is NOT: it remaps clipped consensuses
@@ -93,6 +94,37 @@ rmsk_candidates() {
     case "$(remap_for "$1")" in
         hs1)  echo "$RES/pt_hu_trees/hs1.repeatMasker.out.gz $RES/hs1.repeatMasker.out.gz" ;;
         mm39) echo "$RES/mm39.fa.out.gz" ;;
+    esac
+}
+
+# -----------------------------------------------------------------------------
+# Feature B (splice / processed-pseudogene) exon model.
+#
+# Only needed when the discovery config sets splice_hallmark=true — but then EVERY
+# discovery job dies at startup ("cannot read exon_annotation") without it, so it is
+# checked here rather than found out 174 array elements later.
+#
+# The model is queried with the MATE read's contig name, so its contigs must match the
+# BAM's naming exactly. Ensembl is the right source: its GTFs use numeric names
+# (1,2,..,X,Y), matching hs37d5/GRCh37 and GRCm38/39 BAMs directly; build-exons adds a
+# `chr` prefix when the BAM is UCSC-style.
+# -----------------------------------------------------------------------------
+exon_candidates() {
+    case "$1" in
+        hg19) echo "$RES/grch37.exons.bed.gz $RES/hg19.exons.bed.gz" ;;
+        hg38) echo "$RES/grch38.exons.bed.gz $RES/hg38.exons.bed.gz" ;;
+        mm10) echo "$RES/grcm38.exons.bed.gz $RES/mm10.exons.bed.gz" ;;
+        mm39) echo "$RES/grcm39.exons.bed.gz $RES/mm39.exons.bed.gz" ;;
+    esac
+}
+
+# release-75 is the last Ensembl on GRCh37; 102 the last on GRCm38.
+ensembl_gtf() {
+    case "$1" in
+        hg19) echo "https://ftp.ensembl.org/pub/release-75/gtf/homo_sapiens/Homo_sapiens.GRCh37.75.gtf.gz" ;;
+        hg38) echo "https://ftp.ensembl.org/pub/release-112/gtf/homo_sapiens/Homo_sapiens.GRCh38.112.gtf.gz" ;;
+        mm10) echo "https://ftp.ensembl.org/pub/release-102/gtf/mus_musculus/Mus_musculus.GRCm38.102.gtf.gz" ;;
+        mm39) echo "https://ftp.ensembl.org/pub/release-112/gtf/mus_musculus/Mus_musculus.GRCm39.112.gtf.gz" ;;
     esac
 }
 
@@ -323,6 +355,80 @@ Fix src/config.py (start from cluster/config.py.$asm if it exists) or run:
 }
 
 # -----------------------------------------------------------------------------
+# build-exons — one-off per assembly, ~2 min
+#
+# Builds the Feature B exon model: per-gene MERGED exons (the union of every
+# transcript's exons collapsed into non-overlapping blocks), which is the right input
+# for the "mates span >= N exons of one gene, intron skipped" signature — raw
+# transcript exons overlap each other and blur it.
+# Format (matches exons.rs): `contig begin end gene_id`, 0-based half-open, gzipped.
+# -----------------------------------------------------------------------------
+cmd_build_exons() {
+    local asm="" bam=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --bam) bam="${2:?--bam needs a path}"; shift 2 ;;
+            *)     asm="$1"; shift ;;
+        esac
+    done
+    [ -n "$asm" ] || [ -n "$bam" ] || die "usage: install.sh build-exons <hg19|hg38|mm10|mm39> [--bam <BAM>]"
+    [ -n "$asm" ] || asm="$(cmd_detect_assembly "$bam")"
+
+    local url out
+    url="$(ensembl_gtf "$asm")"; [ -n "$url" ] || die "no Ensembl GTF known for assembly '$asm'"
+    out="$(set -- $(exon_candidates "$asm"); echo "${1:-}")"
+    [ -n "$out" ] || die "no exon-model path known for assembly '$asm'"
+    [ -s "$out" ] && { echo "exon model already present: $out ($(zcat "$out" | wc -l) rows)"; return 0; }
+
+    # Contig naming must match the BAM (the model is looked up by the mate's contig).
+    # Ensembl is numeric; prefix with chr only if the BAM is UCSC-style.
+    local prefix=""
+    if [ -n "$bam" ]; then
+        command -v samtools >/dev/null || module load "$SAMTOOLS_MODULE" >/dev/null 2>&1 || true
+        if samtools view -H "$bam" 2>/dev/null | grep -qE '^@SQ.*SN:chr'; then prefix="chr"; fi
+    fi
+
+    local gtf="$RES/$(basename "$url")"
+    [ -s "$gtf" ] || fetch "$url" "$gtf"
+
+    echo "building per-gene merged exon model for $asm -> $out (contig prefix: '${prefix:-none}')"
+    zcat "$gtf" \
+      | awk -F'\t' '$3=="exon"{a=$9; sub(/.*gene_id "/,"",a); sub(/".*/,"",a); print a"\t"$1"\t"($4-1)"\t"$5}' \
+      | sort -k1,1 -k2,2 -k3,3n \
+      | awk -F'\t' -v p="$prefix" 'BEGIN{OFS="\t"}
+            {if($1==g && $2==c && $3<=e){ if($4>e) e=$4 }
+             else { if(g!="") print p c,s,e,g; g=$1; c=$2; s=$3; e=$4 }}
+            END{ if(g!="") print p c,s,e,g }' \
+      | gzip > "$out.part"
+    mv -f "$out.part" "$out"
+    echo "  $(zcat "$out" | wc -l) merged exon rows -> $out"
+    echo "  point config.discovery.* at it:  exon_annotation = $out"
+}
+
+# check the exon model, but only if the discovery config actually turns Feature B on
+check_exons() {
+    local asm="$1"
+    local cfg="${DISC_CFG:-$PT_ROOT/cluster/config.discovery.grch37}"
+    [ -s "$cfg" ] || return 0
+    grep -qiE '^[[:space:]]*splice_hallmark[[:space:]]*=[[:space:]]*(true|1)' "$cfg" || return 0
+
+    echo "== Feature B exon model (splice_hallmark=true in $(basename "$cfg"))"
+    local want
+    want="$(grep -E '^[[:space:]]*exon_annotation[[:space:]]*=' "$cfg" | head -1 | sed 's/^[^=]*=[[:space:]]*//' | tr -d '[:space:]')"
+    if [ -n "$want" ] && [ -s "$want" ]; then
+        ok "exon_annotation -> $want ($(zcat "$want" 2>/dev/null | wc -l) rows)"
+        return 0
+    fi
+    if [ "$FIX" = 1 ]; then
+        cmd_build_exons "$asm" ${BAM_FOR_EXONS:+--bam "$BAM_FOR_EXONS"} && return 0
+    fi
+    bad "exon_annotation -> ${want:-<unset in config>}"
+    echo "        every discovery job will die at startup without it. Build it with:"
+    echo "        install.sh build-exons $asm --bam <a real BAM>"
+    return 0
+}
+
+# -----------------------------------------------------------------------------
 # build-index — one-off, expensive
 # -----------------------------------------------------------------------------
 cmd_build_index() {
@@ -350,10 +456,11 @@ main() {
         detect-assembly) cmd_detect_assembly "$@"; exit 0 ;;
         check-config)    cmd_check_config "$@"; exit 0 ;;
         build-index)     cmd_build_index "$@"; exit 0 ;;
+        build-exons)     cmd_build_exons "$@"; exit 0 ;;
         install)         FIX=1 ;;
         check)           FIX=0 ;;
         -h|--help|help)  sed -n '2,20p' "$0"; exit 0 ;;
-        *) die "unknown action: $action (check|install|detect-assembly|build-index)" ;;
+        *) die "unknown action: $action (check|install|detect-assembly|build-index|build-exons)" ;;
     esac
 
     local asm="" bam="" annotate=0
@@ -377,6 +484,8 @@ main() {
         warn "combine_insertions needs an assembly-matched 2bit + chain; re-run with --bam <a real BAM>."
     else
         check_assembly "$asm" "$annotate"
+        # Feature B: no-op unless the discovery config enables splice_hallmark.
+        BAM_FOR_EXONS="$bam" check_exons "$asm"
     fi
 
     echo

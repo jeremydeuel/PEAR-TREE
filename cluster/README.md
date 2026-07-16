@@ -59,6 +59,7 @@ bash cluster/install.sh check   --bam <a real BAM>   # verify only; exits 1 if a
 bash cluster/install.sh install --bam <a real BAM>   # same, but downloads what's missing
 bash cluster/install.sh install --bam <BAM> --annotate   # also the step-3 (annotate) resources
 bash cluster/install.sh detect-assembly <BAM>        # -> hg19 | hg38 | mm10 | mm39
+bash cluster/install.sh build-exons <asm> --bam <BAM>    # Feature B exon model (~2 min)
 ```
 
 Passing `--bam` is what makes the check meaningful: the assembly is read from the
@@ -88,6 +89,30 @@ itself.
 The **bowtie2 index is built, not downloaded** (UCSC doesn't ship one). If it's missing:
 `bash cluster/install.sh build-index hs1` submits a 16-core / 64 GB / `long` job (~3 h).
 Once per species, not per run.
+
+### Feature B (splice / processed-pseudogene) needs an exon model
+
+`config.discovery.*` ships with `splice_hallmark = true`, which makes discovery emit a
+per-colony `<out>.splice.tsv` of processed-pseudogene candidates
+(`contig breakpoint side gene n_exons intron_bp span_bp`). It requires `exon_annotation`
+— and **without it every discovery job dies at startup**, so `install.sh check` now
+verifies it (only when the config actually enables the feature).
+
+```bash
+bash cluster/install.sh build-exons hg19 --bam <a real BAM>   # ~2 min, once per assembly
+```
+
+Source is the **Ensembl** GTF (release-75 for GRCh37, 102 for GRCm38), because Ensembl
+contig names are numeric (`1,2,..,X,Y`) and so match hs37d5/GRCh37 BAMs directly;
+`build-exons` reads the BAM header and adds a `chr` prefix if the BAM is UCSC-style.
+The model is **per-gene merged exons** (every transcript's exons collapsed into
+non-overlapping blocks) — raw transcript exons overlap each other and blur the
+"mates span ≥ N exons, intron skipped" signature. PD44579/GRCh37 → 354,207 blocks.
+
+> The naming must match the BAM because the model is looked up by the **mate read's
+> contig**. This is also why the discovery exon file is GRCh37 while
+> `config.py['annotate']['exon_annotation']` must be **hs1**-based — annotate works in
+> remap space, discovery works in BAM space. They are not interchangeable.
 
 > **Why this gate exists.** Discovery and genotyping only ever read the BAM, so they don't
 > care about the assembly. `combine_insertions` does: it reads reference flanks from
@@ -218,6 +243,45 @@ python src/main.py --step combine_genotypes \
 ```
 
 ---
+
+## Measured resources (PD44579: 174 colonies × 30,025 loci, GRCh37 30× WGS)
+
+Peak RSS from the LSF reports of a real full run — `pipeline.sh` defaults are set from
+these, not guessed. Re-measure on new data (`pilot.sh` reports discovery's peak).
+
+| step | peak RSS | time | cores | budget |
+|---|---|---|---|---|
+| discovery (Rust) | **12.2 GB** | ~16–24 min/colony | 1 | `SD_MEM=16000` |
+| combine_insertions | **15.5 GB** | 854 s | 8 | `CI_MEM=24000` |
+| genotype (Rust) | **140 MB** | ~17 min/colony (1 core) | 1 | `GT_MEM=2000` |
+| combine_genotypes | **1.3 GB** | 456 s | 8 | `CG_MEM=8000` |
+
+Two things worth internalising:
+
+- **Discovery really does need ~12 GB** (the mate-qname sets). An 8 GB budget kills every
+  task with `TERM_MEMLIMIT` — this was the old `submit_discovery.sh` default and is fixed.
+- **The Rust genotyper is memory-trivial (140 MB).** Don't over-provision it: `rusage[mem]`
+  *reserves* memory, so an inflated `GT_MEM` throttles how many array elements the
+  scheduler co-locates. Over-provisioning costs throughput, not just politeness.
+
+Scale: the whole donor (discovery → calls) is a few hours wall at ~50-wide.
+
+## Operational gotchas (learned the hard way on PD44579)
+
+- **Discovery output is FASTQ** (`@contig:l-r:LEFT|RIGHT:...`); the genotyping contract is
+  `>`-headed. `grep -c '^>'` on a discovery file returns **0** and looks exactly like a
+  failed run. Count loci with
+  `grep -oE '^@[^:]+:[0-9]+-[0-9]+' | sort -u | wc -l`.
+- **LSF spools stdout** — `logs/*.out` is empty until the job *completes*. Use output-file
+  counts (`ls discovery/*.txt.gz | wc -l`) as the live progress meter, not `tail`.
+- **Discovery needs no BAM index** (it streams); **genotyping does** (per-locus region
+  fetch). `pipeline.sh` indexes on demand.
+- **Sidecars must ride the atomic rename.** The binary writes `{out}.splice.tsv` /
+  `{out}.stats.json` next to `--out`, which is the `.tmp` path — they must be moved to the
+  final name or Feature B output is silently orphaned.
+- **`samtools quickcheck`** on every BAM before a run: it verifies the EOF block, which is
+  exactly the truncation failure mode. All 174 PD44579 BAMs passed.
+- Re-running any array is safe — every step skips work whose output already exists.
 
 ## Scheduler note
 

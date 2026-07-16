@@ -6,8 +6,10 @@
 # Env (all optional):
 #   FOFN      file list         (default: bams.fofn)
 #   THROTTLE  max concurrent    (default: 50)
-#   MEM       MB per task       (default: 8000  -- tighten after the pilot)
-#   QUEUE     LSF queue         (default: normal)
+#   MEM       MB per task       (default: 16000 -- MEASURED: discovery peaked at 12.2 GB
+#                                on PD44579 30x WGS. Do NOT lower to ~8 GB: every task
+#                                dies with TERM_MEMLIMIT. Re-check with pilot.sh on new data.)
+#   QUEUE     LSF queue         (default: normal; ~16-24 min/colony single-threaded)
 #   GROUP     LSF fairshare group (-G), if your setup requires one
 #
 # SLURM equivalent (if farm22 ever moves to SLURM):
@@ -18,7 +20,7 @@ cd "$(dirname "$0")/.."
 
 FOFN="${FOFN:-bams.fofn}"
 THROTTLE="${THROTTLE:-50}"
-MEM="${MEM:-8000}"
+MEM="${MEM:-16000}"   # measured: 12.2 GB peak on PD44579 (8000 => TERM_MEMLIMIT)
 QUEUE="${QUEUE:-normal}"
 N="$(wc -l < "$FOFN" | tr -d ' ')"
 [ "$N" -gt 0 ] || { echo "empty $FOFN" >&2; exit 1; }
