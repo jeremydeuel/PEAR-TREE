@@ -108,8 +108,12 @@ CONFIG = {
         'hmm': '/lustre/scratch126/casm/teams/team273/users/jd43/Dfam-curated_only-hs.hmm', #hmmpress'd (h3f/h3i/h3m/h3p present)
         'dfamscan': '/lustre/scratch126/casm/teams/team273/users/jd43/dfamscan.pl',
         'hmmer': '/lustre/scratch126/casm/teams/team273/users/jd43/hmmer-3.3.2/bin', #folder containing the HMMER executables
-        'genotyping_file': lambda sample: f'genotypes/{sample}.txt.gz',
-        'insertions_file': lambda sample: f'{sample}.combined.txt.gz',
+        # annotate_v2.py is called as `annotate_v2.py <PATIENT_ID>` from the run dir
+        # (cluster/pipeline.sh phase 6), so these resolve relative to $WORKROOT/<PATIENT_ID>:
+        #   <PATIENT_ID>.genotypes.csv.gz          <- combine_genotypes output (all colonies)
+        #   insertions/<PATIENT_ID>.combined.txt.gz <- combine_insertions output
+        'genotyping_file': lambda sample: f'{sample}.genotypes.csv.gz',
+        'insertions_file': lambda sample: f'insertions/{sample}.combined.txt.gz',
         'polya_min_len': 12, #minimum homopolymer run at the clip junction to count as a poly-A/T tail
         'require_polya_hallmark': False, #True = require the poly-A hallmark for an RTE family call
     },
