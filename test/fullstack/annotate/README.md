@@ -19,7 +19,8 @@ RTE family (L1 / Alu / SVA / HERVK) or a processed pseudogene, from three signal
 |---|---|---|
 | `rte_elements.fa` | the 5 implanted RTE source sequences (hs1 loci) | committed |
 | `peartree_rte.hmm(.h3*)` | hmmpress'd family HMM library (config `annotate.hmm`) | `build_hmm.sh` |
-| `pseudogene_exons.hs1.bed` | hs1 exon intervals of the pseudogene parent genes (config `annotate.exon_annotation`) | `build_exon_track.py` |
+| `pseudogene_exons.hs1.bed` | hs1 exon intervals of the pseudogene parents — **annotate** clip track (config `annotate.exon_annotation`) | `build_exon_track.py` |
+| `pseudogene_exons.hg38.bed` | hg38 exon intervals — **discovery** mate-splice track (Feature B, `exon_annotation`) | `build_exon_track.py --bwa` |
 | `run_annotate.py` | local runner (patches `CONFIG['annotate']` to these paths + nhmmscan back-end) | — |
 
 The `.hmm*` binaries are **not committed** (rebuild them once):
@@ -47,20 +48,29 @@ HS1_BT2=~/Downloads/hs1 ./venv/bin/python test/fullstack/annotate/run_annotate.p
     --out annotate.txt --workdir annot/
 ```
 
-## Validated recovery (1k genotyping-smoke harness, 108 combined calls)
+## Feature B: mate-splice pseudogene detection
 
-| class | correct | notes |
+Multi-copy pseudogene parents (HNRNPA1/CASP12/DUX4/RPL21) have terminal clips that multi-map
+or don't map, so the clip path alone misses them. **Feature B** catches them from the mates
+instead: discovery (`splice_hallmark = true` + `exon_annotation = <hg38 track>`) flags a
+breakpoint whose mates span ≥ `splice_min_exons` exons of one gene with the introns skipped,
+writes `<out>.splice.tsv`; combine re-keys it to `<combined>.splice.tsv`; `annotate_v2`
+consumes it. `run_genotyping.sh` wires this automatically (builds the hg38 track, enables
+splice, then annotates as step 11).
+
+## Validated recovery (genotyping harness, het_60x, ~106 combined calls)
+
+| class | clip path only | + Feature B mate-splice |
 |---|---|---|
-| L1HS | 32/33 | subfamily drifts (L1HS↔L1PAx) via RMSK-remap to paralogs — expected |
-| AluYa5 | 38/39 | |
-| HERVK | 6/6 | |
-| SVA (E+F) | 10/11 | **needs the family HMM** — RMSK-remap alone lands SVA clips on L1/LTR |
-| MALAT1 (pseudogene) | 4/4 | single-exon lncRNA → 1 exon + poly-A |
-| HNRNPA1 / RPL21 / CASP12 / DUX4 | 5/15 | multi-copy parents; terminal clips multi-map or don't map |
+| L1HS | 32/33 | 32/33 |
+| AluYa5 | 38/39 | 37/38 |
+| HERVK | 6/6 | 6/6 |
+| SVA (E+F) | 10/11 | 10/11 |
+| MALAT1 pseudogene | 4/4 | 4/4 |
+| HNRNPA1 / CASP12 / DUX4 / RPL21 | 5/15 | **9/14** |
+| **overall** | **88.0%** | **92.5%** |
 
-**0 false pseudogene calls.** The remaining multi-copy pseudogene misses (clip unmapped or a
-lone exon) are what **Feature B mate-splice** targets — mates spanning ≥2 exons of one gene,
-independent of the terminal clip. It is implemented in Rust discovery (`splice_hallmark` +
-`exon_annotation`, in the read-mapping genome = hg38) and surfaced by `annotate_v2.read_splice`;
-enable it in discovery and rerun to recover those. Not exercised here because the smoke run's
-discovery had it off and the source BAM is not retained.
+**0 false pseudogene calls** in both. SVA needs the family HMM (RMSK-remap alone lands SVA
+clips on L1/LTR); L1/Alu subfamily labels drift (L1HS↔L1PAx) via RMSK-remap to paralogs —
+expected. Remaining pseudogene misses are 5′-truncated copies whose mates don't reach a second
+exon at 60×.
