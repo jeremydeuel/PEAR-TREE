@@ -20,6 +20,11 @@ import py2bit
 from config import CONFIG
 
 GENOME = py2bit.open(CONFIG['combine_insertions']['genome_2bit'])
+# chroms() rebuilds a dict of every contig (~600 on hs1 with alts) on each call.
+# The substring fallback below takes the first matching contig, so SEQNAMES_ORDERED must
+# preserve the dict's order; the frozenset is only ever used for membership tests.
+SEQNAMES_ORDERED = tuple(GENOME.chroms().keys())
+SEQNAMES = frozenset(SEQNAMES_ORDERED)
 
 def get_sequence(seqname, start, end):
     """
@@ -29,7 +34,7 @@ def get_sequence(seqname, start, end):
     :param end: end-position, 0-based
     :return: sequence as string.
     """
-    seqnames = GENOME.chroms().keys()
+    seqnames = SEQNAMES
     if seqname not in seqnames:
         if seqname == 'MT':
             seqname = 'chrM'
@@ -39,7 +44,7 @@ def get_sequence(seqname, start, end):
                 if len(seqname)>2:
                     if seqname[-2:] == '.1':
                         seqname = seqname[:-2]
-                    for s in seqnames:
+                    for s in SEQNAMES_ORDERED:
                         if seqname in s:
                             seqname = s
                             break
@@ -48,7 +53,6 @@ def get_sequence(seqname, start, end):
     if seqname not in seqnames:
         print(f"Seqname {seqname} not found in file {CONFIG['combine_insertions']['genome_2bit']}")
         return ''
-    print(seqname)
     if start>=end: return ''
     try:
         return GENOME.sequence(seqname, start, end)

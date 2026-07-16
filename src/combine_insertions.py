@@ -24,6 +24,7 @@ import pyliftover
 from config import CONFIG
 from combine_insertions_insertion import Insertion, TYPE_LEFT_POLYA, TYPE_RIGHT_POLYA, TYPE_FULL_INFO, TYPE_LEFT_DISC, TYPE_RIGHT_DISC
 from combine_insertions_intersect_insertions import intersect_insertions
+from combine_insertions_region_filter import filter_dense_regions
 from combine_insertions_get_sequence import get_sequence
 from sequence_checks import sequence_matching_score
 from collections import Counter
@@ -91,28 +92,14 @@ def combine_insertions(input_files, insertions_genotyping_file, combined_inserti
     print(f"intersecting insertions from {len(input_files)} files...")
     insertions = intersect_insertions(all_insertions)
     #remove insertions in regions with far too high count
-    bins = []
     bin_range = 100
     ins_cutoff = 4
-    for i in insertions:
-        bins.append((i.reference_name,int(i.right_pos/bin_range)*bin_range if i.right_pos is not None else int(i.left_pos/bin_range)*bin_range))
-    c = Counter(bins)
-    removed = 0
-    regions = 0
-    for (reference_name, bin), n in c.items():
-        clean_ins = []
-        if n>=ins_cutoff:
-            regions += 1
-            for i in insertions:
-                pos = i.right_pos if i.right_pos is not None else i.left_pos
-                if i.reference_name == reference_name and pos > bin - bin_range/2 and pos < bin + bin_range * 1.5:
-                    removed += 1
-                else:
-                    clean_ins.append(i)
-            insertions = clean_ins
+    insertions, removed, regions = filter_dense_regions(insertions, bin_range, ins_cutoff)
     print(f"filtering regions with very high insertion rate of {ins_cutoff} or higher per {bin_range} bases ,removed {removed} insertions in {regions} regions, {len(insertions)} insertions are remaining")
     print(f"writing summarised insertions fasta file {insertions_fasta}")
-    with gzip.open(insertions_fasta, 'wt') as f:
+    # compresslevel=1: this is a scratch file bowtie2 reads back immediately, so the
+    # default level 9 spends CPU shrinking bytes nothing keeps.
+    with gzip.open(insertions_fasta, 'wt', compresslevel=1) as f:
         f.writelines(
             [f'{i.left_consensus.fastq(f"{i.name}:L")}{i.right_consensus.fastq(f"{i.name}:R")}' for i in insertions if i.type is TYPE_FULL_INFO])
         f.writelines(
@@ -155,7 +142,7 @@ def combine_insertions(input_files, insertions_genotyping_file, combined_inserti
     print(f"now re-mapping in local mode all clipped parts of reads")
     clipped_bam = insertion_bam[:-4] + ".insertionsonly.bam"
     if not os.path.exists(clipped_bam):
-        with gzip.open(insertions_fasta, 'wt') as f:
+        with gzip.open(insertions_fasta, 'wt', compresslevel=1) as f:
             # Feature A: a discordant-anchored call has a None clipped side; emit only the
             # side(s) that carry sequence (full-info calls still emit both).
             f.writelines(
@@ -163,7 +150,12 @@ def combine_insertions(input_files, insertions_genotyping_file, combined_inserti
                  + (i.right_clipped.fastq(f"{i.name}:R") if i.right_clipped is not None else "")
                  for i in insertions])
         print(f"running bowtie2 {CONFIG['combine_insertions']['bowtie2_executable']} with index {CONFIG['combine_insertions']['bowtie2_index2']}")
-        cmd = f"{CONFIG['combine_insertions']['bowtie2_executable']} {insertions_fasta} -k 1000 -x {CONFIG['combine_insertions']['bowtie2_index2']} --local --very-fast --threads {threads} --qc-filter | {CONFIG['combine_insertions']['samtools_executable']} view -F 4 -b -o {clipped_bam}"
+        # -F 2308 = unmapped (4) + secondary (256) + supplementary (2048). Only the primary
+        # alignment is ever read below, but -k 1000 emits up to 1000 records per clip, so
+        # dropping the rest here keeps them out of the BAM instead of compressing, storing
+        # and re-parsing records the loop discards. The equivalent Python skip is retained
+        # below, so a clipped_bam written by an older version still yields the same calls.
+        cmd = f"{CONFIG['combine_insertions']['bowtie2_executable']} {insertions_fasta} -k 1000 -x {CONFIG['combine_insertions']['bowtie2_index2']} --local --very-fast --threads {threads} --qc-filter | {CONFIG['combine_insertions']['samtools_executable']} view -F 2308 -b -o {clipped_bam}"
         os.system(cmd)
     filter_reads = set()
     print(f"removing all reads where one of the clipped ends maps within 1000bp of the breakpoint.")
