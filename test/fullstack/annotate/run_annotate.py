@@ -42,6 +42,11 @@ def main():
     A["rmsk"] = os.environ.get("PT_RMSK", os.path.join(REPO, "hs1.repeatMasker.out.gz"))
     A["dfamscan"] = None          # force the nhmmscan --dfamtblout back-end
     A["hmmer"] = None             # nhmmscan already on PATH
+    # hallmark knobs, overridable for sweeps (see CONFIG['annotate'] for the rationale)
+    if os.environ.get("PT_POLYA_MIN"):
+        A["polya_min_len"] = int(os.environ["PT_POLYA_MIN"])
+    if os.environ.get("PT_STRICT"):
+        A["require_polya_hallmark"] = os.environ["PT_STRICT"] not in ("0", "", "false", "False")
     # explicit combined/genotypes; tmp files (dfam/sam/fa.gz) land in workdir keyed by sample
     A["insertions_file"] = lambda s: a.combined
     A["genotyping_file"] = lambda s: a.genotypes

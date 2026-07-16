@@ -93,10 +93,57 @@ class Insertion:
         # each is (gene_id, side, n_exons) — mates span >= n_exons exons of one gene.
         self.splice_hits = []
         # extract inserted sequences
+    # Sequence case encodes the junction: UPPER = aligned to the reference, lower = clipped.
+    # A tail is therefore a homopolymer run in the *clipped* part, flush against the aligned
+    # part: `a{N}[ACGT]` at the end of a left clip, `[ACGT]t{N}` at the start of a right clip.
+    #
+    # N was hardcoded at 6, which is far too permissive: a real TPRT poly-A tail is 15-40 bp,
+    # while an incidental 6-mer A/T run occurs throughout ordinary sequence -- A-rich
+    # Low_complexity tracts and the A-rich 3' ends of L1/MIR/L2 all carry one -- so junctions
+    # with no tail at all scored poly-A positive. Sweep on the fp10k FP-stress harness
+    # (true insertions vs hallmark-free decoys), fraction scored poly-A positive:
+    #     min_run:   6      12     14     20
+    #     true:    97.1%  97.0%  97.0%  93.7%
+    #     decoys:  13.3%   7.3%   5.3%   2.4%
+    # 12 (the default) removes ~45% of the false poly-A at ~0.1% cost. The true-call curve is
+    # flat out to 14 partly because that harness's shortest simulated tail is 15 bp, so 12
+    # keeps margin for genuinely short/truncated tails in real data.
+    #
+    # NB this only changes what gets *called* once `require_polya_hallmark` is on: with the
+    # homology fallbacks open (the default), conclusion() accepts without consulting the
+    # poly-A verdict at all, so tightening N alone moves ~1 call on the harness.
+    # Override with CONFIG['annotate']['polya_min_len'] (src/config.py is deployment-local).
+    @staticmethod
+    def _polya_min_len():
+        return CONFIG['annotate'].get('polya_min_len', 12)
+
     def has_right_polyA(self):
-        return re.search(r"[ACGT]t{6}", self.right_seq)
+        return re.search(r"[ACGT]t{%d}" % self._polya_min_len(), self.right_seq)
     def has_left_polyA(self):
-        return re.search(r"a{6}[ACGT]", self.left_seq)
+        return re.search(r"a{%d}[ACGT]" % self._polya_min_len(), self.left_seq)
+
+    @staticmethod
+    def _strict_hallmark():
+        """CONFIG['annotate']['require_polya_hallmark'] (default False): when set, an RTE family
+        call needs the poly-A hallmark itself -- the homology-only fallbacks are skipped, since
+        sequence homology alone cannot tell a pasted-in element fragment from a genuine TPRT
+        insertion. conclusion() otherwise accepts on three conditions: (1) a poly-A on the other
+        side, (2) the same/an L1 dfam model on the other side, (3) an rmsk annotation of the same
+        family near the other side's mapping -- (2) and (3) accept a junction carrying no TPRT
+        hallmark at all. The multi-exon processed-pseudogene path is deliberately NOT gated:
+        intron-skipping is its own retrotransposition hallmark, not mere homology.
+
+        Measured on the fp10k FP-stress harness (10k true insertions + hallmark-free decoys):
+            gate  polyA_min   true called   FP leaked
+            off       6          92.4%        1349
+            off      12          92.4%        1348
+            ON        6          89.8%         286
+            ON       12          89.7%         164
+        i.e. the gate is the lever (-79% FP), and polya_min_len only pays off behind it.
+        Default off: the -2.7pt recall cost is measured against decoys that differ from true
+        insertions ONLY by the missing hallmark, which is a deliberately harsh case -- validate
+        on your own data before enabling."""
+        return bool(CONFIG['annotate'].get('require_polya_hallmark', False))
 
     # RepeatMasker classes that are retrotransposons (the only things retrotransposition
     # produces). A clip mapping to any of these is RTE-consistent; a clip mapping only to
@@ -171,18 +218,21 @@ class Insertion:
                             return f"polyA < {m}"
                         else:
                             DEBUG and print(f"      does not have left polyA -> rejected, checking left dfams")
-                        # 2) L1 element on the other side
-                        for m2 in self.left_dfams:
-                            if "L1" in m2.model:
-                                DEBUG and print(f"      found another L1 ({m2.model}) in left defams -> accepted.")
-                                return f"{m2} <- {m}"
-                        DEBUG and print(f"      does not have a suitable left dfam, checking mappings.")
-                        # 3) match near an L1 element on the other side.
-                        for pos, qual, rmsks, strand in self.left_maps:
-                            for r in rmsks:
-                                if r.repFamily == "L1":
-                                    DEBUG and print(f"      found a suitable rmsk annotation ({r}) in left mapping -> accepted.")
-                                    return f"{r}({strand}) <- {m}"
+                        if self._strict_hallmark():
+                            DEBUG and print(f"      strict hallmark: no left polyA -> no call")
+                        else:
+                            # 2) L1 element on the other side
+                            for m2 in self.left_dfams:
+                                if "L1" in m2.model:
+                                    DEBUG and print(f"      found another L1 ({m2.model}) in left defams -> accepted.")
+                                    return f"{m2} <- {m}"
+                            DEBUG and print(f"      does not have a suitable left dfam, checking mappings.")
+                            # 3) match near an L1 element on the other side.
+                            for pos, qual, rmsks, strand in self.left_maps:
+                                for r in rmsks:
+                                    if r.repFamily == "L1":
+                                        DEBUG and print(f"      found a suitable rmsk annotation ({r}) in left mapping -> accepted.")
+                                        return f"{r}({strand}) <- {m}"
                     else:
                         DEBUG and print(f"    - detected RIGHT dfam model {m.model} on strand {m.strand}, checking...")
                         # dont ignore strands for Alus and since these should have the same orientation
@@ -192,21 +242,24 @@ class Insertion:
                             DEBUG and print(
                                 f"      found a suitable polyA in the left mapping -> accepted.")
                             return f"polyA <- {m}"
-                        # 2) same element on the other side, oriented in the same direction
-                        for m2 in self.left_dfams:
-                            if m2.is_active and m2.model[:3] == m.model[:3] and m2.strand == m.strand:
-                                DEBUG and print(
-                                    f"      found a suitable model in the left dfams ({m2.model} on strand {m2.strand}) in the left mapping -> accepted.")
-                                return f"{m2} <- {m}"
-                        # 3) match near an L1 element on the other side.
-                        for pos, qual, rmsks, strand in self.left_maps:
-                            for r in rmsks:
-                                if r.repName[:3] == m.model[:3]:
-                                    # check same strand
-                                    if (strand == "+") ^ (r.strand == "+") == (m.strand == "-"):
-                                        DEBUG and print(
-                                            f"      found a suitable mapping in the left dfams ({r} on strand {r.strand}, mapping is on strand {strand})-> accepted.")
-                                        return f"{r}({strand}) <- {m}"
+                        if self._strict_hallmark():
+                            DEBUG and print(f"      strict hallmark: no left polyA -> no call")
+                        else:
+                            # 2) same element on the other side, oriented in the same direction
+                            for m2 in self.left_dfams:
+                                if m2.is_active and m2.model[:3] == m.model[:3] and m2.strand == m.strand:
+                                    DEBUG and print(
+                                        f"      found a suitable model in the left dfams ({m2.model} on strand {m2.strand}) in the left mapping -> accepted.")
+                                    return f"{m2} <- {m}"
+                            # 3) match near an L1 element on the other side.
+                            for pos, qual, rmsks, strand in self.left_maps:
+                                for r in rmsks:
+                                    if r.repName[:3] == m.model[:3]:
+                                        # check same strand
+                                        if (strand == "+") ^ (r.strand == "+") == (m.strand == "-"):
+                                            DEBUG and print(
+                                                f"      found a suitable mapping in the left dfams ({r} on strand {r.strand}, mapping is on strand {strand})-> accepted.")
+                                            return f"{r}({strand}) <- {m}"
             for m in self.left_dfams:
                 if True or m.is_active:
                     if "L1" in m.model:
@@ -219,13 +272,16 @@ class Insertion:
                             return f"{m} -> polyA"
                         # 2) L1 element on the other side
                         # ignore, already covered above.
-                        # 3) match near an L1 element on the other side.
-                        for pos, qual, rmsks, strand in self.right_maps:
-                            for r in rmsks:
-                                if r.repFamily == "L1":
-                                    DEBUG and print(
-                                        f"      found a suitable rmsk annotation ({r}) in right mapping -> accepted.")
-                                    return f"{m} -> {r}({strand})"
+                        if self._strict_hallmark():
+                            DEBUG and print(f"      strict hallmark: no right polyA -> no call")
+                        else:
+                            # 3) match near an L1 element on the other side.
+                            for pos, qual, rmsks, strand in self.right_maps:
+                                for r in rmsks:
+                                    if r.repFamily == "L1":
+                                        DEBUG and print(
+                                            f"      found a suitable rmsk annotation ({r}) in right mapping -> accepted.")
+                                        return f"{m} -> {r}({strand})"
                     else:
                         # dont ignore strands for Alus and since these should have the same orientation
                         # accept this in three conditions
@@ -235,13 +291,16 @@ class Insertion:
                             return f"{m} -> polyA"
                         # 2) same element on the other side, oriented in the same direction
                         # ignore, already covered above.
-                        # 3) match near an L1 element on the other side.
-                        for pos, qual, rmsks, strand in self.right_maps:
-                            for r in rmsks:
-                                if r.repName[:3] == m.model[:3]:
-                                    # check same strand
-                                    if (strand == "+") ^ (r.strand == "+") == (m.strand == "-"):
-                                        return f"{m} -> {r}({strand})"
+                        if self._strict_hallmark():
+                            DEBUG and print(f"      strict hallmark: no right polyA -> no call")
+                        else:
+                            # 3) match near an L1 element on the other side.
+                            for pos, qual, rmsks, strand in self.right_maps:
+                                for r in rmsks:
+                                    if r.repName[:3] == m.model[:3]:
+                                        # check same strand
+                                        if (strand == "+") ^ (r.strand == "+") == (m.strand == "-"):
+                                            return f"{m} -> {r}({strand})"
         # check elements only mapped, but not identified by dfam
         l1_map_check = False
         for pos, qual, rmsks, strand in self.left_maps:
@@ -249,6 +308,8 @@ class Insertion:
                 if 'L1' in r.repName[:2] and not l1_map_check:
                     if self.has_right_polyA(): return r.repName
                     l1_map_check = True #dont check this twice
+                    if self._strict_hallmark():
+                        continue          # homology on both sides is not a TPRT hallmark
                     for pos2, qual2, rmsks2, strand2 in self.right_maps:
                         for r2 in rmsks2:
                             if 'L1' in r2.repName[:2]:
@@ -274,11 +335,11 @@ class Insertion:
         for pos, qual, rmsks, strand in self.right_maps:
             for r in rmsks:
                 if (strand == "+") ^ (r.strand == "+"):
-                    if r.repName[:3] in minus_elements:
+                    if not self._strict_hallmark() and r.repName[:3] in minus_elements:
                         return r.repName
                 else:
                     if self.has_left_polyA(): return r.repName
-                    if r.repName[:3] in plus_elements:
+                    if not self._strict_hallmark() and r.repName[:3] in plus_elements:
                         return r.repName
         # --- processed-pseudogene annotation (non-gating) ---
         # A retrotransposed spliced mRNA: not an RTE (no Dfam/rmsk RTE hit above), but its
