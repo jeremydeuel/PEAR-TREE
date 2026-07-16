@@ -4,18 +4,18 @@ Runbook for genotyping one donor's colonies end-to-end on the Sanger farm (LSF).
 Worked example: **PD44579**, ~185 colony WGS BAMs under
 `/lustre/scratch126/casm/staging/team273/jd43/2178`.
 
-## ⚠️ Assembly: these BAMs are GRCh37 / hs37d5
+## Assembly: these BAMs are GRCh37 / hs37d5 (already fully supported)
 
 The dupmarked BAMs are **bwa-mem mapped to `1000Genomes_hs37d5`** (`@SQ … AS:NCBI37`,
-contigs `1..22,X,Y,MT` + `GL000*`/`NC_007605`/`hs37d5` decoys). This drives two things:
+contigs `1..22,X,Y,MT` + `GL000*`/`NC_007605`/`hs37d5` decoys).
 
-- **Discovery** is assembly-agnostic → runs as-is with `min_mapq=60` and a GRCh37
-  contig allowlist (see `config.discovery.grch37`). Ready now.
-- **combine_insertions is NOT** → it remaps clipped consensuses with bowtie2 and lifts
-  coordinates via a chain file, and the repo `config.py` points all of that at **hs1
-  (T2T)**. Against GRCh37 reads that is wrong. Steps 2–4 are blocked until you build a
-  **GRCh37/hs37d5 bowtie2 index + 2bit** (see step 5). Do NOT run combine against the
-  hs1 config on this data.
+- **Discovery** is assembly-agnostic → `min_mapq=60` + a GRCh37 contig allowlist
+  (`config.discovery.grch37`).
+- **combine_insertions** always remaps clips to **hs1 (T2T)** and reconciles them to the
+  BAM assembly with a pyliftover chain; the `genome_2bit` wrapper maps `1`→`chr1`
+  automatically. So GRCh37 needs **no new index** — only the hs1 index + the
+  **hs1→hg19** chain, both already on the farm (step 5). hg19 coordinates equal
+  GRCh37/hs37d5 for `1..22,X,Y`.
 
 ---
 
@@ -76,30 +76,41 @@ These steps use the Python driver and therefore `src/config.py`. First create it
 cp src/config_hs.py src/config.py     # then edit the combine_insertions block (below)
 ```
 
-### 5. Build the GRCh37 references combine_insertions needs (one-off)
+### 5. Point config.py['combine_insertions'] at the existing farm files
 
-Locate `hs37d5.fa` on the farm (the BAM header points at
-`…/1000Genomes_hs37d5/all/fasta/hs37d5.fa`; the canpipe copy is
-`/lustre/scratch119/casm/team78pipelines/canpipe/live/ref/human/GRCh37d5/genome.fa`).
-Then, once:
+No index build needed — everything is already under
+`/lustre/scratch126/casm/teams/team273/users/jd43/`. Set:
 
-```bash
-bowtie2-build --threads 8 hs37d5.fa /path/to/idx/hs37d5      # ~1-2 h, ~4 GB output
-faToTwoBit hs37d5.fa /path/to/idx/hs37d5.2bit                # for reference-flank fetch
+```python
+'combine_insertions': {
+    'genome_2bit':      '/lustre/scratch126/casm/teams/team273/users/jd43/hg19.2bit',
+    'bowtie2_index':    '/lustre/scratch126/casm/teams/team273/users/jd43/pt_hu_trees/hs1/hs1',
+    'bowtie2_index2':   '/lustre/scratch126/casm/teams/team273/users/jd43/pt_hu_trees/hs1/hs1',
+    'bowtie2_index2_lo':'/lustre/scratch126/casm/teams/team273/users/jd43/hs1.hg19.all.chain.gz',
+    'samtools_executable': '<`module load samtools`; which samtools>',
+    'bowtie2_executable':  '<`module load bowtie2`;  which bowtie2>',
+    'exclude_files_with_many_insertions': 1_000_000,
+    'clean_remap_max_insertion': 12,
+    'clean_remap_min_as': -15,
+},
 ```
 
-Point `src/config.py['combine_insertions']` at them:
+Why these are correct for GRCh37 BAMs:
+- `bowtie2_index` / `bowtie2_index2` = **hs1 (T2T)** — clips always remap to the most
+  complete reference; assembly-independent.
+- `bowtie2_index2_lo` = **hs1→hg19 chain** — lifts hs1 clip-hits to hg19 coordinates,
+  which equal the GRCh37/hs37d5 BAM coordinates for `1..22,X,Y`. This is the piece that
+  makes it GRCh37-correct.
+- `genome_2bit` = **hg19.2bit** — supplies the reference-flank consensus at each
+  breakpoint (BAM coords); `combine_insertions_get_sequence.get_sequence` maps the
+  numeric BAM names `1`→`chr1` for the fetch.
 
-| key | set to |
-|-----|--------|
-| `genome_2bit` | `/path/to/idx/hs37d5.2bit` |
-| `bowtie2_index` | `/path/to/idx/hs37d5` (assembly the BAMs are on — used to reject reference-matching clips) |
-| `bowtie2_index2` | `/path/to/idx/hs37d5` (same assembly for a first pass; a newer annotated genome only if you want element classification) |
-| `bowtie2_index2_lo` | the chain from `bowtie2_index2` → the BAM assembly; **identity when both are GRCh37** — leave as-is only if `index2` == `bowtie2_index` |
-| `samtools_executable`, `bowtie2_executable` | valid farm paths (module load, or absolute) |
+> Validate combine on the pilot colony's discovery output before the full run.
 
-> Validate combine on the pilot colony's discovery output before the full run — it's the
-> step most sensitive to the assembly/config mismatch.
+Optional (element classification, post-genotyping `tools/annotate_v2.py`): the Dfam
+`hs` HMM (`…/jd43/Dfam-curated_only-hs.hmm`, already hmmpressed), `dfamscan.pl`, and
+`hmmer-3.3.2` are all present under `…/jd43/` if you want it later — not needed for the
+core call table.
 
 ### 6. combine_insertions (build the shared genotyping contract)
 
