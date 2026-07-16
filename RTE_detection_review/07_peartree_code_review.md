@@ -219,7 +219,7 @@ sensitivity/specificity. They are consistent with, and extend, the authors' own
    literature, one of the richest false-positive sources. Re-enabling discovery-time
    coverage masking (Plan §2.3) is the single highest-ROI specificity improvement.
 2. **Two clustering distances disagree.** Discovery clusters clipped reads with a
-   **hard-coded 6 bp** window (`discovery.py:136,147`), but `max_bp_window = 40` (config)
+   **hard-coded 6 bp** window (`discovery.py:178,189`), but `max_bp_window = 40` (config)
    is what the README documents as the pairing window and what the TSD logic in
    `output()` uses (`tsd > 40`). A TSD between 6 and 40 bp can therefore have its two
    sides clustered inconsistently. Worth reconciling and making the 6 configurable.

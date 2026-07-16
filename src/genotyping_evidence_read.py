@@ -19,7 +19,7 @@
 import pysam
 import os
 from typing import Tuple
-from genotype_qscore import qscore, ARTEFACT, ALT_MATCH, REF_MATCH, RIGHT_TO_LEFT, LEFT_TO_RIGHT
+from genotype_qscore import qscore, RIGHT_TO_LEFT, LEFT_TO_RIGHT
 from quality_seq import QualitySeq
 # define constants used to identify matching conditions
 MATCHES_WT = 2

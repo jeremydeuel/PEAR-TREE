@@ -162,6 +162,19 @@ exon, must not flag). `--out-exons` writes the matching exon annotation for
 `exon_annotation`. These are annotation checks (the sidecar), scored by inspecting
 `<out>.splice.tsv`, not by the recall/precision table.
 
+**Novel processed pseudogenes (`--n-novel-pseudogene`):** de-novo L1-mediated retrocopies —
+the biologically faithful counterpart to the Feature-B signature check above. Where
+`--n-pseudogene` reuses an ERV clip and only exercises the mate-spanning-exons *signal*, each
+novel pseudogene renders a real retrocopy: the inserted (hence clipped) sequence **is** the
+spliced transcript — the parent gene's exons concatenated, introns skipped — carrying the L1
+TPRT scar (poly-A tail + TSD + `TTAAAA` EN-motif flank), exactly the review's "same
+poly-A/TSD hallmarks but spliced exonic sequence" (§2.3). So each is a **real insertion in
+truth** (class `PSEUDOGENE_novel`, scored for recall/precision/VAF like any TPRT element)
+whose junction reads **also** carry the splice hallmark (mates spanning ≥2 exons of parent
+gene `PG1`), exercising the whole discovery → splice-annotate path on realistic sequence.
+The parent-gene exons are added to the `--out-exons` track. So it is checked both ways: it
+must appear in the recall table *and* be flagged in `<out>.splice.tsv`.
+
 Every count is tuneable; set any `--n-*` to 0 to drop that class. `--n-l1` / `--n-erv`
 still drive the canonical full-length counts (backward compatible).
 

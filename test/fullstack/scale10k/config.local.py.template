@@ -1,0 +1,35 @@
+# Local config shim for step-2 (combine_insertions) on a workstation.
+#
+# run_scale10k.sh materialises this into $OUT/config.py (filling the @@PLACEHOLDERS@@),
+# and run_combine.py puts $OUT first on sys.path so `from config import CONFIG` resolves
+# here instead of the cluster-pathed src/config.py. Only combine_insertions paths matter;
+# the other sections are copied from src/config.py so every key the combine chain reads
+# is present.
+
+CONFIG = {
+    'discovery': {
+        'min_mapq': 60, 'min_clip_len': 12, 'min_evidence_reads_per_breakpoint': 2,
+        'max_bp_window': 40, 'max_homopolymer_len': 6, 'min_adapterlen_for_clip': 4,
+        'min_good_bases': 10, 'min_consensus_score_for_good_base': 2,
+        'min_breakpoints_aggregated_during_first_step': 2, 'max_read_count': 120,
+        'exclude_same_contig_supplementary': 1000, 'reject_fully_mapping_reads': True,
+    },
+    'adapters': ['AGATCGGAAGAGCACACGTCTGAACTCCAGTCA',
+                 'AGATCGGAAGAGCGTCGTGTAGGGAAAGAGTGT',
+                 'AGATCGGAAAGCACACGTCTGAACTCCAGTCA',
+                 'AGATCGGAAAGCGTCGTGTAGGGAAAGAGTGT'],
+    'genotyping': {'max_bases': 12, 'min_score_for_call': 6, 'reads_for_high_coverage': 180},
+    'combine_genotypes': {'min_wild-types': 0, 'min_insertions': 1, 'max_artefact': 10, 'max_na': 10},
+    'combine_insertions': {
+        'genome_2bit': '@@HG38_2BIT@@',          # primary hg38 .2bit (make_2bit.py builds one)
+        'exclude_files_with_many_insertions': 1_000_000,
+        'samtools_executable': '@@SAMTOOLS@@',
+        'bowtie2_executable': '@@BOWTIE2@@',
+        'bowtie2_index': '@@HS1_BT2@@',          # end-to-end remap target (T2T hs1)
+        'bowtie2_index2': '@@HS1_BT2@@',         # clipped-only remap target
+        'bowtie2_index2_lo': '@@HS1_HG38_CHAIN@@',  # hs1 -> hg38 liftOver chain
+        'clean_remap_max_insertion': 12,
+        'clean_remap_min_as': -15,
+    },
+    'version': '1.1',
+}

@@ -158,13 +158,19 @@ discovery.min_breakpoints_aggregated_during_first_step | 2 | minimum number of r
 discovery.max_read_count | 60 | maximum number of reads allowed to span a breakpoint region. This is designed to exclude regions of high-coverage, which are almost always artefact. This number has to be adjusted according to expected coverage and has to be set very high in case of enriched sequencing.
 discovery.reject_fully_mapping_reads | True | drop clipped candidate reads whose XA/SA tag shows the whole read maps contiguously elsewhere in the reference (not a real chimeric junction). Applies, during discovery, the "at least one end maps entirely to the reference" filter that step 2 would otherwise do. Uses only tags already in the BAM (no genome needed). Set `PEARTREE_KEEP_FULLMAP=1` to disable at runtime.
 adapters | - | list of adapter sequences to clip. This has to be ajusted according to library prep and sequencing platform. The default uses the NebNext Adapters for Illumina
-genotyping.max_bases | 12 | maximum number of bases used for genotyping.
-genotyping.min_score_for_call | 10 | minimum score (+1 for match, -2 for mismatch) required to call an insertion
-genotyping.reads_for_high_coverage | 60 | similar to discovery.max_read_count, but re-applied during genotyping file since not all breakpoints have been checked for all bam files during discovery phase.
-combine_genotypes.min_wild-types | 20 | minimum number of bam files required to have a wild-type genotype in order for an insertion to be considered. This gets rid of insertions that don't vary between files but are not present in the reference genome.
+genotyping.max_bases | 12 | maximum number of bases (per breakpoint side) used for genotyping.
+genotyping.min_mapq | 40 | minimum mapq of a spanning read to be used as genotyping evidence.
+genotyping.min_score_for_call | 6 | minimum aggregate quality-margin required for a *confident* (non-uncertain) genotype call. Below this (or below min_supporting_reads) the call degrades to `insertion?` / `wild-type?`.
+genotyping.min_supporting_reads | 2 | minimum number of allele-supporting reads for a confident het/hom/wild-type call.
+genotyping.reads_for_high_coverage | 60 | read count above which a locus is flagged `high-coverage` (counted as NA), re-applied per bam since not all breakpoints were coverage-checked for all bams during discovery.
+genotyping.vaf_wildtype_max / vaf_het_min / vaf_hom_min | 0.10 / 0.30 / 0.85 | variant-allele-fraction (VAF = alt-reads / (alt+ref reads)) band edges. VAF ≤ 0.10 → wild-type; 0.30–0.85 → heterozygous; ≥ 0.85 → homozygous; the gaps are the uncertain classes.
+genotyping.artefact_read_fraction / min_artefact_reads | 0.5 / 2 | a locus is called `artefact` when at least this fraction (and this many) of its evidence reads match neither the reference nor the inserted junction.
+genotyping.double_alt_is_artefact | True | treat a single read that matches the inserted element on BOTH junctions as a chimeric artefact. Consider setting False for element families (e.g. mouse ERV/LTR) whose genomic flanks resemble the inserted sequence.
+combine_genotypes.min_wild-types | 20 | minimum number of bam files required to have a wild-type genotype for an insertion to be considered. This removes insertions that don't vary between files but are absent from the reference. For enriched/targeted (non-WGS) data set to 0 and raise max_na (see note below).
 combine_genotypes.min_insertions | 1 | minimum number of certain heterozygous or homozygous calls required for an insertion to pass filtering
 combine_genotypes.max_artefact | 200 | maximum number of bam files allowed to have an "artefact" genotype (evidence of non-insertion non-reference clipped reads)
-combine_genotypes.max_na | 18 | maximum number of bam files allowed to have an "NA" genotype (no coverage or high coverage).
+combine_genotypes.max_na | 18 | maximum number of bam files allowed to have an "NA" genotype (`no-coverage`, `high-coverage` or `error`).
+combine_genotypes.min_best_score | 800 | minimum best het/hom support score across all samples for a locus to pass filtering.
 combine_insertions.genome_2bit | - | Path to the 2bit file of the assembly used to map the bams
 combine_insertions.exclude_files_with_many_insertions | 1000000 | exclude files with more than this number of insertions. Set to 1 Mio to basically switch off this feature, its probably better to do this manually, since insertional mutations only present in a single bam file will can not be detected if that bam file happens to have more than this number of insertions
 combine_insertions.samtools_executable | - | Path to samtools
@@ -206,8 +212,15 @@ python src/main.py --step genotype --bam test_data/test.bam --out test_data/test
 expected output in test_step3.txt.gz
 ```
 insertion	genotype	score_genotype	score_alternative
-13:32992169-32992177	heterozygous	2428	5285
+13:32992169-32992177	heterozygous	2428	3018
 ```
+
+The `genotype` column is one of: `wild-type`, `heterozygous`, `homozygous`, `artefact`,
+the low-confidence classes `wild-type?` / `insertion?`, or the not-assessable classes
+`no-coverage` / `high-coverage` / `error`. Calls are driven by the variant allele
+fraction (VAF = alt-supporting reads / (alt + ref reads)): wild-type ≈ 0, heterozygous
+≈ 0.5, homozygous ≈ 1.0 (see the genotyping config keys above). Here the test locus has
+4 alt- and 3 ref-supporting reads (VAF ≈ 0.57) → heterozygous.
 
 ## License
 

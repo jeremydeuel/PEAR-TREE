@@ -84,11 +84,11 @@ The source (not just the papers) of these seven tools was read for [§12](12_too
 | Split k-mer filter | k = 7, k_min = 3 hits | Delly |
 | PE/SR size agreement | within 10% | Delly |
 | MAPQ floor | ≥ 20 (Delly/MEIGA); ≥ 40 (PEAR-TREE) | all |
-| Poly‑A tail | ≥ 15 bp, ≥ 90% purity, ≤ 30 bp from 3′ (MEIGA); ≥ 12 bp (PEAR-TREE) | MEIGA / PEAR-TREE |
+| Poly‑A tail | ≥ 15 bp, ≥ 90% purity, ≤ 30 bp from *either* end (MEIGA); ≥ 12 bp (PEAR-TREE) | MEIGA / PEAR-TREE |
 | TSD length | ~2–20 bp (commonly 10–20) | Tubio / MEIGA |
 | Min supporting reads (somatic) | ≥ 10% of total; ≥ 3 tumour, 0 in normal | Nam / MEIGA |
-| Germline in blood | ≥ 3 discordant pairs | Nam 2023 |
-| Panel VAF → artefact/germline | > 0.1 in PoN | Nam 2023 |
+| Germline SV flag (blood) | *many* discordant reads in matched blood (qualitative); ≥ 3 disc. pairs + SA tag is a *min-support* rule, not the germline test | Nam 2023 |
+| Panel VAF → artefact/germline | ≥ 1% (0.01) VAF in PoN | Nam 2023 |
 | Indel/clip proportion reject | > 70% | Nam 2023 |
 | Excludable regions / read cap | telomere/centromere `-x`; ≤ 1000 split reads/interval | Delly |
 | Artefact soft-clip ratio | ~50% (vs ~5% genuine) | Tanaka |

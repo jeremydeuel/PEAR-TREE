@@ -43,15 +43,25 @@ CONFIG = {
                 'AGATCGGAAAGCGTCGTGTAGGGAAAGAGTGT',  # common sequencing error of rev adapter
                 ],
     'genotyping': {
-        'max_bases': 12, #max bases used for genotyping
-        'min_score_for_call': 6, #minimal score to call
-        'reads_for_high_coverage': 60, #number of reads required to call high coverage
+        'max_bases': 12, #max bases (per side) used for genotyping (applied in combine_insertions)
+        'min_mapq': 40, #minimal mapq of a spanning read to be used as genotyping evidence
+        'min_score_for_call': 6, #minimal aggregate quality-margin for a confident (non-uncertain) call
+        'min_supporting_reads': 2, #minimal number of allele-supporting reads for a confident het/hom/wt call
+        'reads_for_high_coverage': 60, #read count above which a locus is flagged high-coverage (counted as NA)
+        'art_min_score': 60, #per-side quality above which a read side counts as artefact (matches neither ref nor alt)
+        'vaf_wildtype_max': 0.10, #VAF at or below which a locus is called wild-type
+        'vaf_het_min': 0.30, #minimal VAF for a heterozygous call
+        'vaf_hom_min': 0.85, #minimal VAF for a homozygous call
+        'artefact_read_fraction': 0.5, #fraction of artefact reads (of all evidence) needed to call the locus an artefact
+        'min_artefact_reads': 2, #minimal number of artefact reads to call the locus an artefact
+        'double_alt_is_artefact': True, #a single read matching the inserted element on BOTH junctions is a chimeric artefact
     },
     'combine_genotypes': {
         'min_wild-types': 20, #minimal number of wild-type colonies
         'min_insertions': 1, #minimal number of colonies with insertion
         'max_artefact': 0, #maximal number of colonies with artefacts
-        'max_na': 0, #maximal number of colonies with NA genotype (high coverage or no coverage)
+        'max_na': 0, #maximal number of colonies with NA genotype (high coverage, no coverage or error)
+        'min_best_score': 800, #minimal best het/hom support score across samples for a locus to pass
     },
     'combine_insertions': {
         'genome_2bit': '/lustre/scratch125/casm/teams/team273/users/jd43/pt_hu_trees/hs1/hs1.2bit', #path to genome, has to be 2bit file

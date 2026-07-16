@@ -56,9 +56,11 @@ signature of an insertion breakpoint. Key discriminating features:
   chimeric read instead mimics a **fusion / translocation junction** — directly relevant to
   transduction/translocation calling ([§3](03_detecting_true_events.md)).
 
-**Prevalence.** 371–655 (median 568) distinct artefact palindromes per sample (Tanaka);
-> 1,000 per sample (Chen). Category-[a] chimeric artefacts: 11,731 vs 2,984 genuine
-variants in Tanaka's data. They concentrate at natural inverted-repeat/palindromic loci in
+**Prevalence.** 371–655 (median 568) distinct artefact palindromes per sample (Tanaka).
+Category-[a] chimeric artefacts: 11,731 vs 2,984 genuine
+variants in Tanaka's data. (Chen reports a median of **115** artefact SNVs/sample (range
+26–278) for enzymatic prep vs 61 for sonication — see [§5.2](05_sequencing_artefacts.md) — not
+a per-sample palindrome count.) They concentrate at natural inverted-repeat/palindromic loci in
 the reference — the *same* structure-rich regions where SV/MEI callers are most prone to
 false positives.
 

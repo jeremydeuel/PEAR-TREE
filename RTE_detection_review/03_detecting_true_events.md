@@ -82,7 +82,10 @@ genomic rearrangements. Pipeline and defaults worth borrowing:
 - **source assignment** two ways — transduction alignment to a **patient-specific DB of
   10-kb downstream intervals** of all full-length L1s, and **diagnostic-SNV inference**
   (100% of diagnostic SNVs shared, ≥ 75% total) — 91.7% concordant;
-- benchmark precision > 99%, recall ~75–82% at 15% VAF.
+- benchmark precision **> 95%** (F1 up to 99.55), recall ~75–82% at 15% VAF. *(A separate
+  MEIGA-SR re-validation vs TraFiC/xTea reports 99.9% precision / 95.7% recall; the ">99%"
+  figure elsewhere in the paper is the **source-inference** specificity — sensitivity only
+  47.6% — not the detection-benchmark precision.)*
 
 > **The MEIGA-SR/LR source was reviewed for this report — see
 > [§12.3–§12.4](12_tool_implementations_compared.md).** Corrections/additions from the code:
@@ -122,8 +125,10 @@ Recognising the TPRT scar is necessary but not sufficient; the event must be **c
 - **Reference/known:** mask against the assembly's annotated repeats and MEI polymorphism
   databases — **1000 Genomes MEI, dbRIP, euL1db**. (MELT/xTea/MEIGA all do this.)
 - **Germline:** present in **matched normal/blood** or shared across unrelated donors.
-  MEIGA-SR **excludes events shared by ≥ 2 donors**; Native 2023 used **≥ 3 discordant
-  pairs in blood = germline** and a **2,860-genome population-allele-frequency panel**.
+  MEIGA-SR **excludes events shared by ≥ 2 donors**; Nam 2023 flagged germline SVs by
+  **many discordant reads in matched blood** (the "≥ 3 discordant read pairs with an SA tag"
+  figure is a *minimum-support* rule for retaining a call, **not** the germline test) and used
+  a **2,860-genome population-allele-frequency panel**.
 - **Somatic:** absent from matched normal; in clonal material, **VAF ≈ 0.5**. Requiring
   clonality (present in all cells of a crypt/organoid founder lineage) is what defines the
   event as a bona fide somatic mutation and enables developmental timing.

@@ -52,7 +52,7 @@ signatures, in decreasing order of usefulness for short-read detection:
 1. **Poly‑A tail (3′).** The single most specific sequence signature. A homopolymeric
    adenine tract (on the `+` strand; poly‑T on the reverse read) sits at the 3′ junction.
    Detection tools require it to be reasonably long and pure — MEIGA uses **≥15 bp,
-   ≥90% purity, within 30 bp of the 3′ end**; PEAR-TREE uses a ≥12 bp A/T run. Its loss to
+   ≥90% purity, within 30 bp of *either* end of the insertion**; PEAR-TREE uses a ≥12 bp A/T run. Its loss to
    library prep ("poly‑A dropout") is a major failure mode (see [§5](05_sequencing_artefacts.md)).
 2. **Target-site duplication (TSD).** The staggered EN nick means the insertion is flanked
    by a short **direct repeat**, typically **~2–20 bp** (commonly 10–20 bp). Detecting the

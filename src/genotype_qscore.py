@@ -1,13 +1,7 @@
 from quality_seq import QualitySeq
-from math import log10
 LEFT_TO_RIGHT = 1
 RIGHT_TO_LEFT = 2
 
-REF_MATCH = 1
-ALT_MATCH = 2
-ARTEFACT = 3
-
-K = 10.0 ** -0.1
 
 def qscore(seq: QualitySeq, ref: str, alt: str, direction:int=LEFT_TO_RIGHT):
     # create two zipped objects for comparison
@@ -63,61 +57,18 @@ def qscore(seq: QualitySeq, ref: str, alt: str, direction:int=LEFT_TO_RIGHT):
         if s != a and s != r:
             art_score += q
     s3 = ref_score, alt_score, art_score
-    if s2[0]>s1[0]  and s2[0] > s2[2]:
-        #print(f"swapped {s2} for {s1} for better ref read (-1)")
-        return s2
-    if s2[1]>s1[1]  and s2[1] > s2[2]:
-        #print(f"swapped {s2} for {s1} for better alt read (-1)")
-        return s2
-    if s3[0]>s1[0]  and s3[0] > s3[2]:
-        #print(f"swapped {s3} for {s1} for better ref read (+1)")
-        return s3
-    if s3[1]>s1[1]  and s3[1] > s3[2]:
-        #print(f"swapped {s3} for {s1} for better alt read (+1)")
-        return s3
-    return s1
-
-
-def qscore_previous(seq: QualitySeq, ref: str, alt: str, direction=LEFT_TO_RIGHT):
-
-
-    #set prior probabilities
-    q_ref = 0
-    q_alt = 0
-    q_art = 0
-    if direction == RIGHT_TO_LEFT:
-        r = range(-min([len(ref),len(alt), len(seq)]), 0)
-    else:
-        r = range(min([len(ref),len(alt),len(seq)]))
-    for i in r:
-        base, qual = seq.getPos(i)
-        if base == "N": continue
-        if ref[i] == alt[i]:
-            if base == ref[i]:
-                q_ref += qual
-                q_alt += qual
-                q_art += qual /4
-            else:
-                q_ref -= qual
-                q_alt -= qual
-                q_art += qual/4
-        else:
-            if base == ref[i]:
-                q_ref += qual
-                q_alt -= qual
-                q_art += qual/4
-            elif base == alt[i]:
-                q_alt += qual
-                q_ref -= qual
-                q_art += qual/4
-            else:
-                q_ref -= qual
-                q_alt -= qual
-                q_art += qual/4
-    return q_ref, q_alt, q_art
-if __name__ == '__main__':
-    measured = QualitySeq('ACGGTTTTTTTTTTTTT',[20,20,20,20,20,20,3,20,3,20,3,20,3,3,20,3,20])
-    alt = 'TTTTTTTTTTTT'
-    ref = 'TATGTCTCGTCT'
-    #ref = 'TTATCTTTTTGT'
-    print(qscore(measured, ref, alt, RIGHT_TO_LEFT))
+    # ±1 bp register search to tolerate breakpoint imprecision. Pick the register
+    # that best explains the read under EITHER hypothesis, scored as max(ref,alt),
+    # and report THAT register's (ref, alt, art) jointly. The previous ladder
+    # tested ref before alt and returned the first register that improved either,
+    # which (a) resolved ties toward ref and (b) reported an artefact score from a
+    # register chosen to maximise ref/alt — systematically suppressing artefact
+    # evidence. Ties prefer the no-shift register s1 so a shift only wins when it
+    # genuinely improves the alignment.
+    best = s1
+    best_key = max(s1[0], s1[1])
+    for cand in (s2, s3):
+        cand_key = max(cand[0], cand[1])
+        if cand_key > best_key:
+            best, best_key = cand, cand_key
+    return best

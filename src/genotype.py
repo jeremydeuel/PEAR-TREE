@@ -18,9 +18,9 @@
 import pysam
 import gzip
 import sys
-from genotyping_insertion import Insertion, GT_ARTEFACT
+from genotyping_insertion import Insertion, GT_HIGH_COVERAGE, GT_ERROR
 
-from multiprocessing import Process, Queue, Pipe
+from multiprocessing import Process, Queue
 from queue import Empty
 from config import CONFIG
 import os
@@ -31,63 +31,88 @@ DEBUG = os.environ.get("PEARTREE_DEBUG", "") not in ("", "0", "false", "False")
 TERMINATION_SIGNAL = 1
 
 
-def mc_count_insertion(insertion, bam_file,  connection):
-    start = min(insertion.left_pos, insertion.right_pos)
-    end = max(insertion.left_pos, insertion.right_pos, start + 1)
-    with pysam.AlignmentFile(bam_file) as bam:
-        read_count = bam.count(insertion.chr, start, end)
-    connection.send(read_count)
-
 def mc_process_insertion(input_queue: Queue, output_queue: Queue, bam_file: str) -> None:
-    count_out, count_in = Pipe(duplex=False)
+    high_cov = CONFIG['genotyping']['reads_for_high_coverage']
     with pysam.AlignmentFile(bam_file) as bam:
-        while ins := input_queue.get():
-            if ins is TERMINATION_SIGNAL:
-                return
+        while (ins := input_queue.get()) != TERMINATION_SIGNAL:
             name, left_clipped, right_clipped, left_ref, right_ref = ins
-            i = Insertion(name)
-            i.left_clipped = left_clipped
-            i.right_clipped = right_clipped
-            i.right_ref = right_ref
-            i.left_ref = left_ref
-            read_count = bam.count(i.chr, min(i.left_pos, i.right_pos), max(i.left_pos, i.right_pos)+1)
-            if False and read_count > CONFIG['genotyping']['reads_for_high_coverage']:
-                print(f"genotyping {i.name} as artefact due to high read count of {read_count} (cutoff = {CONFIG['genotyping']['reads_for_high_coverage']})")
-                gt, score_gt, score_other = GT_ARTEFACT, 0, 0
-            else:
-                i.genotype(bam)
-                gt, score_gt, score_other = i.summarise_evidence()
-            output_queue.put((
-                i.name,
-                gt,
-                score_gt,
-                score_other
-            ))
+            # Never let one bad locus kill a worker: a dead worker leaves its
+            # name in the ordered writer's queue with no matching result, which
+            # would stall the writer and silently truncate the output tail. Emit
+            # an explicit GT_ERROR result instead so every submitted name is
+            # accounted for.
+            try:
+                i = Insertion(name)
+                i.left_clipped = left_clipped
+                i.right_clipped = right_clipped
+                i.right_ref = right_ref
+                i.left_ref = left_ref
+                start = max(0, min(i.left_pos, i.right_pos))
+                end = max(i.left_pos, i.right_pos) + 1
+                read_count = bam.count(i.chr, start, end)
+                if read_count > high_cov:
+                    # coverage spikes are a rich artefact source; do not attempt a
+                    # genotype here, flag as NA-like high coverage (counted by
+                    # combine_genotypes' max_na).
+                    gt, score_gt, score_other = GT_HIGH_COVERAGE, read_count, 0
+                else:
+                    i.genotype(bam)
+                    gt, score_gt, score_other = i.summarise_evidence()
+            except Exception as exc:  # noqa: BLE001 - must not crash the worker
+                sys.stderr.write(f"genotyping failed for {name!r}: {exc!r}\n")
+                gt, score_gt, score_other = GT_ERROR, 0, 0
+            output_queue.put((name, gt, score_gt, score_other))
+
 
 def mc_output(output_queue: Queue, output_file: str, output_list_queue: Queue):
-    print(f"started output process")
-    output_buffer = {}
-    output_list = []
+    print("started output process")
+    output_buffer = {}      # name -> (genotype, score_gt, score_other), awaiting its turn
+    pending = []            # names in submission order, not yet written
+    list_done = False       # seen the output-list sentinel
+
+    def drain_names(block: bool):
+        # Pull submission-order names off the list queue. Non-blocking during the
+        # run (streaming fast path); blocking at the end until the sentinel, so
+        # no name is lost to feeder-thread timing.
+        nonlocal list_done
+        while not list_done:
+            try:
+                n = output_list_queue.get(block)
+            except Empty:
+                return
+            if n == TERMINATION_SIGNAL:
+                list_done = True
+                return
+            pending.append(n)
+
+    def flush(out):
+        while pending and pending[0] in output_buffer:
+            name = pending.pop(0)
+            gt, score_gt, score_other = output_buffer.pop(name)
+            out.write(f'{name}\t{gt}\t{int(score_gt)}\t{int(score_other)}\n')
+
     with gzip.open(output_file, 'wt') as out:
         out.write('insertion\tgenotype\tscore_genotype\tscore_alternative\n')
-        while o := output_queue.get():
-            if o is TERMINATION_SIGNAL:
-                return
-            try:
-                while ol := output_list_queue.get(False):
-                    output_list.append(ol)
-            except Empty:
-                pass
-            name, genotype_string, score_gt, score_other = o
-            #print(f"output got {name}")
-            output_buffer[name] = (genotype_string, score_gt, score_other)
-            while len(output_list):
-                if output_list[0] not in output_buffer.keys():
-                    break
-                current_name = output_list.pop(0)
-                genotype_string, score_gt, score_other = output_buffer[current_name]
-                out.write(f'{current_name}\t{genotype_string}\t{int(score_gt)}\t{int(score_other)}\n')
-                del output_buffer[current_name]
+        while (o := output_queue.get()) != TERMINATION_SIGNAL:
+            name, gt, score_gt, score_other = o
+            output_buffer[name] = (gt, score_gt, score_other)
+            drain_names(block=False)
+            flush(out)
+        # All workers are done; block-drain every remaining name, then flush.
+        drain_names(block=True)
+        flush(out)
+        if output_buffer or pending:
+            # Should not happen: a submitted name never got a result. Write what we
+            # have out of order rather than dropping it, and fail loudly.
+            sys.stderr.write(
+                f"WARNING: {len(pending)} insertion(s) missing a genotype result and "
+                f"{len(output_buffer)} buffered result(s) had no matching name; "
+                f"output may be out of order.\n")
+            for name in list(pending):
+                if name in output_buffer:
+                    gt, score_gt, score_other = output_buffer.pop(name)
+                    out.write(f'{name}\t{gt}\t{int(score_gt)}\t{int(score_other)}\n')
+
 
 def genotype(insertion_file: str, bam_file: str, output_file: str, threads=1):
     input_queue = Queue()
@@ -106,12 +131,13 @@ def genotype(insertion_file: str, bam_file: str, output_file: str, threads=1):
             i.right_ref
         ))
         output_list.put(i.name)
-    print(f"submitted everything")
-    for i in range(threads):
+    output_list.put(TERMINATION_SIGNAL)  # marks the end of the submission-order names
+    print("submitted everything")
+    for _ in range(threads):
         input_queue.put(TERMINATION_SIGNAL)  # send termination signal
     [process.join() for process in pool]
-    print(f"terminated input")
+    print("terminated input")
     output_queue.put(TERMINATION_SIGNAL)
     output_process.join()
-    print(f"terminated output")
+    print("terminated output")
     print("done.")

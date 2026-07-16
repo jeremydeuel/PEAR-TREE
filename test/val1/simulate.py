@@ -59,9 +59,18 @@ What this simulator covers
      - high-coverage pile-up regions (§4.2.6) for the SPEC-3/4 coverage gates;
      - poly-A dropout (§5.3): a genuine L1 whose poly-A junction reads are lost to
        library prep — a real insertion baseline necessarily *misses*.
-4. **Feature A/B toggles** (unchanged): discordant-mate rescue of one-sided junctions
-   (RTE-origin vs non-RTE) and processed-pseudogene mate signatures, with the matching
-   RepeatMasker `.out` and exon annotation tracks.
+4. **Feature A/B toggles**: discordant-mate rescue of one-sided junctions (RTE-origin vs
+   non-RTE) and processed-pseudogene mate signatures, with the matching RepeatMasker `.out`
+   and exon annotation tracks.
+5. **Novel processed pseudogenes** (`--n-novel-pseudogene`): de-novo L1-mediated retrocopies
+   of a spliced mRNA. Unlike the Feature-B signature check above (which reuses an ERV clip and
+   only exercises the mate-spanning-exons signal), these render a biologically faithful
+   retrocopy — the inserted / clipped sequence *is* the spliced transcript (parent-gene exons
+   concatenated, introns skipped) carrying the L1 TPRT scar (poly-A tail + TSD + EN motif). So
+   each is a real insertion (in truth, scored for recall/VAF) whose junction reads *also* carry
+   the splice hallmark (mates spanning >=2 parent-gene exons), exercising the whole
+   discovery -> splice-annotate path on realistic sequence. The parent-gene exons are written to
+   the `--out-exons` track (gene `PG1`).
 
 *** SYNTHETIC-ONLY LIMITATION ***
 The reads are still clean and the junctions exact; a synthetic artefact exercises the
@@ -191,6 +200,17 @@ ALU_VARIANTS = ["full", "5p_truncated", "5p_inversion",
                 "3p_transduction_partnered", "3p_transduction_orphan", "3p_deletion"]
 SVA_VARIANTS = ["full", "5p_truncated", "5p_inversion", "3p_deletion"]
 ERV_VARIANTS = ["solo_ltr", "5p_inversion"]
+
+# Novel processed-pseudogene parent-gene exon sequences. A de-novo retrocopy carries the
+# *spliced transcript* — its exons concatenated, introns skipped — so the inserted (and
+# hence clipped) sequence is this mRNA. Fixed-seed so that mRNA (and thus the parent-gene
+# identity a downstream annotate would assign) is byte-stable across runs, independent of
+# --seed. Four exons; the spliced mRNA is their concatenation. Exon length exceeds the read
+# length so a mate landing in an exon is a full within-exon alignment.
+_pg_rng = random.Random(0x9E0D)
+PG_EXON_LEN = 300
+PG_N_EXONS = 4
+PG_EXON_SEQ = ["".join(_pg_rng.choice(BASES) for _ in range(PG_EXON_LEN)) for _ in range(PG_N_EXONS)]
 
 
 # Insert-terminus length made available for clipping. Reads span a breakpoint at
@@ -639,6 +659,64 @@ def simulate(args):
     pseudogene_block(args.n_pseudogene, n_gene_exons, "pseudogene", in_truth=True)
     pseudogene_block(args.n_single_exon, 1, "single_exon", in_truth=True)
 
+    # NOVEL PROCESSED PSEUDOGENE (de-novo retrocopy). Where --n-pseudogene above reuses an
+    # ERV clip and only exercises the mate-spanning-exons *signal*, this renders a
+    # biologically faithful retrocopy: the inserted (hence clipped) sequence IS the spliced
+    # transcript — the parent gene's exons concatenated, introns skipped — and it carries the
+    # L1 TPRT scar (poly-A tail + TSD + EN-motif flank). The review's processed pseudogene:
+    # "the same poly-A/TSD hallmarks but carry spliced exonic sequence" (§2.3). So it is a
+    # REAL insertion (in truth, scored for recall/VAF like any TPRT element) whose junction
+    # reads ALSO carry the splice hallmark — their mates map into >=2 exons of the parent gene
+    # (introns skipped) — exercising the whole discovery -> splice-annotate path on realistic
+    # sequence rather than an ERV stand-in. Parent-gene exons go into the --out-exons track.
+    PG_GENE_START = 18_000_000                 # parent gene: on the annotated contig 3, clear of G1 (17 Mb)
+    PG_EXON_GAP = 8_000                        # intron between exons (>> exon length => intron-skip test passes)
+    for e in range(PG_N_EXONS):
+        b = PG_GENE_START + e * PG_EXON_GAP
+        exon_rows.append((contigs[2], b, b + PG_EXON_LEN, "PG1"))
+    pg_mrna = "".join(PG_EXON_SEQ)
+    # a TPRT-style element whose termini are the mRNA ends (5' = transcript start, 3' = the
+    # bases abutting the poly-A tail), so build_junctions renders exonic clips + a poly-A tail.
+    pg_elem = {"end5": pg_mrna[:INS_LEN], "end3": pg_mrna[-INS_LEN:], "body": pg_mrna, "polya": True}
+    for _ in range(args.n_novel_pseudogene):
+        contig = contigs[idx % len(contigs)]
+        if contig == contigs[2]:
+            contig = contigs[0]                # keep the insertion off the parent-gene contig
+        ti = tid[contig]
+        L = slot[ti]; slot[ti] += step
+        tsd = rng.randint(5, 20); R = L + tsd
+        # enough alt reads to span every exon (mate exon = k % PG_N_EXONS), and to clear the
+        # >= splice_min_exons floor even at the low end.
+        alt = max(rng.randint(args.alt_min, args.alt_max), PG_N_EXONS)
+        ref = rng.randint(args.ref_min, args.ref_max)
+        vaf = round(alt / (alt + ref), 3) if (alt + ref) else 0.0
+        t = rng.randint(13, max(14, args.polya_len))
+        ins5, ins3 = build_junctions(rng, pg_elem, "full", t)
+        g5 = make_flank(); g3 = make_flank(en_motif=True)   # L1 EN motif on the poly-A (3') flank
+        tag = f"NPSG_{contig}_{L}"
+        # RIGHT (5') junction @R: read1 forward, clip = spliced-mRNA 5' end; mate -> a parent exon
+        for k in range(alt):
+            clip = sample_clip_len(rng); a = read_len - clip
+            exon = k % PG_N_EXONS
+            mpos = PG_GENE_START + exon * PG_EXON_GAP + 40
+            nm = f"{tag}_R{k}"
+            records.append(make_read(hdr, ti, nm, g5[-a:] + ins5[:clip],
+                                     R - a, f"{a}M{clip}S", junction_mapq(),
+                                     flag=PAIRED_R1, next_tid=elem_tid, next_start=mpos))
+            # the mate as a real record inside the parent-gene exon (read2): its sequence is a
+            # slice of the exon, so the retrocopy clip and the parent mate share the transcript.
+            records.append(make_read(hdr, elem_tid, nm, PG_EXON_SEQ[exon][40:40 + ref_m],
+                                     mpos, f"{ref_m}M", 60,
+                                     flag=0x1 | 0x80, next_tid=ti, next_start=R - a))
+        # LEFT (3') junction @L: read1 forward, clip = spliced-mRNA 3' end + poly-A tail
+        for k in range(alt):
+            clip = sample_clip_len(rng); a = read_len - clip
+            records.append(make_read(hdr, ti, f"{tag}_L{k}", ins3[-clip:] + g3[:a],
+                                     L, f"{clip}S{a}M", junction_mapq(), flag=PAIRED_R1))
+        coverage_reads(tag, ti, L, ref)
+        truth.append((contig, L, R, "PSEUDOGENE_novel", tsd, alt, ref, vaf))
+        idx += 1
+
     # =====================================================================
     # False-positive artefacts — NOT in truth. A call at one of these loci is a false
     # positive. They live in a dedicated coordinate band (>=10 Mb) clear of the real
@@ -943,6 +1021,8 @@ def main():
     g.add_argument("--discordant-min-reads", type=int, default=3, help="discordant anchor reads per one-sided junction")
     g.add_argument("--n-pseudogene", type=int, default=0, help="B3: insertions whose mates span >=2 exons of one gene")
     g.add_argument("--n-single-exon", type=int, default=0, help="B3 negative control: mates hit a single exon (must not flag)")
+    g.add_argument("--n-novel-pseudogene", type=int, default=0,
+                   help="novel de-novo processed pseudogene (retrocopy): a REAL TPRT insertion (in truth) whose clip is the spliced transcript + poly-A and whose mates span >=2 parent-gene exons (splice hallmark)")
     g.add_argument("--n-discordant-only", type=int, default=0,
                    help="breakpoints in the read GAP: no soft-clip anywhere, only discordant pairs (baseline miss — no discordant-pair discovery, §7.7#5)")
 

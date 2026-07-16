@@ -34,7 +34,16 @@ CONFIG = {
         'max_read_count': 120, #maximum numbers of reads in the span of a breakpoint allowed (exclude high-coverage artefact-rich regions)
         'exclude_same_contig_supplementary': 1000,  # minimum distance between a supplementary read to not be excluded (not interested in micro indels)
         'reject_fully_mapping_reads': True, #drop clipped reads whose XA/SA shows the whole read maps contiguously elsewhere (not a real junction)
-
+        # SPEC-3 pileup gate — recommended ON for human WGS. Drops breakpoints whose local
+        # depth exceeds coverage_mask_multiplier x the genome-wide median, removing the
+        # pericentromere/telomere classical-satellite mismap pileups that stack to tens of x
+        # median at MAPQ 60 (so neither the MAPQ floor nor the combine remap catches them).
+        # Validated on test/fullstack/scale10k: 10k implants -> 0 genuine FP, recall unchanged.
+        # NB consumed by the *rust* discovery via `--config discovery_hs.config`; the legacy
+        # Python discovery predates the SPEC-3 gate and ignores these keys.
+        'coverage_mask': True,
+        'coverage_mask_multiplier': 5.0,
+        'adaptive_evidence': False, #SPEC-4 also cuts satellite FPs but loses low-VAF TPs -> leave off
     },
 
     #define adapter sequences
@@ -44,15 +53,25 @@ CONFIG = {
                 'AGATCGGAAAGCGTCGTGTAGGGAAAGAGTGT',  # common sequencing error of rev adapter
                 ],
     'genotyping': {
-        'max_bases': 12, #max bases used for genotyping
-        'min_score_for_call': 6, #minimal score to call
-        'reads_for_high_coverage': 60, #number of reads required to call high coverage
+        'max_bases': 12, #max bases (per side) used for genotyping (applied in combine_insertions)
+        'min_mapq': 40, #minimal mapq of a spanning read to be used as genotyping evidence
+        'min_score_for_call': 6, #minimal aggregate quality-margin for a confident (non-uncertain) call
+        'min_supporting_reads': 2, #minimal number of allele-supporting reads for a confident het/hom/wt call
+        'reads_for_high_coverage': 60, #read count above which a locus is flagged high-coverage (counted as NA)
+        'art_min_score': 60, #per-side quality above which a read side counts as artefact (matches neither ref nor alt)
+        'vaf_wildtype_max': 0.10, #VAF at or below which a locus is called wild-type
+        'vaf_het_min': 0.30, #minimal VAF for a heterozygous call
+        'vaf_hom_min': 0.85, #minimal VAF for a homozygous call
+        'artefact_read_fraction': 0.5, #fraction of artefact reads (of all evidence) needed to call the locus an artefact
+        'min_artefact_reads': 2, #minimal number of artefact reads to call the locus an artefact
+        'double_alt_is_artefact': True, #a single read matching the inserted element on BOTH junctions is a chimeric artefact
     },
     'combine_genotypes': {
-        'min_wild-types': 0, #minimal number of wild-type colonies
+        'min_wild-types': 20, #minimal number of wild-type colonies. For enriched/targeted (non-WGS) data set this to 0 and raise max_na.
         'min_insertions': 1, #minimal number of colonies with insertion
         'max_artefact': 24, #maximal number of colonies with artefacts
-        'max_na': 24, #maximal number of colonies with NA genotype (high coverage or no coverage)
+        'max_na': 24, #maximal number of colonies with NA genotype (high coverage, no coverage or error)
+        'min_best_score': 800, #minimal best het/hom support score across samples for a locus to pass
     },
     'combine_insertions': {
         'genome_2bit': '/Users/jeremy/Documents/genomes/hg38.2bit', #path to genome, has to be 2bit file
