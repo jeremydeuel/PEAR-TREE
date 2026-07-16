@@ -172,6 +172,15 @@ def combine_insertions(input_files, insertions_genotyping_file, combined_inserti
     delta_sampler = []
     with pysam.AlignmentFile(clipped_bam) as f:
         for read in f:
+            # Only a PRIMARY (best-scoring) clip alignment near the breakpoint indicates a
+            # genuine reference-contiguous junction. A real MEI clip's best hit is a distant
+            # element paralog; bowtie2 -k also emits weak SECONDARY multimapper hits, and one
+            # of those can land near the breakpoint by chance and wrongly discard the real
+            # insertion. Ignoring secondaries here recovers those calls (~33/10k on the
+            # full-stack harness) while still catching true local misalignments (whose best
+            # hit IS near the breakpoint).
+            if read.is_secondary or read.is_supplementary:
+                continue
             if read.is_mapped:
                 reference_name, pos, side = read.query_name.split(":")
                 if len(reference_name) < 3 or reference_name[:3] != 'chr':
