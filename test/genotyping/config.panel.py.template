@@ -1,0 +1,62 @@
+# Local config for the GENOTYPING panel test (test/genotyping).
+#
+# run_genotyping.sh materialises this into $OUT/config.py (filling @@PLACEHOLDERS@@) and puts
+# $OUT first on PYTHONPATH so `from config import CONFIG` resolves here for the combine_insertions,
+# genotype and combine_genotypes steps. Three shipping defaults are overridden for a 10-sample
+# panel (see the inline notes) -- do NOT copy those overrides back into src/config*.py.
+
+CONFIG = {
+    'discovery': {
+        'min_mapq': 60, 'min_clip_len': 12, 'min_evidence_reads_per_breakpoint': 2,
+        'max_bp_window': 40, 'max_homopolymer_len': 6, 'min_adapterlen_for_clip': 4,
+        'min_good_bases': 10, 'min_consensus_score_for_good_base': 2,
+        'min_breakpoints_aggregated_during_first_step': 2, 'max_read_count': 120,
+        'exclude_same_contig_supplementary': 1000, 'reject_fully_mapping_reads': True,
+    },
+    'adapters': ['AGATCGGAAGAGCACACGTCTGAACTCCAGTCA',
+                 'AGATCGGAAGAGCGTCGTGTAGGGAAAGAGTGT',
+                 'AGATCGGAAAGCACACGTCTGAACTCCAGTCA',
+                 'AGATCGGAAAGCGTCGTGTAGGGAAAGAGTGT'],
+    'genotyping': {
+        'max_bases': 12,
+        'min_mapq': 40,
+        'min_score_for_call': 6,
+        'min_supporting_reads': 2,
+        'min_reads_for_zygosity': 6,   # >= this many informative reads to call homozygous vs 'insertion' (zygosity unclear)
+        'recover_low_coverage_presence': True,  # 1 strong alt read + no confident reference -> 'insertion' (rescues low-cov colonies; measured FP-free on deep negatives)
+        # PANEL OVERRIDE: shipping default 60 < the 100x sample's per-locus depth, which
+        # would flag every 100x locus high-coverage (NA). Raise above 100x so the discovery
+        # sample yields real het calls. (run_genotyping.sh --low-cov-gate flips this to 60
+        # to exercise the gate itself.)
+        'reads_for_high_coverage': 250,
+        'art_min_score': 60,
+        'vaf_wildtype_max': 0.10,
+        'vaf_het_min': 0.30,
+        'vaf_hom_min': 0.85,
+        'artefact_read_fraction': 0.5,
+        'min_artefact_reads': 2,
+        'double_alt_is_artefact': True,
+    },
+    'combine_genotypes': {
+        # PANEL OVERRIDE: shipping default 20 is impossible with 10 samples -> every locus
+        # would fail. A true het reads wild-type in the 3 negative samples, so 2 keeps that
+        # discriminator meaningful while still demanding real negatives.
+        'min_wild-types': 2,
+        'min_insertions': 1,       # >=1 confident het/hom (the high-depth het samples)
+        'max_artefact': 2,         # an all-samples artefact FP (up to 10) is rejected
+        'max_na': 3,               # tolerate the low-depth no-coverage / one high-cov NA
+        'min_best_score': 800,     # best het/hom support across samples (high-depth carries it)
+    },
+    'combine_insertions': {
+        'genome_2bit': '@@HG38_2BIT@@',
+        'exclude_files_with_many_insertions': 1_000_000,
+        'samtools_executable': '@@SAMTOOLS@@',
+        'bowtie2_executable': '@@BOWTIE2@@',
+        'bowtie2_index': '@@HS1_BT2@@',
+        'bowtie2_index2': '@@HS1_BT2@@',
+        'bowtie2_index2_lo': '@@HS1_HG38_CHAIN@@',
+        'clean_remap_max_insertion': 12,
+        'clean_remap_min_as': -15,
+    },
+    'version': '1.1',
+}

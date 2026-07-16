@@ -42,12 +42,27 @@ is a **spliced mRNA** (a parent gene's exons concatenated, introns skipped) carr
 TPRT scar (poly-A tail + TSD + EN-motif flank) — the "same poly-A/TSD hallmarks but spliced
 exonic sequence" case from the RTE review §2.3.
 
-- **Construction:** register one or two real parent genes by their **hs1 exon coordinates**
-  (same hardcoded-locus pattern as `ELEMENT_LOCI`; pick a known retrocopy-prone multi-exon
-  gene). `build_element` gains a `pseudogene` family: fetch the exons, concatenate → spliced
-  mRNA, append poly-A, implant with a TSD like a TPRT element. `val1/simulate.py` already has
-  the synthetic-exon version (`PG_EXON_SEQ`, `--n-novel-pseudogene`) to mirror; here we use a
-  real gene so the clips are genuine exonic sequence bwa will place against the parent locus.
+- **Parent genes (user-chosen):** `DUX4`, `MALAT1`, `HNRNPA1`, `CASP12`, `RPL21` — a
+  deliberately hard cross-mapping panel:
+  - `HNRNPA1`, `RPL21` — among the most processed-pseudogene-rich genes in the genome
+    (hundreds of existing retrocopies each) → an exonic clip maps to many paralogous loci →
+    low MAPQ → dropped by `min_mapq` → alt reads lost → depressed VAF. The maximal-stress case.
+  - `DUX4` — sits in the D4Z4 macrosatellite (chr4q/chr10q subtelomere), highly repetitive
+    context and its own retrocopy family (DUXA-like); short (~1.7 kb) mRNA.
+  - `CASP12` — itself a segregating pseudogene in most humans; the "parent" is already pseudogenic.
+  - `MALAT1` — single-exon lncRNA (~8.7 kb): **no intron-skip signature** (splice-hallmark
+    negative control), non-coding, and a *long* insert that stresses the junction geometry.
+- **Construction:** `build_element` gains a `pseudogene` family that reads each mature
+  transcript from a `pseudogenes.fa` (one record per gene), appends a poly-A tail, and implants
+  with a TSD + EN-motif flank like a TPRT element — mirroring `val1/simulate.py`'s
+  `--element-fasta` mechanism (there the exon set is synthetic; here the records are the real
+  transcripts so clips are genuine exonic sequence bwa places against the parent locus in hg38).
+  Transcript sequences are the real mature mRNAs, not hardcoded coordinates.
+- **Provenance (`test/genotyping/pseudogenes.fa`, already fetched):** NCBI RefSeq Select
+  transcripts via E-utilities (`esearch` `"refseq select"[Filter]` → `efetch rettype=fasta`):
+  `HNRNPA1` NM_031157.4 (3744 bp), `MALAT1` NR_002819.5 (7472 bp, non-coding),
+  `DUX4` NM_001306068.3 (1710 bp), `CASP12` NM_001191016.3 (3910 bp),
+  `RPL21` NM_000982.4 (566 bp). All ACGT-only. `build_haplotypes.py` reads this file directly.
 - **Why pseudogenes matter *for genotyping specifically* (not just class coverage):** the
   inserted mRNA is identical to the parent gene's transcript, so a spanning read whose
   soft-clip is exonic can be **mismapped by bwa to the parent-gene locus in hg38** instead of

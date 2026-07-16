@@ -260,6 +260,21 @@ sensitivity/specificity. They are consistent with, and extend, the authors' own
    `/nfs/...`). Fine for the authors, but it means the shipped default config is not
    runnable elsewhere; the plan's move to `--config file.yaml` (§2.4) is the right fix and
    also makes the artefact/adapter tables reproducible per platform.
+10. **No break-end / translocation arm — RT-RGs are out of scope.** Zumalave 2026
+    ([§3.2.3](03_detecting_true_events.md)) shows somatic L1 activity generates
+    **retrotransposon-mediated genomic rearrangements (RT-RGs)** — 152 in a 10-tumour set,
+    including 45 interchromosomal junctions forming 13 **reciprocal translocations** from two
+    concurrent L1 insertions. PEAR-TREE cannot represent these: its data model pairs two
+    clips **on the same contig** into a TSD-flanked locus, whereas an RT-RG bridge anchors an
+    L1 to **two different loci** with *interchanged target sites* and **no canonical TSD**.
+    With no discordant-pair discovery (#5) and no BND/split-alignment pairing (à la MEIGA
+    step 4 / Delly, [§6](06_delly_review.md)), the two anchors are never linked, and
+    combine-insertions' end-to-end / local-remap filters (§7.4) would discard the bridge
+    clips outright. A real fix is an architectural addition — retain one-sided clips whose
+    clipped consensus is a retroelement, then pair reciprocal anchors *across contigs* by
+    shared bridge identity — realistically scoped as **flagging candidate L1 bridges for
+    long-read/PCR/FISH follow-up** rather than fully resolving them (this is hard for every
+    short-read caller). See the verdict box in [§3.2.3](03_detecting_true_events.md).
 
 ## 7.8 Strengths worth preserving
 

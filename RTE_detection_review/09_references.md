@@ -13,6 +13,11 @@
    → `science.aee4513.pdf`, `science.aee4513_sm.pdf`, `science.aee4513_tables_s1_to_s36.zip`.
    Introduces **MEIGA / MEIGA-SR**; seven MEI classes + RT-mediated rearrangements;
    long-read internal-architecture resolution; diagnostic-SNV + transduction source assignment.
+   **Headline finding:** somatic L1 activity drives **152 RT-RGs** including **13 reciprocal
+   translocations** from two concurrent L1 insertions, detected via BND meta-clusters —
+   largely invisible to short reads. Whether PEAR-TREE can capture these is assessed in
+   [§3.2.3](03_detecting_true_events.md) (verdict: not as rearrangements without a break-end
+   arm) and logged as a gap in [§7.7 #10](07_peartree_code_review.md).
 
 3. **Nam CH, Youk J, Kim JY, et al.** "Widespread somatic L1 retrotransposition in normal
    colorectal epithelium." *Nature* 2023;617:540–547 (s41586-023-06046-z).
