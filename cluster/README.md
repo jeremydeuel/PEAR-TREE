@@ -19,6 +19,18 @@ contigs `1..22,X,Y,MT` + `GL000*`/`NC_007605`/`hs37d5` decoys).
 
 ---
 
+## Modules on farm22
+
+Tools come from environment modules with **versioned** names, e.g.:
+
+```bash
+module load samtools-1.19      # provides samtools (needed for quickcheck + combine_insertions)
+module load bowtie2            # (or a versioned bowtie2-x.y.z — check `module avail bowtie2`)
+```
+
+Use `which samtools` / `which bowtie2` after loading to get the absolute paths for
+`config.py['combine_insertions']`.
+
 ## 0. Deploy + build (head node, has internet)
 
 ```bash
