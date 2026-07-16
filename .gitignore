@@ -13,3 +13,4 @@ src/config.py
 target/
 # genotyping differential dumps
 diff-test-fail*.txt
+.cargo-home/

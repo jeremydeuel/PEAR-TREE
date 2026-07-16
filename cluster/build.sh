@@ -9,6 +9,17 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# Some rust modules (e.g. farm22 `module load rust/1.87.0`) set CARGO_HOME to their
+# own read-only install dir, which makes crate downloads fail with EACCES. If the
+# current CARGO_HOME is set but not writable, redirect it to a local cache next to
+# the build (the repo lives on lustre, which has space). An unset CARGO_HOME keeps
+# cargo's default (~/.cargo).
+if [ -n "${CARGO_HOME:-}" ] && [ ! -w "${CARGO_HOME}" ]; then
+    export CARGO_HOME="$PWD/.cargo-home"
+    mkdir -p "$CARGO_HOME"
+    echo "CARGO_HOME was read-only; redirected to $CARGO_HOME"
+fi
+
 echo "cargo: $(command -v cargo || echo MISSING)"
 cargo --version
 
