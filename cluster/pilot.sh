@@ -23,4 +23,6 @@ bsub -J "ptpilot" -o logs/pilot.out -e logs/pilot.err \
 
 echo "submitted. when it finishes:"
 echo "  grep -E 'Max Memory|CPU time|Successfully' logs/pilot.out"
-echo "  zcat discovery/${ID}.txt.gz | grep -c '^>'   # number of candidate breakpoints"
+# discovery output is FASTQ (@<contig>:<l>-<r>:LEFT|RIGHT:...), NOT the '>'-headed
+# genotyping contract; count distinct breakpoint loci from the record headers.
+echo "  zcat discovery/${ID}.txt.gz | grep -oE '^@[^:]+:[0-9]+-[0-9]+' | sort -u | wc -l   # candidate breakpoints"

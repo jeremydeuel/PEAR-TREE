@@ -68,10 +68,11 @@ The `tmpExportData/progress/` copies are excluded automatically.
 bash cluster/pilot.sh
 # when it finishes:
 grep -E 'Max Memory|CPU time|Successfully' logs/pilot.out
-zcat discovery/<firstID>.txt.gz | grep -c '^>'    # candidate breakpoints found
+# discovery output is FASTQ (@contig:l-r:LEFT|RIGHT:...), not the '>'-headed contract:
+zcat discovery/<firstID>.txt.gz | grep -oE '^@[^:]+:[0-9]+-[0-9]+' | sort -u | wc -l   # candidate breakpoints
 ```
 
-This confirms the full path works on real GRCh37 WGS before you launch 185 jobs, and the
+This confirms the full path works on real GRCh37 WGS before you launch the array, and the
 LSF report gives the peak RSS / CPU time to set `MEM` for the array. Discovery is
 single-threaded and streaming (no BAM index needed).
 
