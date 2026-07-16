@@ -16,7 +16,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use crate::config::*;
 use crate::coverage::Coverage;
 use crate::exons::GeneModel;
-use crate::filters::{clean_clipped_seq, is_adapter};
+use crate::filters::{clean_clipped_seq, is_adapter, is_low_complexity, mean_kmer_diversity};
 use crate::intervals::IntervalIndex;
 use crate::model::{join, Breakpoint};
 use crate::polya::PolyABreakpoint;
@@ -252,9 +252,36 @@ impl Discovery {
         }
     }
 
-    /// True when either coverage-based gate (SPEC-3/SPEC-4) is enabled.
+    /// True when either coverage-based gate (SPEC-3/SPEC-4) is enabled, or the
+    /// discordant one-sided-call coverage ceiling needs the median populated.
     fn coverage_enabled(&self) -> bool {
-        self.config.coverage_mask || self.config.adaptive_evidence
+        self.config.coverage_mask
+            || self.config.adaptive_evidence
+            || (self.config.discordant_anchor && self.config.discordant_coverage_max_mult.is_some())
+    }
+
+    /// Stricter local-coverage ceiling for a one-sided discordant call. True (pass) when
+    /// no ceiling is set, coverage was not estimated, or the real breakpoint's local depth
+    /// is within `discordant_coverage_max_mult` x the genome median.
+    fn disc_coverage_ok(&self, rn: &str, pos: i64) -> bool {
+        let Some(mult) = self.config.discordant_coverage_max_mult else { return true };
+        let med = self.coverage.median();
+        if med <= 0.0 {
+            return true;
+        }
+        (self.coverage.local(rn, pos) as f64) <= mult * med
+    }
+
+    /// Reject a one-sided discordant call whose real breakpoint's mate reads are a
+    /// low-diversity satellite array. True (pass) when no threshold is set or the mates
+    /// are too few/short to judge (`None` diversity) — the gate only fires on positive
+    /// evidence of low complexity.
+    fn disc_mates_ok(&self, bp: &Breakpoint) -> bool {
+        let Some(thr) = self.config.discordant_mate_min_kmer_div else { return true };
+        match mean_kmer_diversity(&bp.mate_seqs, 4) {
+            Some(div) => div >= thr,
+            None => true,
+        }
     }
 
     /// SPEC-3/4 pre-pass: bin read starts per contig and compute the median depth,
@@ -635,7 +662,13 @@ impl Discovery {
                 let same_contig = read.reference_sequence_id == read.mate_ref_id;
                 let discordant = !same_contig
                     || (read.mate_pos - read.reference_start).abs() > self.config.discordant_max_tlen;
-                if discordant && read.mate_pos >= 0 {
+                // Track-free RTE-origin proxy: keep only mates that map ambiguously
+                // (MQ <= threshold), i.e. into a repeat family, when the gate is set.
+                let mate_ambiguous = match self.config.discordant_mate_max_mapq {
+                    Some(maxq) => read.mq().map_or(false, |q| q <= maxq),
+                    None => true,
+                };
+                if discordant && mate_ambiguous && read.mate_pos >= 0 {
                     let (role, pos) = if read.is_reverse {
                         (CLIP_RIGHT, read.reference_start)
                     } else {
@@ -1174,7 +1207,14 @@ impl Discovery {
                         write_hallmark(hallmarks, rn, &Emit::Bp(l[il]), &Emit::Bp(r[ir]))?;
                     }
                     print_output(writer, Emit::Bp(l[il]), Emit::Bp(r[ir]))?;
+                    // Both breakpoints are consumed by this insertion — advance BOTH
+                    // pointers. (Previously only `il` advanced, leaving `ir` stuck on the
+                    // just-paired right breakpoint; the next left breakpoint then saw a
+                    // stale, too-far-left right → negative tsd → it was mis-routed into the
+                    // poly-A rescue instead of pairing with its true right partner. Those
+                    // mis-paired calls became poly-A-type and were dropped by combine.)
                     il += 1;
+                    ir += 1;
                 }
             }
         }
@@ -1193,6 +1233,10 @@ impl Discovery {
         }
         let (tsd_min, tsd_max) = (self.config.tsd_min, self.config.tsd_max);
         let in_window = |gap: i64| gap >= tsd_min && gap <= tsd_max;
+        // Discordant anchors sit up to ~a fragment length from the junction, so the
+        // cluster search reaches `discordant_rescue_span` (falling back to tsd_max),
+        // decoupled from the TSD bound used to detect a *real* reciprocal partner.
+        let span = self.config.discordant_rescue_span.unwrap_or(tsd_max);
 
         // group breakpoints per contig, applying the same SPEC-5/3/7 retains as output.
         let mut left_map: FxHashMap<String, Vec<usize>> = FxHashMap::default();
@@ -1225,7 +1269,18 @@ impl Discovery {
                 if r.iter().any(|rb| in_window(rb.breakpoint - lb.breakpoint)) {
                     continue;
                 }
-                if let Some(c) = self.find_disc_cluster(rn, CLIP_RIGHT, lb.breakpoint + tsd_min, lb.breakpoint + tsd_max) {
+                if !self.disc_coverage_ok(rn, lb.breakpoint) {
+                    continue;
+                }
+                // Reject a lone breakpoint whose genomic *flank* (aligned side) is a
+                // low-complexity satellite array: a real insertion has a unique/complex
+                // flank, whereas a pericentromeric/subtelomeric mismap is satellite on
+                // both sides. (The element clip itself may be legitimately low-complexity
+                // — an Alu poly-A tail or SVA VNTR — so the flank, not the clip, is gated.)
+                if is_low_complexity(&lb.unclipped.seq, 0.8) || !self.disc_mates_ok(lb) {
+                    continue;
+                }
+                if let Some(c) = self.find_disc_cluster(rn, CLIP_RIGHT, lb.breakpoint + tsd_min, lb.breakpoint + span) {
                     print_output(writer, Emit::Bp(lb), Emit::Disc(c))?;
                     paired += 1;
                 }
@@ -1235,7 +1290,13 @@ impl Discovery {
                 if l.iter().any(|lb| in_window(rb.breakpoint - lb.breakpoint)) {
                     continue;
                 }
-                if let Some(c) = self.find_disc_cluster(rn, CLIP_LEFT, rb.breakpoint - tsd_max, rb.breakpoint - tsd_min) {
+                if !self.disc_coverage_ok(rn, rb.breakpoint) {
+                    continue;
+                }
+                if is_low_complexity(&rb.unclipped.seq, 0.8) || !self.disc_mates_ok(rb) {
+                    continue;
+                }
+                if let Some(c) = self.find_disc_cluster(rn, CLIP_LEFT, rb.breakpoint - span, rb.breakpoint - tsd_min) {
                     print_output(writer, Emit::Disc(c), Emit::Bp(rb))?;
                     paired += 1;
                 }

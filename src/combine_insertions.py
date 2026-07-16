@@ -22,7 +22,7 @@ from revcomp import revcomp
 import pysam
 import pyliftover
 from config import CONFIG
-from combine_insertions_insertion import Insertion, TYPE_LEFT_POLYA, TYPE_RIGHT_POLYA, TYPE_FULL_INFO
+from combine_insertions_insertion import Insertion, TYPE_LEFT_POLYA, TYPE_RIGHT_POLYA, TYPE_FULL_INFO, TYPE_LEFT_DISC, TYPE_RIGHT_DISC
 from combine_insertions_intersect_insertions import intersect_insertions
 from combine_insertions_get_sequence import get_sequence
 from sequence_checks import sequence_matching_score
@@ -119,6 +119,12 @@ def combine_insertions(input_files, insertions_genotyping_file, combined_inserti
             [f'{i.left_consensus.fastq(f"{i.name}:L")}' for i in insertions if i.type is TYPE_RIGHT_POLYA])
         f.writelines(
             [f'{i.right_consensus.fastq(f"{i.name}:R")}' for i in insertions if i.type is TYPE_LEFT_POLYA])
+        # Feature A: a discordant-anchored call has one real side; remap that consensus
+        # so the clean-remap filter can still reject it if it aligns contiguously.
+        f.writelines(
+            [f'{i.left_consensus.fastq(f"{i.name}:L")}' for i in insertions if i.type is TYPE_RIGHT_DISC])
+        f.writelines(
+            [f'{i.right_consensus.fastq(f"{i.name}:R")}' for i in insertions if i.type is TYPE_LEFT_DISC])
     if not os.path.exists(insertion_bam):
         print(f"running bowtie2 {CONFIG['combine_insertions']['bowtie2_executable']} with index {CONFIG['combine_insertions']['bowtie2_index']}")
         cmd = f"{CONFIG['combine_insertions']['bowtie2_executable']} {insertions_fasta} -x {CONFIG['combine_insertions']['bowtie2_index']} --end-to-end --sensitive --threads {threads} --qc-filter | {CONFIG['combine_insertions']['samtools_executable']} view -F 4 -b -o {insertion_bam}"
@@ -150,8 +156,12 @@ def combine_insertions(input_files, insertions_genotyping_file, combined_inserti
     clipped_bam = insertion_bam[:-4] + ".insertionsonly.bam"
     if not os.path.exists(clipped_bam):
         with gzip.open(insertions_fasta, 'wt') as f:
+            # Feature A: a discordant-anchored call has a None clipped side; emit only the
+            # side(s) that carry sequence (full-info calls still emit both).
             f.writelines(
-                [f'{i.left_clipped.fastq(f"{i.name}:L")}{i.right_clipped.fastq(f"{i.name}:R")}' for i in insertions])
+                [(i.left_clipped.fastq(f"{i.name}:L") if i.left_clipped is not None else "")
+                 + (i.right_clipped.fastq(f"{i.name}:R") if i.right_clipped is not None else "")
+                 for i in insertions])
         print(f"running bowtie2 {CONFIG['combine_insertions']['bowtie2_executable']} with index {CONFIG['combine_insertions']['bowtie2_index2']}")
         cmd = f"{CONFIG['combine_insertions']['bowtie2_executable']} {insertions_fasta} -k 1000 -x {CONFIG['combine_insertions']['bowtie2_index2']} --local --very-fast --threads {threads} --qc-filter | {CONFIG['combine_insertions']['samtools_executable']} view -F 4 -b -o {clipped_bam}"
         os.system(cmd)
@@ -189,6 +199,11 @@ def combine_insertions(input_files, insertions_genotyping_file, combined_inserti
             [f'{i.left_consensus.fastq(f"{i.name}:L")}' for i in insertions if i.type is TYPE_RIGHT_POLYA])
         f.writelines(
             [f'{i.right_consensus.fastq(f"{i.name}:R")}' for i in insertions if i.type is TYPE_LEFT_POLYA])
+        # Feature A: emit the one real side of each surviving discordant-anchored call.
+        f.writelines(
+            [f'{i.left_consensus.fastq(f"{i.name}:L")}' for i in insertions if i.type is TYPE_RIGHT_DISC])
+        f.writelines(
+            [f'{i.right_consensus.fastq(f"{i.name}:R")}' for i in insertions if i.type is TYPE_LEFT_DISC])
     print(f'wrote {len([i for i in insertions if i.name not in filter_reads])} insertions to insertions.txt.gz')
     # carry discovery's splice-hallmark (Feature B) evidence forward, re-keyed onto the
     # combined insertion names, for stage-4 processed-pseudogene annotation.
@@ -198,6 +213,11 @@ def combine_insertions(input_files, insertions_genotyping_file, combined_inserti
     with gzip.open(insertions_genotyping_file, 'wt') as f:
         for i in insertions:
             if i.name in filter_reads:
+                continue
+            # Feature A: discordant-anchored calls carry only one real side and are not
+            # genotyped in this prototype (they are still emitted to combined.txt.gz above).
+            if i.type is TYPE_LEFT_DISC or i.type is TYPE_RIGHT_DISC:
+                n_excluded += 1
                 continue
             right = i.right_clipped.upper()[:CONFIG['genotyping']['max_bases']]
             left = i.left_clipped[:CONFIG['genotyping']['max_bases']].upper().revcomp()

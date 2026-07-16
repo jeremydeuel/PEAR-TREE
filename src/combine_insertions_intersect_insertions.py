@@ -129,5 +129,16 @@ def intersect_insertions(insertions: List[Insertion]) -> List[Insertion]:
                 full_insertions[full_hit[0].name] = combined
             else:
                 full_insertions[combined.name] = combined
+    # Feature A: surface discordant-anchored one-sided calls (parked above). Each is a
+    # singleton within a discovery file; keep the longest-consensus representative so the
+    # downstream clean-remap / clipped-remap filters can validate the one real side.
+    for name, hits in disc.items():
+        rep = hits[0]
+        for h in hits[1:]:
+            real_side = h.right_clipped if h.type is TYPE_LEFT_DISC else h.left_clipped
+            rep_side = rep.right_clipped if rep.type is TYPE_LEFT_DISC else rep.left_clipped
+            if real_side is not None and (rep_side is None or len(real_side) > len(rep_side)):
+                rep = h
+        full_insertions[rep.name] = rep
     print(f"found a total of {len(full_insertions)} insertions")
     return [i for i in full_insertions.values() if i is not None]

@@ -142,6 +142,30 @@ pub struct DiscoveryConfig {
     /// discordant cluster may act as a partner. Off = label only.
     pub discordant_rte_only: bool,
     pub discordant_rte_min: f64,
+    /// Track-free RTE-origin proxy: only collect a discordant observation whose mate
+    /// maps *ambiguously* (mate MAPQ `MQ` <= this). A mate that originates in an
+    /// inserted young RTE maps to many reference paralogs → low MAPQ; a mate placed
+    /// uniquely (high MAPQ) reflects structural/artefactual discordance, not an RTE.
+    /// `None` = collect regardless of mate MAPQ (legacy). Needs the `MQ` tag.
+    pub discordant_mate_max_mapq: Option<u8>,
+    /// Half-width of the search window (bp) from a lone real breakpoint to a discordant
+    /// cluster on the missing side, during the output rescue. Discordant anchors sit up
+    /// to ~a fragment length from the junction, so the TSD bound (`tsd_max`, ~40 bp) is
+    /// far too tight. `None` = use `tsd_max` (legacy behaviour).
+    pub discordant_rescue_span: Option<i64>,
+    /// Reject a one-sided discordant call whose mate reads are low-diversity (a satellite
+    /// array): require the mean distinct-4-mer fraction of the real breakpoint's mate reads
+    /// to be >= this. A real MEI's flank-anchored mates are complex genomic/element sequence
+    /// (>= ~0.45); pericentromeric/subtelomeric satellite mates fall to ~0.3. Gates the
+    /// mates, not the clip, so real poly-A/VNTR element clips are spared. `None` = off.
+    pub discordant_mate_min_kmer_div: Option<f64>,
+    /// Stricter local-coverage ceiling for a *one-sided* discordant call: reject it if
+    /// the real breakpoint's local depth exceeds this multiple of the genome median.
+    /// One-sided calls are weaker evidence than a reciprocal breakpoint pair, so they
+    /// warrant a tighter pileup gate than the global `coverage_mask_multiplier` (organic
+    /// assembly-discordance FPs cluster in ~3-5x pileups that pass the 5x mask). `None` =
+    /// fall back to `coverage_mask_multiplier`. Populates coverage even if the mask is off.
+    pub discordant_coverage_max_mult: Option<f64>,
     // --- Feature B: processed-pseudogene (splice) annotation ---
     /// Write a non-gating `<out>.splice.tsv` flagging candidates whose mate reads span
     /// >= `splice_min_exons` exons of a single reference gene (intron skipped). The
@@ -194,6 +218,10 @@ impl Default for DiscoveryConfig {
             discordant_rte_divergence_max: 20.0,
             discordant_rte_only: false,
             discordant_rte_min: 0.5,
+            discordant_mate_max_mapq: None,
+            discordant_rescue_span: None,
+            discordant_mate_min_kmer_div: None,
+            discordant_coverage_max_mult: None,
             splice_hallmark: false,
             exon_annotation: None,
             splice_min_exons: 2,
@@ -289,6 +317,10 @@ impl DiscoveryConfig {
             "discordant_rte_divergence_max" => self.discordant_rte_divergence_max = parse_num(val)?,
             "discordant_rte_only" => self.discordant_rte_only = parse_bool(val)?,
             "discordant_rte_min" => self.discordant_rte_min = parse_num(val)?,
+            "discordant_mate_max_mapq" => self.discordant_mate_max_mapq = Some(parse_num(val)?),
+            "discordant_rescue_span" => self.discordant_rescue_span = Some(parse_num(val)?),
+            "discordant_mate_min_kmer_div" => self.discordant_mate_min_kmer_div = Some(parse_num(val)?),
+            "discordant_coverage_max_mult" => self.discordant_coverage_max_mult = Some(parse_num(val)?),
             "splice_hallmark" => self.splice_hallmark = parse_bool(val)?,
             "exon_annotation" => self.exon_annotation = Some(val.to_string()),
             "splice_min_exons" => self.splice_min_exons = parse_num(val)?,
