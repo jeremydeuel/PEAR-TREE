@@ -36,9 +36,18 @@ Use `which samtools` / `which bowtie2` after loading to get the absolute paths f
 ```bash
 git clone -b PEAR-TREE2 git@github.com:limebutterfly/PEAR-TREE.git
 cd PEAR-TREE
-# Rust >= 1.87 (module load a rust, or per-user rustup). Build fetches noodles from crates.io.
+module load rust/1.87.0        # farm22: provides cargo 1.87 (see `module avail rust`)
 bash cluster/build.sh          # -> peartree-discovery + peartree-genotype release binaries
 ```
+
+> **CARGO_HOME trap (farm22):** the `rust/1.87.0` module sets `CARGO_HOME` to its own
+> **read-only** install dir, so `cargo build` fails with `Permission denied` /
+> `failed to create directory …/registry/cache`. `build.sh` auto-detects this and
+> redirects `CARGO_HOME` to a writable local cache. If you build cargo by hand, first:
+> `export CARGO_HOME=/lustre/scratch126/casm/teams/team273/users/jd43/.cargo`
+> (a writable lustre path — home quota is too small for the crate cache). The build
+> fetches crates from crates.io, so run it on the head node (compute nodes have no
+> outbound internet).
 
 > `src/config.py` is intentionally **not** in the repo (gitignored). The Rust discovery
 > step does not use it. The Python combine/genotype steps do — create it in step 5.
