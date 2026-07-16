@@ -14,3 +14,7 @@ target/
 # genotyping differential dumps
 diff-test-fail*.txt
 .cargo-home/
+
+# patient-derived run reports (keep local)
+PD44579_run_report.md
+*_run_report.md
