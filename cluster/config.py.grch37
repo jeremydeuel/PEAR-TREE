@@ -1,0 +1,117 @@
+# PEAR-TREE - paired ends of aberrant retrotransposons in phylogenetic trees
+#
+# Copyright (C) 2025 Jeremy Deuel <jeremy.deuel@usz.ch>
+#
+#    This program is free software: you can redistribute it and/or modify
+#    it under the terms of the GNU General Public License as published by
+#    the Free Software Foundation, either version 3 of the License, or
+#    (at your option) any later version.
+#
+#    This program is distributed in the hope that it will be useful,
+#    but WITHOUT ANY WARRANTY; without even the implied warranty of
+#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#    GNU General Public License for more details.
+#
+#    You should have received a copy of the GNU General Public License
+#    along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+
+# Configuration for the farm22 run of donor PD44579: human colony WGS BAMs mapped to
+# GRCh37 / 1000Genomes_hs37d5 (bwa-mem, AS:NCBI37, numeric contigs 1..22,X,Y).
+#
+# Copy to src/config.py on the farm:  cp cluster/config.py.grch37 src/config.py
+# (src/config.py is gitignored — it is environment-specific.)
+#
+# ASSEMBLY NOTE: combine_insertions always remaps clipped consensuses to hs1 (T2T, the
+# most complete reference) and reconciles the hits back to the BAM's coordinates with a
+# pyliftover chain. The GRCh37-specific pieces are therefore only:
+#   - genome_2bit        = hg19.2bit  (hg19 coords == GRCh37/hs37d5 for 1..22,X,Y; the
+#                          get_sequence wrapper maps the numeric BAM names 1 -> chr1)
+#   - bowtie2_index2_lo  = hs1 -> hg19 chain
+# The bowtie2 indices stay hs1. No GRCh37 bowtie2 index is needed.
+#
+# The Rust discovery/genotype steps do NOT read this file; they use
+# cluster/config.discovery.grch37 and cluster/config.genotype.grch37.
+
+CONFIG = {
+
+    # settings for step 1: discovery phase:
+    # (this run used the Rust discovery with cluster/config.discovery.grch37; these
+    #  values are kept consistent with it for any Python-side use)
+    'discovery': {
+        'min_mapq': 60, #bwa-mem caps MAPQ at 60; 60 keeps uniquely-placed reads only
+        'min_clip_len': 12, #minimal length of clipped bases to be considered
+        'min_evidence_reads_per_breakpoint': 2, #minimal number of independent evidence reads for each breakpoint
+        'max_bp_window': 40, #max number of allowed bases deleted or duplicated between two breakpoints
+        'max_homopolymer_len': 6, #maximal length of homopolymer in mapped part immediately adjacent to the breakpoint
+        'min_adapterlen_for_clip': 4, #minimal adapter length to be clipped from an already clipped part.
+        'min_good_bases': 10, #minimal number of bases of a clipped read to have a good quality*
+        'min_consensus_score_for_good_base': 2, #minimal score for a good base (delta best hit vs. second best hit)
+        'min_breakpoints_aggregated_during_first_step': 2, #minimal number of breakpoints aggregated during first step in order to even start filtering
+        'max_read_count': 120, #maximum numbers of reads in the span of a breakpoint allowed (exclude high-coverage artefact-rich regions)
+        'exclude_same_contig_supplementary': 1000, #minimum distance between a supplementary read to not be excluded (not interested in micro indels)
+        'reject_fully_mapping_reads': True, #drop clipped reads whose XA/SA shows the whole read maps contiguously elsewhere (not a real junction)
+        'mate_anchor_rescue': False, #see src/config.py; off by default until it clears a real-WGS check
+    },
+
+    #define adapter sequences
+    'adapters': ['AGATCGGAAGAGCACACGTCTGAACTCCAGTCA',  # fwd NebNext Adapter
+                'AGATCGGAAGAGCGTCGTGTAGGGAAAGAGTGT',  # rev NebNext Adapter
+                'AGATCGGAAAGCACACGTCTGAACTCCAGTCA',  # common sequencing error of fwd adapter
+                'AGATCGGAAAGCGTCGTGTAGGGAAAGAGTGT',  # common sequencing error of rev adapter
+                ],
+    'genotyping': {
+        'max_bases': 12, #max bases (per side) used for genotyping (applied in combine_insertions)
+        'min_mapq': 60, #bwa-mem data: uniquely-placed spanning reads only (matches cluster/config.genotype.grch37)
+        'min_score_for_call': 6, #minimal aggregate quality-margin for a confident (non-uncertain) call
+        'min_supporting_reads': 2, #minimal number of allele-supporting reads for a confident het/hom/wt call
+        'min_reads_for_zygosity': 6, #min informative reads before an alt-dominant locus is called homozygous rather than 'insertion' (zygosity unclear)
+        'recover_low_coverage_presence': True, #promote a single strong alt read at a known locus to 'insertion' when the reference allele is not confidently present
+        'reads_for_high_coverage': 180, #read count above which a locus is flagged high-coverage (counted as NA)
+        'art_min_score': 60, #per-side quality above which a read side counts as artefact (matches neither ref nor alt)
+        'vaf_wildtype_max': 0.10, #VAF at or below which a locus is called wild-type
+        'vaf_het_min': 0.30, #minimal VAF for a heterozygous call
+        'vaf_hom_min': 0.85, #minimal VAF for a homozygous call
+        'artefact_read_fraction': 0.5, #fraction of artefact reads (of all evidence) needed to call the locus an artefact
+        'min_artefact_reads': 2, #minimal number of artefact reads to call the locus an artefact
+        'double_alt_is_artefact': True, #a single read matching the inserted element on BOTH junctions is a chimeric artefact
+    },
+    'combine_genotypes': {
+        # 174 colonies for PD44579. These are the stock thresholds — revisit after the
+        # first call table (esp. min_wild-types / max_na given the colony count).
+        'min_wild-types': 20, #minimal number of wild-type colonies
+        'min_insertions': 1, #minimal number of colonies with insertion
+        'max_artefact': 10, #maximal number of colonies with artefacts
+        'max_na': 10, #maximal number of colonies with NA genotype (high coverage, no coverage or error)
+        'min_best_score': 800, #minimal best het/hom support score across samples for a locus to pass
+    },
+    'combine_insertions': {
+        # GRCh37: reference flanks come from hg19 (same coordinates as hs37d5 for
+        # 1..22,X,Y; get_sequence maps 1 -> chr1).
+        'genome_2bit': '/lustre/scratch126/casm/teams/team273/users/jd43/hg19.2bit',
+        'exclude_files_with_many_insertions': 1_000_000, #exclude files with more than this number of insertions
+        'samtools_executable': '/software/spack_environments/default/00/opt/spack/linux-ubuntu22.04-x86_64_v3/gcc-13.1.0/samtools-1.19-ufgcnbyuj24ufumlyimozp6habconpvy/bin/samtools', #module load samtools-1.19
+        'bowtie2_executable': '/software/spack_environments/default/00/opt/spack/linux-ubuntu22.04-x86_64_v3/gcc-13.1.0/bowtie2-2.5.2-pm6dcvjvbq4fbkqtj5lsx2s23qx5j2al/bin/bowtie2', #module load bowtie2-2.5.2/python-3.12.0
+        'bowtie2_index': '/lustre/scratch126/casm/teams/team273/users/jd43/pt_hu_trees/hs1/hs1', #T2T: clean-remap check (assembly-independent)
+        'bowtie2_index2': '/lustre/scratch126/casm/teams/team273/users/jd43/pt_hu_trees/hs1/hs1', #T2T: clip re-map for position identification
+        'bowtie2_index2_lo': '/lustre/scratch126/casm/teams/team273/users/jd43/hs1.hg19.all.chain.gz', #hs1 -> hg19 chain: reconciles clip hits with the GRCh37 breakpoints
+        'clean_remap_max_insertion': 12, #a consensus is "maps to reference" (dropped) only if its end-to-end remap opens no insertion this long or longer
+        'clean_remap_min_as': -15, #...and only if the end-to-end alignment score (bowtie2 AS) is at least this
+    },
+    'annotate': { #necessary for annotate_v2.py (step 3, optional element classification)
+        # NOTE: annotate works in bowtie2_index2 (hs1) space, NOT GRCh37 — so rmsk and
+        # exon_annotation here must be hs1-based. The GRCh37 exon file built for the
+        # discovery splice feature (grch37.exons.bed.gz) is NOT valid here.
+        'rmsk': '/lustre/scratch126/casm/teams/team273/users/jd43/pt_hu_trees/hs1.repeatMasker.out.gz', # RepeatMasker annotation of the bowtie2_index2 (hs1) genome
+        'exon_annotation': None, # hs1-based exon BED for processed-pseudogene annotation; None = off
+        'tmp': lambda extension: lambda sample: f'/lustre/scratch126/casm/teams/team273/users/jd43/tmp/{sample}.{extension}',
+        'hmm': '/lustre/scratch126/casm/teams/team273/users/jd43/Dfam-curated_only-hs.hmm', #hmmpress'd (h3f/h3i/h3m/h3p present)
+        'dfamscan': '/lustre/scratch126/casm/teams/team273/users/jd43/dfamscan.pl',
+        'hmmer': '/lustre/scratch126/casm/teams/team273/users/jd43/hmmer-3.3.2/bin', #folder containing the HMMER executables
+        'genotyping_file': lambda sample: f'genotypes/{sample}.txt.gz',
+        'insertions_file': lambda sample: f'{sample}.combined.txt.gz',
+        'polya_min_len': 12, #minimum homopolymer run at the clip junction to count as a poly-A/T tail
+        'require_polya_hallmark': False, #True = require the poly-A hallmark for an RTE family call
+    },
+    'version': '1.1'
+}
