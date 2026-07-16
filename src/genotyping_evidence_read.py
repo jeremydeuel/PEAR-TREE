@@ -30,6 +30,38 @@ HIGH_COVERAGE = -2
 
 DEBUG = os.environ.get("PEARTREE_DEBUG", "") not in ("", "0", "false", "False")
 
+# CIGAR op codes (BAM spec) grouped by what they consume. A "match" op aligns a query
+# base to a reference base (M/=/X); those are exactly the pairs pysam's
+# get_aligned_pairs(matches_only=True) returns.
+_CONSUMES_QUERY = frozenset((0, 1, 4, 7, 8))   # M I S = X
+_CONSUMES_REF = frozenset((0, 2, 3, 7, 8))     # M D N = X
+_MATCH_OPS = frozenset((0, 7, 8))              # M = X
+
+
+def query_index_at_ref(cigar, reference_start, target_ref):
+    """Query offset aligned to reference position ``target_ref``.
+
+    Returns the query index q such that (q, target_ref) is an aligned match pair, or
+    None if target_ref is not aligned to a query base (it falls in a deletion / skip,
+    or outside the read). This is exactly what searching
+    ``get_aligned_pairs(matches_only=True)`` for ``ref == target_ref`` yields, but in
+    O(#cigar ops) with no per-read list materialisation -- get_aligned_pairs was the
+    genotyping hot spot (built a ~read-length tuple list twice per read).
+    """
+    if cigar is None:
+        return None
+    qpos = 0
+    rpos = reference_start
+    for op, length in cigar:
+        if op in _MATCH_OPS and rpos <= target_ref < rpos + length:
+            return qpos + (target_ref - rpos)
+        if op in _CONSUMES_QUERY:
+            qpos += length
+        if op in _CONSUMES_REF:
+            rpos += length
+    return None
+
+
 class EvidenceRead:
     def __init__(self, read: pysam.AlignedRead):
         self.read = read
@@ -48,42 +80,34 @@ class EvidenceRead:
         return self.read.is_read1 == self.read.is_forward
 
     def qleft(self, breakpoint: int, ref: str, alt: str):
-        if breakpoint >= self.read.reference_start and breakpoint <= self.read.reference_end:
-            breakpoint_query = None
-            for query, ref_pos in self.read.get_aligned_pairs(True):
-                if ref_pos == breakpoint:
-                    breakpoint_query = query
-                    break
-
-            if breakpoint_query is None:
-                self.left_genotype = 0,0,0
-                return
-            #print(self.read.query_sequence)
-            #print(f"L   {self.read.query_sequence[:breakpoint_query]} {ref} {alt} -> qscore: ",qscore(QualitySeq(self.read.query_sequence[:breakpoint_query],self.read.query_qualities[:breakpoint_query]),
-            #              ref, alt, RIGHT_TO_LEFT))
-            self.left_genotype = qscore(QualitySeq(self.read.query_sequence[:breakpoint_query],self.read.query_qualities[:breakpoint_query]),
-                          ref, alt, RIGHT_TO_LEFT)
-
-        else:
-            self.left_genotype = 0,0,0
+        read = self.read
+        if breakpoint < read.reference_start or breakpoint > read.reference_end:
+            self.left_genotype = 0, 0, 0
+            return
+        # query base aligned at the breakpoint; score the read portion 5' of it (RIGHT_TO_LEFT)
+        breakpoint_query = query_index_at_ref(self.cigar, read.reference_start, breakpoint)
+        if breakpoint_query is None:
+            self.left_genotype = 0, 0, 0
+            return
+        self.left_genotype = qscore(
+            QualitySeq(read.query_sequence[:breakpoint_query], read.query_qualities[:breakpoint_query]),
+            ref, alt, RIGHT_TO_LEFT)
 
     def qright(self, breakpoint: int, ref: str, alt: str):
-        if breakpoint >= self.read.reference_start and breakpoint <= self.read.reference_end:
-            breakpoint_query = None
-            for query, ref_pos in reversed(self.read.get_aligned_pairs(True)):
-                if ref_pos == breakpoint-1:
-                    breakpoint_query = query+1
-                    break
-
-            if breakpoint_query is None:
-                self.right_genotype = 0,0,0
-                return
-            #print(f"R   {self.read.query_sequence[breakpoint_query:]} {ref} {alt} -> qscore : {qscore(QualitySeq(self.read.query_sequence[breakpoint_query:],self.read.query_qualities[breakpoint_query:]),
-            #              ref, alt, LEFT_TO_RIGHT)}")
-            self.right_genotype = qscore(QualitySeq(self.read.query_sequence[breakpoint_query:],self.read.query_qualities[breakpoint_query:]),
-                          ref, alt, LEFT_TO_RIGHT)
-        else:
-            self.right_genotype = 0,0,0
+        read = self.read
+        if breakpoint < read.reference_start or breakpoint > read.reference_end:
+            self.right_genotype = 0, 0, 0
+            return
+        # query base aligned just 5' of the breakpoint (ref == breakpoint-1); score the read
+        # portion 3' of it (query index +1, LEFT_TO_RIGHT), matching the original semantics.
+        q = query_index_at_ref(self.cigar, read.reference_start, breakpoint - 1)
+        if q is None:
+            self.right_genotype = 0, 0, 0
+            return
+        breakpoint_query = q + 1
+        self.right_genotype = qscore(
+            QualitySeq(read.query_sequence[breakpoint_query:], read.query_qualities[breakpoint_query:]),
+            ref, alt, LEFT_TO_RIGHT)
 
     def __str__(self):
         return f"read {self.read.query_name}: right_gt={self.right_genotype}, left_gt={self.left_genotype}"

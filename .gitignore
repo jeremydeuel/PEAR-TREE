@@ -8,3 +8,8 @@ hs1*
 src/config.py
 
 
+
+# rust build artifacts
+target/
+# genotyping differential dumps
+diff-test-fail*.txt

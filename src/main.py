@@ -32,6 +32,7 @@ if __name__ == '__main__':
         usage = 'python main.py --step discover --bam [bam] --out [outfile.txt.gz]\n' +
                 'python main.py --step combine_insertions --discovery_files [files] --out [outfile_stem] --threads [1]\n' +
                 'python main.py --step genotype --bam [bam] --out [outfile.txt.gz] --insertions [insertions.genotyping.txt.gz] --threads [1]\n' +
+                'python main.py --step genotype_batch --manifest [samples.tsv: bam<TAB>out per line] --insertions [insertions.genotyping.txt.gz] --threads [1]\n' +
                 'python main.py --step combine_genotypes --genotypes [list of genotyping output files] --out [outfile.csv.gz] --threads [1]\n',
 
         epilog = f'Version {CONFIG["version"]}, Created by Jeremy Deuel <jeremy.deuel@usz.ch>'
@@ -42,6 +43,7 @@ if __name__ == '__main__':
     clm.add_argument('--insertions', '-i', help='Path to summarised insertions file, gzipped', nargs=1)
     clm.add_argument('--discovery_files', '-f', help="Path to insertion files generated in the discovery step, gzipped", nargs="*")
     clm.add_argument('--genotypes', '-g', help='Path to genotype files, gzipped', nargs="*")
+    clm.add_argument('--manifest', '-m', help='For genotype_batch: TSV file with one "bam<TAB>output" line per sample.', nargs=1)
     clm.add_argument('--threads', '-@', help='Number of threads to use, defaults to one, ignored during discovery', nargs=1, default=[1])
 
     args = clm.parse_args(sys.argv[1:])
@@ -87,6 +89,42 @@ if __name__ == '__main__':
         print(f"input bam: {input_bam}, input insertions: {input_insertions} output file: {output_path}, threads: {threads}")
         from genotype import genotype
         genotype(input_insertions, input_bam, output_path, threads)
+        exit(0)
+
+    if args.step[0] == 'genotype_batch':
+
+        if not args.manifest or not args.insertions:
+            clm.print_help()
+            exit(1)
+        manifest_path = args.manifest[0]
+        input_insertions = args.insertions[0]
+        threads = int(args.threads[0])
+        if threads > os.cpu_count():
+            raise ValueError(f"this machine only has {os.cpu_count()} CPUs, do not run this script with more threads, you have requested {threads}.")
+        if not os.path.exists(manifest_path):
+            raise FileNotFoundError(f"manifest file {manifest_path} does not exist!")
+        if not os.path.exists(input_insertions):
+            raise FileNotFoundError(f"input insertions file {input_insertions} does not exist!")
+        bam_files, output_files = [], []
+        with open(manifest_path) as mf:
+            for lineno, line in enumerate(mf, 1):
+                line = line.strip()
+                if not line or line.startswith('#'):
+                    continue
+                parts = line.split('\t')
+                if len(parts) != 2:
+                    raise ValueError(f"{manifest_path}:{lineno}: expected 'bam<TAB>output', got {line!r}")
+                bam, out = parts[0].strip(), parts[1].strip()
+                if not os.path.exists(bam):
+                    raise FileNotFoundError(f"input bam file {bam} (manifest line {lineno}) does not exist!")
+                bam_files.append(bam)
+                output_files.append(out)
+        if not bam_files:
+            raise ValueError(f"manifest {manifest_path} lists no samples")
+        print_head('Batch Genotyping')
+        print(f"input insertions: {input_insertions}, samples: {len(bam_files)}, threads: {threads}")
+        from genotype import genotype_batch
+        genotype_batch(input_insertions, bam_files, output_files, threads)
         exit(0)
 
     if args.step[0] == 'combine_genotypes':

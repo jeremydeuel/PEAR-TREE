@@ -1,0 +1,13 @@
+# PEAR-TREE Rust discovery config for GRCh37 / hs37d5 BAMs (Sanger canpipe output).
+#
+# These BAMs are bwa-mem mapped to 1000Genomes_hs37d5 (AS:NCBI37). Discovery itself
+# is assembly-agnostic, so only two things matter here:
+#   - min_mapq 60: bwa-mem caps MAPQ at 60; 60 keeps uniquely-placed reads only.
+#   - contig_allowlist: process the primary assembly (1..22, X, Y) and nothing else,
+#     which drops MT (circular, high-coverage) and every hs37d5 decoy / GL000* /
+#     NC_007605 (EBV) contig. This replaces the legacy len<=5 + not-MT heuristic.
+#
+# key = value, '#' starts a comment.
+
+min_mapq = 60
+contig_allowlist = 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,X,Y

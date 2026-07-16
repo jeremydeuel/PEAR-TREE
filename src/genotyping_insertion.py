@@ -28,6 +28,13 @@ GT_ARTEFACT = 'artefact'
 GT_WILDTYPE = 'wild-type'
 GT_HETEROZYGOUS = 'heterozygous'
 GT_HOMOZYGOUS = 'homozygous'
+# insertion is confidently PRESENT (>= min_supporting_reads alt reads) but zygosity
+# cannot be resolved: the reads are alt-dominant (VAF in the homozygous band) yet too
+# few to exclude a heterozygote whose reference allele merely was not sampled. Distinct
+# from GT_INSERTION_UNCERTAIN below, where presence itself is in doubt. This is the call
+# that matters for phylogenetic-tree clade detection across many colonies: it counts as
+# "colony carries the insertion" without overstating hom vs het.
+GT_INSERTION = 'insertion'
 # low-confidence calls (evidence points one way but below the confidence gate,
 # see CONFIG['genotyping']['min_score_for_call'] / 'min_supporting_reads').
 GT_INSERTION_UNCERTAIN = 'insertion?'
@@ -52,6 +59,13 @@ class Insertion:
         self.left_ref = None
         self.right_ref = None
         self.evidence_reads: List[EvidenceRead] = []
+        # per-read vote tallies, populated by summarise_evidence() and emitted alongside
+        # the call so downstream (e.g. a phylogeny-aware single-read / barcode-switch
+        # likelihood) has the raw evidence, not just the summarised call. Default 0 so the
+        # high-coverage / error paths, which never run summarise_evidence, still report.
+        self.n_ref = 0
+        self.n_alt = 0
+        self.n_art = 0
     def __str__(self):
         return self.name
 
@@ -149,6 +163,13 @@ class Insertion:
         min_artefact_reads = cfg.get('min_artefact_reads', 2)
         min_supporting_reads = cfg.get('min_supporting_reads', 2)
         min_score_for_call = cfg.get('min_score_for_call', 6)
+        # informative reads (n_alt + n_ref) required before an alt-dominant locus may be
+        # called homozygous rather than "insertion present, zygosity unclear": below it a
+        # heterozygote whose reference allele was not sampled is indistinguishable from a
+        # true homozygote. P(a het yields all-alt) = 0.5**informative, so the default 6
+        # bounds the false-homozygous rate at ~1.6%.
+        min_reads_for_zygosity = cfg.get('min_reads_for_zygosity', 6)
+        recover_lowcov = cfg.get('recover_low_coverage_presence', True)
 
         if not len(self.evidence_reads):
             return GT_NO_COVERAGE, 0, 0
@@ -185,6 +206,11 @@ class Insertion:
                 n_ref += 1
                 ref_score += sum(m for kind, m in covered if kind == 'ref')
 
+        # expose the raw vote counts for the output (barcode-switch / phylogeny models
+        # need the evidence, not just the call). n_alt+n_ref+n_art is the informative-read
+        # count; the total spanning depth (read_count) is added by the genotype driver.
+        self.n_ref, self.n_alt, self.n_art = n_ref, n_alt, n_art
+
         informative = n_ref + n_alt
         total = informative + n_art
 
@@ -200,12 +226,36 @@ class Insertion:
 
         vaf = n_alt / informative
         confident_ins = n_alt >= min_supporting_reads and alt_score >= min_score_for_call
+        # Recovered presence: a single STRONG alt read at a KNOWN contract locus, with the
+        # reference allele NOT confidently present (n_ref < min_supporting_reads) so no
+        # wild-type evidence contradicts it. A well-covered wild-type carries many reference
+        # reads and is therefore never recovered -- measured false-positive-free on deep
+        # negative colonies -- so this rescues genuinely low-coverage colonies (VAF alt-
+        # dominant, reference simply not sampled) that a flat 2-read floor would drop.
+        # CAVEAT: in real multiplexed libraries a large positive clade donates index-hopped
+        # single reads to low-coverage negative colonies -- exactly this signature -- which
+        # this simulation does not model. Disable via recover_low_coverage_presence where
+        # index hopping is uncontrolled (no UMIs / dual indices); recovered calls are the
+        # zygosity-unclear GT_INSERTION tier so a tree builder can down-weight them.
+        recovered_ins = (recover_lowcov and not confident_ins
+                         and n_alt >= 1 and alt_score >= min_score_for_call
+                         and n_ref < min_supporting_reads)
         if vaf >= vaf_hom_min:
-            gt = GT_HOMOZYGOUS if confident_ins else GT_INSERTION_UNCERTAIN
-            return gt, int(alt_score), int(ref_score)
+            # Presence certain (or recovered); zygosity certain only with enough
+            # informative reads to make reference-allele dropout (a masked het) unlikely.
+            if confident_ins and informative >= min_reads_for_zygosity:
+                return GT_HOMOZYGOUS, int(alt_score), int(ref_score)
+            if confident_ins or recovered_ins:
+                return GT_INSERTION, int(alt_score), int(ref_score)
+            return GT_INSERTION_UNCERTAIN, int(alt_score), int(ref_score)
         if vaf >= vaf_het_min:
-            gt = GT_HETEROZYGOUS if confident_ins else GT_INSERTION_UNCERTAIN
-            return gt, int(alt_score), int(ref_score)
+            # het band carries both alleles; a confident presence call here is an
+            # unambiguous heterozygote, a recovered single read is present-but-unclear.
+            if confident_ins:
+                return GT_HETEROZYGOUS, int(alt_score), int(ref_score)
+            if recovered_ins:
+                return GT_INSERTION, int(alt_score), int(ref_score)
+            return GT_INSERTION_UNCERTAIN, int(alt_score), int(ref_score)
         if vaf > vaf_wildtype_max:
             # some alt evidence but too little for a clean het — likely a subclone,
             # index hopping or residual artefact; flag as uncertain wild-type.

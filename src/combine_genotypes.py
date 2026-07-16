@@ -91,7 +91,11 @@ def collect_genotype(input_files, output_file, threads):
     min_best_score = cg.get('min_best_score', 800)
 
     n_wt = (d == "wild-type").sum(axis=1)
-    n_insertions = (d == 'homozygous').sum(axis=1) + (d == 'heterozygous').sum(axis=1)
+    # a colony carries the insertion if it is a confident het, hom, OR a zygosity-unclear
+    # 'insertion' call (presence certain, hom/het indeterminate) -- the last is essential
+    # for clade detection across many colonies, where presence, not zygosity, defines a clade.
+    n_insertions = ((d == 'homozygous').sum(axis=1) + (d == 'heterozygous').sum(axis=1)
+                    + (d == 'insertion').sum(axis=1))
     # low-confidence calls now actually emitted by the genotyper (GT_*_UNCERTAIN).
     n_uncertain_insertion = (d == 'insertion?').sum(axis=1)
     n_uncertain = (d == 'wild-type?').sum(axis=1) + n_uncertain_insertion
@@ -102,7 +106,7 @@ def collect_genotype(input_files, output_file, threads):
     too_many_nas = n_na > cg['max_na']
     # max() over a row with no het/hom sample is NaN; treat that as failing the
     # score gate rather than silently passing it (NaN < x is False).
-    best_ins_score = support_score[(d == "heterozygous") | (d == "homozygous")].max(axis=1).fillna(-np.inf)
+    best_ins_score = support_score[(d == "heterozygous") | (d == "homozygous") | (d == "insertion")].max(axis=1).fillna(-np.inf)
     print(f"filtering strategy, starting with {d.shape[0]} insertions")
     print(f"- removing {int((n_wt < cg['min_wild-types']).sum())} insertions without at least {cg['min_wild-types']} wild-type colonies")
     print(f"- removing {int((n_insertions < cg['min_insertions']).sum())} insertions without at least {cg['min_insertions']} certain het or hom colony")

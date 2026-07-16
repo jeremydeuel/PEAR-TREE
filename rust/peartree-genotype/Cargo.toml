@@ -1,0 +1,30 @@
+[package]
+name = "peartree-genotype"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.87"
+description = "PEAR-TREE genotyping step (Rust port)"
+
+[[bin]]
+name = "peartree-genotype"
+path = "src/main.rs"
+
+[dependencies]
+# Same noodles line as peartree-discovery (one coherent pin, MSRV <= 1.87) so the
+# two crates share a single noodles-sam version and their read decoding matches.
+noodles-bam = "0.80"
+noodles-sam = "0.76"
+noodles-bgzf = "0.40"
+noodles-core = "0.17"
+# native CRAM reading (real production format is CRAM); needs a reference FASTA.
+noodles-cram = "0.83"
+noodles-fasta = "0.53"
+flate2 = "1.0"
+# fast non-cryptographic hasher for the per-locus qname dedup set. Genotype calls
+# are order-independent sums/counts, so hash order never affects output.
+rustc-hash = "2"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1

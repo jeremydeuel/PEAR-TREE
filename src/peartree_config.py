@@ -47,6 +47,8 @@ CONFIG = {
         'min_mapq': 40, #minimal mapq of a spanning read to be used as genotyping evidence
         'min_score_for_call': 6, #minimal aggregate quality-margin for a confident (non-uncertain) call
         'min_supporting_reads': 2, #minimal number of allele-supporting reads for a confident het/hom/wt call
+        'min_reads_for_zygosity': 6, #min informative reads before an alt-dominant locus is called homozygous rather than 'insertion' (zygosity unclear)
+        'recover_low_coverage_presence': True, #promote a single strong alt read at a known locus to 'insertion' when the reference allele is not confidently present (n_ref<min_supporting_reads); disable where index hopping is uncontrolled
         'reads_for_high_coverage': 60, #read count above which a locus is flagged high-coverage (counted as NA)
         'art_min_score': 60, #per-side quality above which a read side counts as artefact (matches neither ref nor alt)
         'vaf_wildtype_max': 0.10, #VAF at or below which a locus is called wild-type

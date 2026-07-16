@@ -44,6 +44,14 @@ CONFIG = {
         'coverage_mask': True,
         'coverage_mask_multiplier': 5.0,
         'adaptive_evidence': False, #SPEC-4 also cuts satellite FPs but loses low-VAF TPs -> leave off
+        # mate_anchor_rescue — recommended ON for human WGS. Accepts a soft-clipped read
+        # below min_mapq when its mate maps uniquely (MQ tag >= min_mapq); recovers
+        # insertions into low-mapability-but-mate-unique flanks. On test/fullstack/scale10k
+        # it added +62 true insertions (recall 95.4 -> 96.0%) with 0 added FP after combine —
+        # the sweep's clean sensitivity win. Needs the MQ tag from `samtools fixmate`.
+        # NB: for the rust discovery the operative settings (incl. min_mapq lowered to 40)
+        # live in test/fullstack/scale10k/discovery_hs.config; pass that with `--config`.
+        'mate_anchor_rescue': True,
     },
 
     #define adapter sequences
@@ -57,6 +65,8 @@ CONFIG = {
         'min_mapq': 40, #minimal mapq of a spanning read to be used as genotyping evidence
         'min_score_for_call': 6, #minimal aggregate quality-margin for a confident (non-uncertain) call
         'min_supporting_reads': 2, #minimal number of allele-supporting reads for a confident het/hom/wt call
+        'min_reads_for_zygosity': 6, #min informative reads before an alt-dominant locus is called homozygous rather than 'insertion' (zygosity unclear)
+        'recover_low_coverage_presence': True, #promote a single strong alt read at a known locus to 'insertion' when the reference allele is not confidently present (n_ref<min_supporting_reads); disable where index hopping is uncontrolled
         'reads_for_high_coverage': 60, #read count above which a locus is flagged high-coverage (counted as NA)
         'art_min_score': 60, #per-side quality above which a read side counts as artefact (matches neither ref nor alt)
         'vaf_wildtype_max': 0.10, #VAF at or below which a locus is called wild-type

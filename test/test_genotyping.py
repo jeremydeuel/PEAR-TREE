@@ -19,7 +19,7 @@ from genotyping_insertion import (
     Insertion,
     GT_WILDTYPE, GT_WILDTYPE_UNCERTAIN,
     GT_HETEROZYGOUS, GT_HOMOZYGOUS,
-    GT_INSERTION_UNCERTAIN, GT_ARTEFACT,
+    GT_INSERTION, GT_INSERTION_UNCERTAIN, GT_ARTEFACT,
     GT_NO_COVERAGE,
 )
 from genotype_qscore import qscore, LEFT_TO_RIGHT, RIGHT_TO_LEFT
@@ -80,6 +80,34 @@ def test_homozygous_not_flipped_by_one_stray_wildtype_read():
     # homozygote into a heterozygote (the old q_hom<0 logic did exactly that).
     gt, sg, sa = call([insertion_read()] * 10 + [wildtype_read()])
     assert gt == GT_HOMOZYGOUS, gt            # VAF 10/11 = 0.909
+
+
+@case
+def test_insertion_present_zygosity_unclear():
+    # Confident presence (>= min_supporting_reads alt reads) but VAF=1.0 on too few
+    # informative reads to exclude a heterozygote whose reference allele was not
+    # sampled -> 'insertion' (present, zygosity unclear), NOT a confident homozygous.
+    # This is the call clade detection needs: presence without overstating zygosity.
+    gt, sa, sr = call([insertion_read()] * 3)     # n_alt=3, n_ref=0, informative 3 < 6
+    assert gt == GT_INSERTION, gt
+
+
+@case
+def test_homozygous_needs_enough_reads():
+    # Same VAF=1.0, but enough informative reads (>= min_reads_for_zygosity) that a
+    # masked heterozygote is unlikely -> confident homozygous.
+    gt, sa, sr = call([insertion_read()] * 6)     # n_alt=6, informative 6 >= 6
+    assert gt == GT_HOMOZYGOUS, gt
+
+
+@case
+def test_single_alt_read_recovered_at_known_site():
+    # A lone STRONG alt read with no reference evidence (n_ref=0) at a known contract
+    # locus is recovered as 'insertion' (present, zygosity unclear) rather than dropped
+    # to insertion?. Measured false-positive-free on deep negatives, because a covered
+    # wild-type carries many reference reads and is never recovered.
+    gt, sa, sr = call([insertion_read()])         # n_alt=1, n_ref=0
+    assert gt == GT_INSERTION, gt
 
 
 @case

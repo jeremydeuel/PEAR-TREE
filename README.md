@@ -126,6 +126,47 @@ python main.py --step genotype --bam [bam] --out [outfile.txt.gz] --insertions [
 --t=11:59:59
 --ntasks=1
 ```
+
+#### Step 3 (batch): genotyping many samples in one run
+
+A phylogenetic tree of hundreds of colonies genotypes the *same* insertion
+contract against every colony's BAM. Running Step 3 once per colony re-parses the
+contract, re-imports the interpreter/pysam and re-spawns a worker pool for each
+sample. `genotype_batch` collapses that into a single invocation: the contract is
+parsed once, one persistent worker pool drains a `(sample, locus)` queue, and each
+sample's output is written as it completes. Every sample's output file is
+byte-identical to what Step 3 would have written for that BAM.
+
+```bash
+python main.py --step genotype_batch --manifest [samples.tsv] --insertions [insertions.genotyping.txt.gz] --threads 6
+```
+
+The manifest is a TSV with one `bam<TAB>output` line per sample (blank / `#`
+lines ignored):
+
+```
+/path/colonyA.bam	/path/colonyA.genotypes.txt.gz
+/path/colonyB.bam	/path/colonyB.genotypes.txt.gz
+```
+
+#### Step 3 (Rust): faster genotyping
+
+A Rust port of the genotyping step lives in `rust/peartree-genotype/`. Its
+decompressed output is byte-identical to the Python genotyper under the generic
+config, and it is substantially faster (multi-threaded, no per-locus Python
+overhead). It reads **BAM or CRAM** (CRAM needs `--reference ref.fa` unless the
+CRAM embeds its reference) and has its own `genotype_batch` step that genotypes a
+manifest of samples **consecutively** — one file at a time, `--threads` cores
+across that file's loci — which keeps memory and open handles bounded on the
+cluster. See `rust/peartree-genotype/README.md`.
+
+```bash
+# one sample
+peartree-genotype --step genotype --bam [bam|cram] --insertions [insertions.genotyping.txt.gz] --out [outfile.txt.gz] --threads 6 [--reference ref.fa]
+# many samples, consecutively (manifest: input<TAB>output per line)
+peartree-genotype --step genotype_batch --manifest [samples.tsv] --insertions [insertions.genotyping.txt.gz] --threads 6 [--reference ref.fa]
+```
+
 ### Step 4: Combine Genotypes
 
 ```bash
@@ -162,12 +203,14 @@ genotyping.max_bases | 12 | maximum number of bases (per breakpoint side) used f
 genotyping.min_mapq | 40 | minimum mapq of a spanning read to be used as genotyping evidence.
 genotyping.min_score_for_call | 6 | minimum aggregate quality-margin required for a *confident* (non-uncertain) genotype call. Below this (or below min_supporting_reads) the call degrades to `insertion?` / `wild-type?`.
 genotyping.min_supporting_reads | 2 | minimum number of allele-supporting reads for a confident het/hom/wild-type call.
+genotyping.min_reads_for_zygosity | 6 | minimum informative reads (alt + ref) before an alt-dominant locus is called `homozygous`; with fewer, a confident-presence locus is called `insertion` (zygosity unclear) because a reference-allele-dropout heterozygote cannot be excluded.
+genotyping.recover_low_coverage_presence | True | recover a single **strong** alt read at a known locus as `insertion` (present, zygosity unclear) when the reference allele is not confidently present (`n_ref < min_supporting_reads`) — the low-coverage regime where a real insertion is under-sampled. A well-covered wild-type carries many reference reads and is never recovered (measured false-positive-free on deep negative colonies). **Set `False` where index hopping is uncontrolled** (no UMIs / dual indices): a large positive clade donates single hopped reads to low-coverage negative colonies, which this rule would recover as false clade members.
 genotyping.reads_for_high_coverage | 60 | read count above which a locus is flagged `high-coverage` (counted as NA), re-applied per bam since not all breakpoints were coverage-checked for all bams during discovery.
 genotyping.vaf_wildtype_max / vaf_het_min / vaf_hom_min | 0.10 / 0.30 / 0.85 | variant-allele-fraction (VAF = alt-reads / (alt+ref reads)) band edges. VAF ≤ 0.10 → wild-type; 0.30–0.85 → heterozygous; ≥ 0.85 → homozygous; the gaps are the uncertain classes.
 genotyping.artefact_read_fraction / min_artefact_reads | 0.5 / 2 | a locus is called `artefact` when at least this fraction (and this many) of its evidence reads match neither the reference nor the inserted junction.
 genotyping.double_alt_is_artefact | True | treat a single read that matches the inserted element on BOTH junctions as a chimeric artefact. Consider setting False for element families (e.g. mouse ERV/LTR) whose genomic flanks resemble the inserted sequence.
 combine_genotypes.min_wild-types | 20 | minimum number of bam files required to have a wild-type genotype for an insertion to be considered. This removes insertions that don't vary between files but are absent from the reference. For enriched/targeted (non-WGS) data set to 0 and raise max_na (see note below).
-combine_genotypes.min_insertions | 1 | minimum number of certain heterozygous or homozygous calls required for an insertion to pass filtering
+combine_genotypes.min_insertions | 1 | minimum number of colonies carrying the insertion (a confident `heterozygous`, `homozygous`, or zygosity-unclear `insertion` call) required for an insertion to pass filtering
 combine_genotypes.max_artefact | 200 | maximum number of bam files allowed to have an "artefact" genotype (evidence of non-insertion non-reference clipped reads)
 combine_genotypes.max_na | 18 | maximum number of bam files allowed to have an "NA" genotype (`no-coverage`, `high-coverage` or `error`).
 combine_genotypes.min_best_score | 800 | minimum best het/hom support score across all samples for a locus to pass filtering.
@@ -211,16 +254,36 @@ python src/main.py --step genotype --bam test_data/test.bam --out test_data/test
 
 expected output in test_step3.txt.gz
 ```
-insertion	genotype	score_genotype	score_alternative
-13:32992169-32992177	heterozygous	2428	3018
+insertion	genotype	score_genotype	score_alternative	coverage	n_alt	n_ref	n_art
+13:32992169-32992177	heterozygous	2428	3018	16	4	3	0
 ```
 
-The `genotype` column is one of: `wild-type`, `heterozygous`, `homozygous`, `artefact`,
-the low-confidence classes `wild-type?` / `insertion?`, or the not-assessable classes
-`no-coverage` / `high-coverage` / `error`. Calls are driven by the variant allele
+The `genotype` column is one of: `wild-type`, `heterozygous`, `homozygous`, `insertion`,
+`artefact`, the low-confidence classes `wild-type?` / `insertion?`, or the not-assessable
+classes `no-coverage` / `high-coverage` / `error`. Calls are driven by the variant allele
 fraction (VAF = alt-supporting reads / (alt + ref reads)): wild-type ≈ 0, heterozygous
 ≈ 0.5, homozygous ≈ 1.0 (see the genotyping config keys above). Here the test locus has
 4 alt- and 3 ref-supporting reads (VAF ≈ 0.57) → heterozygous.
+
+`score_genotype` / `score_alternative` are the aggregate quality-margin sums for the called
+and the alternative hypothesis. The remaining columns are the **raw evidence** behind the
+call: `coverage` is the total spanning read depth at the locus (`bam.count`), and
+`n_alt` / `n_ref` / `n_art` are the per-read vote counts (insertion-supporting, reference-
+supporting, artefact). These are emitted so a downstream, phylogeny-aware analysis can
+model the raw counts directly — e.g. weighing whether a single supporting read (`n_alt=1`)
+at a locus is a genuine low-coverage insertion or an index-hop / barcode-switch artefact,
+given the colony's depth and the insertion's presence in phylogenetically related colonies.
+`combine_genotypes` reads only the first four columns, so the extra columns are additive and
+break nothing.
+
+`insertion` means the insertion is confidently **present** (≥ `min_supporting_reads` alt
+reads) but its **zygosity is unresolved**: the reads are alt-dominant (VAF in the
+homozygous band) yet fewer than `min_reads_for_zygosity` informative reads, so a
+heterozygote whose reference allele was simply not sampled cannot be excluded. It is
+distinct from `insertion?`, where *presence itself* is uncertain. `combine_genotypes`
+counts `insertion` as a present colony (alongside `heterozygous` / `homozygous`) — this is
+the call phylogenetic-tree analyses need, where a clade is defined by an insertion being
+*present*, not by its zygosity.
 
 ## License
 

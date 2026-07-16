@@ -1,0 +1,10 @@
+# PEAR-TREE Rust genotype config for GRCh37 / hs37d5 BAMs.
+#
+# Matches the discovery config's MAPQ floor: bwa-mem caps MAPQ at 60, and 60 keeps
+# only uniquely-placed spanning reads as genotyping evidence. All other genotyping
+# parameters use the generic src/config.py defaults (VAF bands, min_supporting_reads,
+# min_reads_for_zygosity, recover_low_coverage_presence, reads_for_high_coverage=180).
+#
+# key = value, '#' starts a comment.
+
+min_mapq = 60
