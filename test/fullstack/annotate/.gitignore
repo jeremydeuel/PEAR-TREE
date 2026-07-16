@@ -1,0 +1,7 @@
+# rebuildable by build_hmm.sh (needs only HMMER)
+peartree_rte.hmm
+peartree_rte.hmm.h3f
+peartree_rte.hmm.h3i
+peartree_rte.hmm.h3m
+peartree_rte.hmm.h3p
+*.fai

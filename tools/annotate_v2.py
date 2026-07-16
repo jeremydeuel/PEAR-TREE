@@ -416,19 +416,46 @@ class VariantAnnotationContainer:
 
     def generate_dfam_file(self):
         """
-        This function generates the dfam file using dfamscan.pl
+        Run the nucleotide HMM scan of the inserted-sequence clips and write a Dfam-format
+        hit table (the format read_dfam parses).
+
+        Two back-ends, selected by config:
+          * dfamscan.pl (CONFIG['annotate']['dfamscan'] set and present) — the production
+            wrapper that applies the models' GA thresholds and per-chromosome filtering.
+          * nhmmscan --dfamtblout (default fallback) — needs only HMMER on PATH. nhmmscan
+            emits the identical Dfam table, so no external Perl script is required. Used for
+            the test harness and any host with a hmmpress'd HMM library but no dfamscan.pl.
         """
         print(f"running DFAM on {self.sample}")
         assert os.path.exists(self.fasta_file)
-        assert os.path.exists(CONFIG['annotate']['dfamscan'])
-        assert os.path.exists(CONFIG['annotate']['hmm'])
-        assert os.path.exists(CONFIG['annotate']['dfamscan'])
-        assert os.access(CONFIG['annotate']['dfamscan'], os.X_OK)
-        # set PATH variable to include hmmer scripts.
-        os.environ["PATH"] = CONFIG['annotate']['hmmer'] + ":" + os.environ["PATH"]
-        assert 0 == os.system("nhmmscan -h > /dev/null 2>&1") # check that nhmmscan exists in path, otherwise dfamscan.pl will not work.
-        assert 0 == os.system(
-            f"{CONFIG['annotate']['dfamscan']} --fastafile {self.fasta_file} --hmmfile {CONFIG['annotate']['hmm']} --cpu {os.cpu_count()} --dfam_outfile {self.dfam_file}")
+        hmm = CONFIG['annotate']['hmm']
+        assert os.path.exists(hmm), f"HMM library {hmm} not found (run hmmpress on it first)"
+        hmmer = CONFIG['annotate'].get('hmmer')
+        if hmmer:
+            # prepend the configured HMMER bin dir so nhmmscan / dfamscan.pl resolve.
+            os.environ["PATH"] = hmmer + ":" + os.environ["PATH"]
+        assert 0 == os.system("nhmmscan -h > /dev/null 2>&1"), "nhmmscan not found on PATH"
+        dfamscan = CONFIG['annotate'].get('dfamscan')
+        if dfamscan and os.path.exists(dfamscan):
+            assert os.access(dfamscan, os.X_OK)
+            assert 0 == os.system(
+                f"{dfamscan} --fastafile {self.fasta_file} --hmmfile {hmm} "
+                f"--cpu {os.cpu_count()} --dfam_outfile {self.dfam_file}")
+        else:
+            # nhmmscan cannot read gzip; decompress the clip fasta to a temp file first.
+            fa = self.fasta_file
+            tmp_fa = None
+            if fa.endswith(".gz"):
+                tmp_fa = self.dfam_file + ".query.fa"
+                with gzip.open(fa, "rt") as i, open(tmp_fa, "w") as o:
+                    o.write(i.read())
+                fa = tmp_fa
+            rc = os.system(
+                f"nhmmscan --cpu {os.cpu_count()} --dfamtblout {self.dfam_file} {hmm} {fa} "
+                f"> /dev/null 2>&1")
+            if tmp_fa and os.path.exists(tmp_fa):
+                os.remove(tmp_fa)
+            assert rc == 0, "nhmmscan failed"
         assert os.path.exists(self.dfam_file)
 
     def generate_sam_file(self):
@@ -623,14 +650,19 @@ class VariantAnnotationContainer:
                     if read.query_name[-1] == "R":
                         rightn += 1
                         self.insertions[insertion].right_maps.append((f"{co[0][0]}:{co[0][1]}{co[0][2]}", read.mapping_quality, local_rmsks, co[0][2]))
-                        if read.mapping_quality >= 20:  # exon hits only from confidently-placed clips
-                            self.insertions[insertion].right_exons.extend(local_exons)
+                        # Exon evidence is recorded regardless of MAPQ: a processed pseudogene
+                        # of a MULTI-COPY source gene has clips that legitimately multi-map
+                        # (many genomic copies), so a MAPQ floor here would silently blind us to
+                        # exactly those genes. Specificity comes from _pseudogene() instead — it
+                        # requires two distinct exons of ONE gene (or one exon + a poly-A tail),
+                        # which a chance multimapper does not satisfy — and RTE clips are resolved
+                        # by the Dfam/rmsk branches before _pseudogene() is ever consulted.
+                        self.insertions[insertion].right_exons.extend(local_exons)
                     elif read.query_name[-1] == "L":
                         leftn += 1
                         self.insertions[insertion].left_maps.append((f"{co[0][0]}:{co[0][1]}{co[0][2]}", read.mapping_quality, local_rmsks,
                                                                         co[0][2]))
-                        if read.mapping_quality >= 20:
-                            self.insertions[insertion].left_exons.extend(local_exons)
+                        self.insertions[insertion].left_exons.extend(local_exons)
                     else:
                         raise ValueError(f"Unknown insertion side {read.query_name}, expected R or L.")
         print(f"imported {rightn} right mappings and {leftn} left mappings.")

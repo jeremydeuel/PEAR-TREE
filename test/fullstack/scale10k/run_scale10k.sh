@@ -68,4 +68,28 @@ tail -2 combine.log
 
 echo "[$(ts)] 8. score"
 "$PY" "$DIR/score_10k.py" truth_hg38.tsv discovery=discovery.txt.gz combined=step2.combined.txt.gz --window 50 | tee score.txt
+
+echo "[$(ts)] 9. annotate (family calls)"
+# End-to-end annotation: nhmmscan family scan (build_hmm.sh library) + hs1 clip remap + RMSK +
+# pseudogene exon track. scale10k has no genotyping step, so synthesise a 1-tip all-heterozygous
+# genotypes file (every combined call gets annotated — a family-recovery check, not a genotype
+# test). Needs the HMM library built once: test/fullstack/annotate/build_hmm.sh --from-hs1 $HS1
+ANNOT="$DIR/../annotate"
+if [ -f "$ANNOT/peartree_rte.hmm" ]; then
+    "$PY" - "$OUT/step2.combined.txt.gz" "$OUT/step2.genotypes.csv.gz" <<'PYEOF'
+import gzip, sys
+comb, out = sys.argv[1], sys.argv[2]
+keys = [l.strip()[1:-2] for l in gzip.open(comb, 'rt') if l.startswith('@') and l.rstrip().endswith('L')]
+with gzip.open(out, 'wt') as o:
+    o.write(';tip1\n')
+    for k in keys:
+        o.write(f'{k};heterozygous\n')
+PYEOF
+    HS1_BT2="$HS1_BT2" BOWTIE2="$BOWTIE2" PT_RMSK="$RMSK" \
+        "$PY" "$ANNOT/run_annotate.py" --combined "$OUT/step2.combined.txt.gz" \
+            --genotypes "$OUT/step2.genotypes.csv.gz" --out "$OUT/annotate.txt" --workdir "$OUT/annot"
+    echo "  annotation report -> $OUT/annotate.txt"
+else
+    echo "  (skipped: build the HMM library first -> $ANNOT/build_hmm.sh --from-hs1 \$HS1)"
+fi
 echo "[$(ts)] DONE  (outputs in $OUT)"
