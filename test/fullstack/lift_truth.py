@@ -61,7 +61,7 @@ def main():
 
     n_chain = n_flank = n_bad = 0
     with open(args.out, "w") as out:
-        out.write("id\tfamily\tvariant\ttsd\tstrand\telem_len\t"
+        out.write("id\tfamily\tvariant\ttsd\tstrand\telem_len\tclass\trole\t"
                   "hg38_contig\thg38_left\thg38_right\tflank_mapq\tstatus\tlift_method\n")
         for r in rows:
             rid = r["id"]
@@ -91,7 +91,8 @@ def main():
             else:
                 n_bad += 1
             out.write(f"{rid}\t{r['family']}\t{r['variant']}\t{r['tsd']}\t{r['strand']}\t"
-                      f"{r['elem_len']}\t{contig}\t{left}\t{right}\t{mq}\t{status}\t{method}\n")
+                      f"{r['elem_len']}\t{r.get('class', '.')}\t{r.get('role', '.')}\t"
+                      f"{contig}\t{left}\t{right}\t{mq}\t{status}\t{method}\n")
     print(f"lifted truth: {n_chain + n_flank} scoreable ({n_chain} chain, {n_flank} flank), "
           f"{n_bad} unmappable (no hg38 homolog)")
 
