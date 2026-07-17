@@ -95,13 +95,25 @@ fi
 GROUP_ARG=()
 [ -n "${GROUP:-}" ] && GROUP_ARG=(-G "$GROUP")
 
+# Namespace the logs and the job name by OUTDIR. Both were hardcoded (logs/disc.%I.*,
+# -J ptdisc), which is fine for one run and WRONG the moment two arrays run at once: the A/B
+# ran both arms concurrently, every task of arm B wrote to the same logs/disc.<i>.out as arm
+# A, and since LSF's -o APPENDS, each file ended up holding both arms interleaved. 30 tasks
+# reported failures and the logs could not say which arm they came from. A shared job name
+# also makes `bjobs`/`bkill` ambiguous between arms.
+TAG="$(basename "$OUTDIR")"
+LOGDIR="logs/$TAG"
+mkdir -p "$LOGDIR"
+echo "  LOGS     = $LOGDIR/disc.<task>.{out,err}"
+
 echo "submitting discovery array: $N colonies, <=$THROTTLE concurrent, ${MEM}MB, queue=$QUEUE"
 bsub \
-    -J "ptdisc[1-${N}]%${THROTTLE}" \
-    -o "logs/disc.%I.out" -e "logs/disc.%I.err" \
+    -J "ptdisc_${TAG}[1-${N}]%${THROTTLE}" \
+    -o "$LOGDIR/disc.%I.out" -e "$LOGDIR/disc.%I.err" \
     -n 1 -q "$QUEUE" "${GROUP_ARG[@]}" \
     -R "select[mem>${MEM}] rusage[mem=${MEM}] span[hosts=1]" -M "${MEM}" \
     "FOFN='$FOFN' OUTDIR='$OUTDIR' DISCOVER_CFG='$DISCOVER_CFG' bash cluster/discover_one.sh \$LSB_JOBINDEX"
 
-echo "watch with: bjobs -A ; tail -f logs/disc.1.out"
-echo "when done: ls discovery/*.txt.gz | wc -l   # expect $N"
+echo "watch with: bjobs -A ; tail -f $LOGDIR/disc.1.out"
+echo "when done: ls $OUTDIR/*.txt.gz | wc -l   # expect $N"
+echo "failures:  grep -lE 'TERM_MEMLIMIT|Exited with exit code' $LOGDIR/disc.*.err"
