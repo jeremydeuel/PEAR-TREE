@@ -87,12 +87,23 @@ emit() {  # emit <project> <sample> <donor>
 # PD-named donors: find them wherever they appear. A donor is re-released under several
 # project ids and the assembly differs between (and within) releases, so we record EVERY
 # project/sample pair and let the query decide -- we do not pick a project here.
+#
+# The glob MUST NOT be a bare "$d"* : donor ids are not prefix-free. PD5163 is a real donor
+# (71 tips, PD5163d_lo0074) and also a strict prefix of PD51632/3/4/5, the CML donors. A bare
+# glob gave PD5163 449 colonies -- its own 71 plus ~378 stolen from four other donors -- and
+# since those donors are ALSO in donors.txt, emit() ran twice per sample and the manifest
+# carried the same BAM under two donor labels. Cross-donor contamination in the very table we
+# use to tell donors apart.
+# Sanger sample names are <DONOR><lowercase letter>_lo#### (PD5163d_lo0074, PD51632b_lo0001):
+# the character after the donor id is NEVER a digit. That is the whole rule.
 for projdir in "$NST"/*/; do
     proj=$(basename "$projdir")
     for d in "${WANT[@]}"; do
         for sdir in "$projdir$d"*/; do
             [ -d "$sdir" ] || continue
-            emit "$proj" "$(basename "$sdir")" "$d"
+            s=$(basename "$sdir")
+            case "$s" in "$d"[0-9]*) continue;; esac   # PD5163 must not eat PD51632b_lo0001
+            emit "$proj" "$s" "$d"
         done
     done
 done

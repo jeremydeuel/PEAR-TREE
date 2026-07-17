@@ -49,11 +49,16 @@ for d in "${DONORS[@]}"; do
     echo "=============== $d"
     hit=0
 
-    n=$(ls -d "$NST"/*/"$d"* 2>/dev/null | wc -l | tr -d ' ')
+    # Donor ids are NOT prefix-free: PD5163 is a real donor AND a prefix of PD51632/3/4/5.
+    # Sample names are <DONOR><lowercase letter>_lo####, so drop any hit where a DIGIT follows
+    # the donor id -- that is a different, longer donor. (Same rule as catalogue_scan.sh.)
+    not_prefix_of_other() { awk -F/ -v d="$d" '{s=$NF; if (s !~ "^"d"[0-9]") print}'; }
+
+    n=$(ls -d "$NST"/*/"$d"* 2>/dev/null | not_prefix_of_other | wc -l | tr -d ' ')
     if [ "$n" -gt 0 ]; then
         hit=1
         echo "  nst_links: $n sample dirs"
-        ls -d "$NST"/*/"$d"* 2>/dev/null | awk -F/ '{print $(NF-1)}' | sort | uniq -c \
+        ls -d "$NST"/*/"$d"* 2>/dev/null | not_prefix_of_other | awk -F/ '{print $(NF-1)}' | sort | uniq -c \
             | awk '{printf "    proj %-6s %s samples\n", $2, $1}'
     else
         echo "  nst_links: none"
@@ -77,8 +82,12 @@ for d in "${DONORS[@]}"; do
             # iRODS is the ARCHIVE OF RECORD and nst_links is an incomplete view of it —
             # measured: PD57333 has 156 BAMs in iRODS but only 79 linked. So a donor absent
             # from nst_links may still be here.
-            ib=$(iquest --no-page "SELECT COLL_NAME, DATA_NAME WHERE COLL_NAME like '/cgp/intproj/%/sample/${d}%' AND DATA_NAME like '%.sample.dupmarked.bam'" 2>/dev/null | grep -c '^DATA_NAME')
-            ip=$(iquest --no-page "SELECT COLL_NAME WHERE COLL_NAME like '/cgp/intproj/%/sample/${d}%' AND DATA_NAME like '%.sample.dupmarked.bam'" 2>/dev/null | grep '^COLL_NAME' | awk -F/ '{print $4}' | sort -u | paste -sd, -)
+            # iRODS `like` cannot express "not followed by a digit", so filter after the fact
+            # on the collection's sample component -- same prefix rule as above.
+            iq=$(iquest --no-page "SELECT COLL_NAME WHERE COLL_NAME like '/cgp/intproj/%/sample/${d}%' AND DATA_NAME like '%.sample.dupmarked.bam'" 2>/dev/null \
+                 | grep '^COLL_NAME' | sed 's/^COLL_NAME = //' | awk -F/ -v d="$d" '$NF !~ "^"d"[0-9]"')
+            ib=$(printf '%s\n' "$iq" | grep -c '^/cgp/')
+            ip=$(printf '%s\n' "$iq" | grep '^/cgp/' | awk -F/ '{print $4}' | sort -u | paste -sd, -)
             [ "${ib:-0}" -gt 0 ] && hit=1
             echo "  iRODS/cgp: $ib BAMs   projects: ${ip:-none}"
             [ "${ib:-0}" -gt "$n" ] && echo "    NB iRODS has MORE BAMs than nst_links ($ib vs $n) — nst_links is incomplete here"
