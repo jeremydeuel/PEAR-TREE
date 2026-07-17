@@ -36,14 +36,26 @@
 # The bowtie2 indices stay hs1, and 'annotate'/rmsk stays hs1: those work in hs1 space and
 # are assembly-independent. No GRCh38 bowtie2 index is needed.
 #
-# DO NOT hand-edit the two paths below. Run instead:
-#     bash cluster/install.sh check-config --bam <one staged GRCh38 BAM> --fix
-# It identifies the assembly from chr1's LENGTH (not a label), downloads hg38.2bit and the
-# hs1->hg38 chain if absent, and prints the exact block with the paths this site actually
-# uses. It also accepts the chain under either the UCSC name (hs1ToHg38.over.chain.gz) or the
-# local one (hs1.hg38.all.chain.gz), so the values here are a plausible default, not a
-# promise. A wrong 2bit/chain does not crash — it yields plausible, silently WRONG
-# coordinates, which is why the gate exists.
+# The two paths below are this site's CONVENTION, not a promise that the files exist. Before
+# combine_insertions (discovery and genotype do not read this file), do BOTH of:
+#
+#   1. FETCH the resources — downloads hg38.2bit and the hs1->hg38 chain if absent:
+#        bash cluster/install.sh install --bam <one staged GRCh38 BAM>
+#      (`install` sets FIX=1; `check` is the same thing read-only. There is NO --fix flag —
+#       the subcommand IS the switch.)
+#
+#   2. ASSERT this config matches the BAM — after `cp cluster/config.py.grch38 src/config.py`:
+#        bash cluster/install.sh check-config --bam <the same BAM>
+#      It detects the assembly from chr1's LENGTH (never a label — AS: reads "NCBI38"),
+#      imports src/config.py, and asserts genome_2bit really is hg38.2bit and the chain is
+#      the hs1->hg38 one. This is a DIFFERENT subcommand from `install` and downloads nothing.
+#
+# install.sh accepts the chain under either the UCSC name (hs1ToHg38.over.chain.gz) or the
+# local one (hs1.hg38.all.chain.gz), so if `install` lands it under a different name than the
+# default below, take install.sh's path over this file's.
+#
+# A wrong 2bit/chain does not crash — it yields plausible, silently WRONG coordinates. That is
+# why the assertion exists; run it rather than eyeballing these strings.
 #
 # The Rust discovery/genotype steps do NOT read this file; they use
 # cluster/config.discovery.grch38 and cluster/config.genotype.grch38. The allowlist in the
