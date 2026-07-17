@@ -216,13 +216,36 @@ TODO="$OUT/todo.tsv"
 
 if [ "${RESCAN:-0}" = "1" ]; then
     echo
-    echo "RESCAN=1: discarding $(( $(wc -l < "$DONE" 2>/dev/null || echo 1) - 1 )) done rows; everything re-reads"
+    # done.tsv has NO header line — do not subtract one for it, unlike the manifest.
+    echo "RESCAN=1: discarding $(wc -l < "$DONE" 2>/dev/null | tr -d ' ' || echo 0) done rows; everything re-reads"
     rm -f "$DONE"; rm -f "$OUT"/parts/*.tsv 2>/dev/null
+fi
+
+# SEED done.tsv FROM AN EXISTING catalogue.tsv.
+#
+# done.tsv is new, so on the first run after it was introduced it does not exist — and
+# without this, every sample an earlier COMPLETED run already read would be re-read, because
+# that work survives only in catalogue.tsv. The resume would announce itself and then quietly
+# do nothing, which is the worst of both. catalogue.tsv has the same 27 columns as a part
+# (merge builds it from them) plus a header line, so it seeds directly.
+#
+# Only when done.tsv is absent: once it exists it is the authority, and catalogue.tsv is
+# merge OUTPUT, downstream of it. Re-seeding from output every scan would resurrect rows we
+# deliberately dropped.
+#
+# The RESCAN guard is not redundant. RESCAN=1 deletes done.tsv — and this block's trigger is
+# "done.tsv is absent", so without the guard it re-seeded from catalogue.tsv immediately and
+# RESCAN=1 did precisely nothing while printing that it had. Caught by a fixture test.
+mkdir -p "$OUT/parts"
+if [ "${RESCAN:-0}" != "1" ] && [ ! -s "$DONE" ] && [ -s "$OUT/catalogue.tsv" ]; then
+    tail -n +2 "$OUT/catalogue.tsv" > "$DONE"
+    echo
+    echo "seeded $DONE with $(wc -l < "$DONE" | tr -d ' ') rows from an existing catalogue.tsv"
+    echo "  (those samples will not be re-read; RESCAN=1 forces a full re-read)"
 fi
 
 # Fold any completed parts into done.tsv, then clear them: parts are indexed against the
 # todo file we are about to replace, so they cannot survive as parts. Their CONTENT survives.
-mkdir -p "$OUT/parts"
 nharv=$(ls "$OUT"/parts/*.tsv 2>/dev/null | wc -l | tr -d ' ')
 if [ "$nharv" -gt 0 ]; then
     cat "$OUT"/parts/*.tsv >> "$DONE"
