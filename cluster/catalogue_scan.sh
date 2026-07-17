@@ -37,6 +37,59 @@ mapfile -t WANT < <(sed 's/#.*//' "$DONORS" | awk 'NF{print $1}')
 [ "${#WANT[@]}" -gt 0 ] || { echo "$DONORS has no donors" >&2; exit 1; }
 echo "scope: ${#WANT[@]} donors from $DONORS${SAMPLES:+ + explicit samples from $SAMPLES}"
 
+# CROSS-CHECK --samples AGAINST THE TREE TIPS, BEFORE SCANNING ANYTHING.
+#
+# A --samples file is the one input nothing else can validate: every row is well-formed, the
+# sample dirs exist, the scan reports success — and the rows can still be the wrong donor
+# entirely. AX001 was catalogued TWICE from a stale list (210 samples, "T1_A1", project 2315)
+# when its real colonies are the 361 "BMH1_TG001_*" tips in project 2133. Both runs looked
+# clean. 58 array tasks of header reads, twice, on samples we did not want.
+#
+# The tree tips are the independent witness: they say what a donor's colonies are CALLED, and
+# they were derived from the phylogeny, not from a filename guess. Zero overlap between the
+# file and the donor tips means the file is about something else -> refuse, do not scan.
+#
+# Partial overlap is NORMAL and only warns: a donor legitimately has bulk samples and extra
+# colonies that never entered the tree. Absence from the tree is not absence from the donor.
+TIPS=${TIPS:-cluster/trees/tips.tsv}
+if [ -n "$SAMPLES" ]; then
+    [ -s "$SAMPLES" ] || { echo "no such samples file: $SAMPLES" >&2; exit 1; }
+    if [ ! -s "$TIPS" ]; then
+        echo "WARNING: no tips at $TIPS — cannot cross-check $SAMPLES; scanning it unverified" >&2
+    else
+        echo "cross-check: $SAMPLES vs tree tips ($TIPS)"
+        awk -v tips="$TIPS" '
+        BEGIN{
+            while ((getline line < tips) > 0) {
+                n = split(line, a, /[ \t]+/); if (n < 2 || a[1] == "canon") continue
+                tip[a[1] SUBSEP a[2]] = 1; hastips[a[1]] = 1
+            }
+        }
+        /^[ \t]*(#|$)/ { next }
+        {
+            n = split($0, a, /[ \t]+/); if (n < 3) next
+            d = a[1]; tot[d]++
+            if ((d in hastips) && ((d SUBSEP a[3]) in tip)) ok[d]++
+        }
+        END{
+            bad = 0
+            for (d in tot) {
+                if (!(d in hastips)) {
+                    printf("  %-8s %4d samples — donor has no tree tips, cannot cross-check\n", d, tot[d])
+                    continue
+                }
+                printf("  %-8s %4d samples, %4d match this donor tree tips\n", d, tot[d], ok[d]+0)
+                if (ok[d]+0 == 0) { printf("  ^^ ZERO overlap: these are not %s colonies\n", d); bad = 1 }
+            }
+            exit bad
+        }' "$SAMPLES" || {
+            echo "ABORT: a --samples donor shares NO sample names with its tree tips." >&2
+            echo "The file is about a different set than the donor it claims. Fix it before scanning." >&2
+            exit 1
+        }
+    fi
+fi
+
 # stat is not portable: -c%s is GNU (farm), -f%z is BSD (mac). Getting this wrong returns
 # an empty string that becomes 0 — a silent lie in a file we will later trust. Pick once.
 #
