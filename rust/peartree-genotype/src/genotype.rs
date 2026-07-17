@@ -19,6 +19,11 @@ use noodles_core::{Position, Region};
 use noodles_sam::Header;
 use rustc_hash::FxHashSet;
 use std::io::{self, Write};
+use std::time::Instant;
+
+/// Loci between stderr progress heartbeats (and the flush cadence for the streamed,
+/// single-threaded output). Small enough that a hang localises to a narrow window.
+const HEARTBEAT_EVERY: usize = 1000;
 
 /// on-disk header + row format, identical to src/genotype.py (OUTPUT_HEADER / format_row).
 pub const OUTPUT_HEADER: &str =
@@ -54,22 +59,28 @@ fn overlaps(ref_start: i64, ref_end: i64, start0: i64, end0: i64) -> bool {
     ref_start < end0 && ref_end > start0
 }
 
-/// Genotype every insertion in `insertions` against `path`, returning the
-/// formatted output rows in order. Opens its own indexed reader (thread-local).
-/// `reference` is required for CRAM.
-fn process_chunk(
+/// Genotype `insertions` against `path` in order, invoking `emit` for each formatted
+/// output row. Opens its own indexed reader (thread-local); `reference` is required for
+/// CRAM. Emits a stderr heartbeat every `HEARTBEAT_EVERY` loci (and at the end) naming the
+/// last locus reached, so a live `tail -f` of the job's stderr tracks progress and a hang
+/// localises to the <=HEARTBEAT_EVERY loci after the last heartbeat. `tag` labels the
+/// worker in multi-thread runs (empty for the single-threaded stream).
+fn process_chunk_with<F: FnMut(String) -> io::Result<()>>(
     path: &str,
     reference: Option<&str>,
     insertions: &[Insertion],
     cfg: &GenotypingConfig,
-) -> io::Result<Vec<String>> {
+    tag: &str,
+    mut emit: F,
+) -> io::Result<()> {
     let mut src = open_source(path, reference)?;
     // Clone the header once so decode can borrow it while `src` is borrowed mutably
     // by the region queries (the two would otherwise conflict).
     let header = src.header().clone();
+    let total = insertions.len();
+    let t0 = Instant::now();
 
-    let mut rows = Vec::with_capacity(insertions.len());
-    for ins in insertions {
+    for (k, ins) in insertions.iter().enumerate() {
         // Blanket per-locus error handling mirrors the Python worker's try/except:
         // one bad locus becomes an `error` row, never a crash.
         let row = match genotype_one(src.as_mut(), &header, ins, cfg) {
@@ -79,8 +90,28 @@ fn process_chunk(
                 Row { genotype: GT_ERROR, score_gt: 0, score_other: 0, coverage: 0, n_alt: 0, n_ref: 0, n_art: 0 }
             }
         };
-        rows.push(format_row(&ins.name, &row));
+        emit(format_row(&ins.name, &row))?;
+        if (k + 1) % HEARTBEAT_EVERY == 0 || k + 1 == total {
+            eprintln!("  {tag}{}/{} loci, {}s (last {})", k + 1, total, t0.elapsed().as_secs(), ins.name);
+        }
     }
+    Ok(())
+}
+
+/// Collecting wrapper for the multi-thread path: genotype a chunk and return its rows in
+/// contract order.
+fn process_chunk(
+    path: &str,
+    reference: Option<&str>,
+    insertions: &[Insertion],
+    cfg: &GenotypingConfig,
+    tag: &str,
+) -> io::Result<Vec<String>> {
+    let mut rows = Vec::with_capacity(insertions.len());
+    process_chunk_with(path, reference, insertions, cfg, tag, |row| {
+        rows.push(row);
+        Ok(())
+    })?;
     Ok(rows)
 }
 
@@ -196,9 +227,14 @@ fn genotype_one(
 }
 
 /// Genotype `insertions` (already parsed) against one alignment file, writing the
-/// 8-column gzip output to `writer`. Loci are partitioned across `threads` workers
-/// (each with its own indexed reader) and re-assembled in contract order.
-/// `reference` is required for CRAM input.
+/// 8-column gzip output to `writer`. `reference` is required for CRAM input.
+///
+/// Single-threaded (the cluster default): rows are STREAMED to `writer` and flushed on the
+/// heartbeat cadence, so the output file grows during the run — a hung or killed task
+/// leaves a partial, decodable `.txt.gz` whose last row is exactly the last locus done.
+/// Multi-threaded: loci are partitioned across `threads` workers (each with its own indexed
+/// reader) and re-assembled in contract order; that path can only write once all workers
+/// finish, but each still heartbeats its progress to stderr.
 pub fn run<W: Write>(
     insertions: &[Insertion],
     input: &str,
@@ -209,6 +245,24 @@ pub fn run<W: Write>(
 ) -> io::Result<()> {
     let n = insertions.len();
     let threads = threads.max(1).min(n.max(1));
+
+    writer.write_all(OUTPUT_HEADER.as_bytes())?;
+
+    if threads == 1 {
+        let mut done = 0usize;
+        process_chunk_with(input, reference, insertions, cfg, "", |row| {
+            writer.write_all(row.as_bytes())?;
+            done += 1;
+            // A sync-flush of the gzip stream every HEARTBEAT_EVERY rows makes the partial
+            // output on disk decodable up to that point without ending the stream.
+            if done % HEARTBEAT_EVERY == 0 {
+                writer.flush()?;
+            }
+            Ok(())
+        })?;
+        writer.flush()?;
+        return Ok(());
+    }
 
     // contiguous chunks preserve contract order after concatenation.
     let base = n / threads;
@@ -227,19 +281,20 @@ pub fn run<W: Write>(
         for t in 0..threads {
             let (lo, hi) = (bounds[t], bounds[t + 1]);
             let slice = &insertions[lo..hi];
-            handles.push(scope.spawn(move || process_chunk(input, reference, slice, cfg)));
+            let tag = format!("[t{t}] ");
+            handles.push(scope.spawn(move || process_chunk(input, reference, slice, cfg, &tag)));
         }
         for h in handles {
             chunk_rows.push(h.join().expect("genotyping worker thread panicked"));
         }
     });
 
-    writer.write_all(OUTPUT_HEADER.as_bytes())?;
     for chunk in chunk_rows {
         for row in chunk? {
             writer.write_all(row.as_bytes())?;
         }
     }
+    writer.flush()?;
     Ok(())
 }
 
