@@ -1,0 +1,83 @@
+# Donors in scope for the PEAR-TREE sample catalogue.
+#
+# *** GENERATED FILE -- DO NOT EDIT THE DONOR LIST BY HAND. ***
+#   bash cluster/trees/make_donors_txt.sh            # regenerate from donor_table.tsv
+#   bash cluster/trees/make_donors_txt.sh --check    # fail if stale
+# This prose block is cluster/donors.header and IS hand-edited. The list below it is not.
+#
+# WHY GENERATED. Hand-maintained, this file drifted to 97 donors while the tree catalogue
+# reached 151 -- and the 54 it lagged by included the ENTIRE 34-donor liver cohort and both
+# tonsil donors. They were never scanned, so the catalogue reported them as having no BAMs.
+# That is not a finding, it is an unasked question wearing the costume of one. The drift was
+# invisible because both files looked internally consistent. Regenerated 2026-07-17: 150.
+#
+# DERIVED FROM TREE TIP LABELS + the published cohorts, not from filenames or memory.
+#   spar_2ndrev/human/trees.rds                       (92 donors, PD-named)
+#   JAK2_HNRNPA1_paper/.../mpn_trees/PD_MPN_CUT.RDS   (12 MPN donors)
+#   spar_2ndrev/human/all_trees/*.tree                (116 files, study codenames)
+# Rebuild: cluster/trees/master.R + dedup.R.  Tip->donor map: cluster/trees/tips.tsv
+# Clinical detail per donor: cluster/trees/donor_clinical.tsv (paper-derived, and the
+# authority -- the one-line notes below are only a summary of it).
+#
+# SCOPE != USABILITY. Every donor with a tree is listed, including ones already known to be
+# unusable for a phylogeny (PD60243 is bulk-only; the three Fabre donors are targeted bulk,
+# not WGS colonies). Scanning is how their BAM headers CONFIRM that, instead of us trusting a
+# note. Discovery must exclude them; the catalogue scan must not.
+#
+# 150 PD ids here + AX001 = 151 catalogue donors. AX001 is deliberately absent: its colonies
+# are named BMH1_TG001_* with no PD id, so the scan's glob would find nothing and report a
+# clean zero. They come in via `--samples ~/ax001.samples`. Its PD-named samples DO glob and
+# are listed under PD43976 -- the same person (see below).
+#
+# CODENAME = PD ID (verified by identical tip sets; treating a codename as a separate donor
+# double-counts): KX004=PD45534 KX001=PD40521 KX002=PD40667 CB002=PD45517 KX008=PD48402
+# SX001=PD41048 KX003=PD43974 PX001=PD47703 PX002=PD44579 PX003=PD50307 Tree_8pcw=PD43947
+# KX009=PD49236 KX010=PD49237 PX004=PD50308 PX005=PD47537 PX007=PD37580 AX001=PD43976
+#   The second line was established 2026-07-17 from the Mitchell 2025 trees on **Mendeley
+#   10.17632/2fczcd49yj.1** -- each codename tree has a tip set IDENTICAL to the PD-named one.
+#   NB the Zenodo DOI in our notes (10.5281/zenodo.15235476) is the CODE repo: it holds exactly
+#   one donor's tree (PD37580). Mendeley is where the cohort's 44 trees are.
+#   See cluster/trees/mitchell2025/README.md.
+# AX001=BMH1_TG (361 tips, all named BMH1_TG001_*) = **PD43976 -- PROVEN 2026-07-17**
+#   The Mitchell 2025 tree file named `PD43976.tree` (Mendeley 10.17632/2fczcd49yj.1) has tips
+#   named `BMH1_TG001_P31_A11` etc. The tree named for the PD id CONTAINS the codename's
+#   colonies. That is direct evidence, not inference; no BAM check needed.
+#   Corroborating: Mitchell 2025 Supp T1 has PD43976 = "Peripheral blood | 63 | M | Normal -
+#   previously published"; Mitchell 2022 Supp T1 has AX001 = 63/Male; Machado 2022 states
+#   AX001 "was the same person as that enrolled in our earlier study of HSC dynamics".
+#   CONSEQUENCE: AX001 and PD43976 are ONE donor under two naming schemes, in DIFFERENT
+#   projects (BMH1_TG001_* in 2315/2445/2318; PD43976* in 2314/3231/3301/3369/3837). Do not
+#   count them as two donors. ~/ax001.samples should hold the BMH1_TG001_* samples.
+#
+# A TREE IS THE ONLY RELIABLE EVIDENCE OF CLONALITY. The `_lo` naming convention is not:
+# PD45534's colonies are letter-coded (aoj, ww, my2) and have a 922-tip tree.
+#
+# TREE DEPTH IS NOT TISSUE. Median root->tip SNVs = tissue x age x CHEMOTHERAPY. Several
+# high-depth donors here are chemo-exposed blood, not crypts (Mitchell 2025). Do not infer
+# tissue from depth alone.
+#
+# COHORTS
+#  Machado 2022 Nature 608:724     lymphocytes; KX001/2/3, AX001, CB001, TX001/2; GRCh37d5
+#                                  EGAD00001008107. Lymphocytes = EXTRA TISSUE from donors
+#                                  whose HSC trees we already have.
+#  Fabre 2022 Nature 606:335       longitudinal CH (SardiNIA); PD41276/PD34493/PD41305.
+#                                  *** CORRECTED 2026-07-17: this study is TARGETED DEEP
+#                                  SEQUENCING of bulk blood across 5 study phases. It has NO
+#                                  WGS colonies. The old note here said "96 colonies each" --
+#                                  that was WRONG and would have put bulk data into a
+#                                  colony-phylogeny pipeline. Supp Table 2 holds VAF
+#                                  trajectories, not colonies. NCBI build37.
+#  Mitchell 2025 Nat Genet         CHEMOTHERAPY, 23 exposed + 9 controls; build37;
+#                                  EGAD00001015339 (WGS) / EGAD00001015340 (NanoSeq).
+#                                  **TREES: Mendeley 10.17632/2fczcd49yj.1** -- all 44 of them.
+#                                  NOT zenodo 10.5281/zenodo.15235476, which is the CODE repo
+#                                  and holds exactly ONE donor's tree (PD37580). The paper's
+#                                  own wording draws the line: Zenodo/github = "smaller derived
+#                                  datasets"; Mendeley = "the main data needed to reanalyze and
+#                                  reproduce the results". See cluster/trees/mitchell2025/.
+#  Spencer Chapman 2024 Nature 635 transplant, 10 donor-recipient PAIRS = Pair* trees;
+#                                  PD45792-PD45813. Each Pair is TWO people.
+#  Kamizela 2025 Nature 640:982    BCR::ABL1 CML; GRCh38; EGAD00001015353;
+#                                  github nangalialab/CML has the sample manifest + trees.
+
+

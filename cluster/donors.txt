@@ -1,10 +1,33 @@
 # Donors in scope for the PEAR-TREE sample catalogue.
 #
+# *** GENERATED FILE -- DO NOT EDIT THE DONOR LIST BY HAND. ***
+#   bash cluster/trees/make_donors_txt.sh            # regenerate from donor_table.tsv
+#   bash cluster/trees/make_donors_txt.sh --check    # fail if stale
+# This prose block is cluster/donors.header and IS hand-edited. The list below it is not.
+#
+# WHY GENERATED. Hand-maintained, this file drifted to 97 donors while the tree catalogue
+# reached 151 -- and the 54 it lagged by included the ENTIRE 34-donor liver cohort and both
+# tonsil donors. They were never scanned, so the catalogue reported them as having no BAMs.
+# That is not a finding, it is an unasked question wearing the costume of one. The drift was
+# invisible because both files looked internally consistent. Regenerated 2026-07-17: 150.
+#
 # DERIVED FROM TREE TIP LABELS + the published cohorts, not from filenames or memory.
 #   spar_2ndrev/human/trees.rds                       (92 donors, PD-named)
 #   JAK2_HNRNPA1_paper/.../mpn_trees/PD_MPN_CUT.RDS   (12 MPN donors)
 #   spar_2ndrev/human/all_trees/*.tree                (116 files, study codenames)
 # Rebuild: cluster/trees/master.R + dedup.R.  Tip->donor map: cluster/trees/tips.tsv
+# Clinical detail per donor: cluster/trees/donor_clinical.tsv (paper-derived, and the
+# authority -- the one-line notes below are only a summary of it).
+#
+# SCOPE != USABILITY. Every donor with a tree is listed, including ones already known to be
+# unusable for a phylogeny (PD60243 is bulk-only; the three Fabre donors are targeted bulk,
+# not WGS colonies). Scanning is how their BAM headers CONFIRM that, instead of us trusting a
+# note. Discovery must exclude them; the catalogue scan must not.
+#
+# 150 PD ids here + AX001 = 151 catalogue donors. AX001 is deliberately absent: its colonies
+# are named BMH1_TG001_* with no PD id, so the scan's glob would find nothing and report a
+# clean zero. They come in via `--samples ~/ax001.samples`. Its PD-named samples DO glob and
+# are listed under PD43976 -- the same person (see below).
 #
 # CODENAME = PD ID (verified by identical tip sets; treating a codename as a separate donor
 # double-counts): KX004=PD45534 KX001=PD40521 KX002=PD40667 CB002=PD45517 KX008=PD48402
@@ -57,134 +80,187 @@
 #  Kamizela 2025 Nature 640:982    BCR::ABL1 CML; GRCh38; EGAD00001015353;
 #                                  github nangalialab/CML has the sample manifest + trees.
 
-# --- CONFIRMED USABLE: >=6 GRCh38 WGS colonies AND a tree ---
-PD37449   # 10 tips, depth 1636, 10 hg38 WGS
-PD37590   # 44 tips, depth 3358, 44 hg38 WGS
-PD40521   # 407 tips, depth 419, 407 hg38 WGS  # =KX001
-PD40667   # 380 tips, depth 518, 380 hg38 WGS  # =KX002
-PD41048   # 362 tips, depth 708, 360 hg38 WGS  # =SX001
-PD43947   # 277 tips, depth 29, 277 hg38 WGS  # =Tree_8pcw
-PD43974   # 328 tips, depth 1382, 328 hg38 WGS  # =KX003
-# CORRECTED 2026-07-17 from Mitchell 2025 Supp Table 1, read directly (was: "cyclophosphamide
-# +oxaliplatin"). The main text says both PD44579 and PD47537 were "treated with
-# cyclophosphamide and oxaliplatin" -- that sentence is DISTRIBUTIVE, one drug each, and we
-# read it conjunctively. Per-drug cycle counts from the table: PD44579 oxaliplatin=0.
-# R-CVP = rituximab, cyclophosphamide, vincristine, prednisolone. NO PLATINUM.
-PD44579   # 174 tips, depth 1144, 174 hg38 WGS  # =PX002; CHEMO age63 F, follicular lymphoma, R-CVP x6 (cyclophosphamide 6, vincristine 6, oxaliplatin 0), 1.3y since -- AND filters were DEVELOPED here
-PD44887   # 32 tips, depth 7038, 32 hg38 WGS
-PD44890   # 49 tips, depth 22902, 49 hg38 WGS
-PD45517   # 379 tips, depth 47, 379 hg38 WGS  # =CB002
-PD45534   # 922 tips, depth 1200, 922 hg38 WGS  # =KX004
-PD47703   # 259 tips, depth 3519, 259 hg38 WGS  # =PX001; CHEMO age48 Hodgkin, procarbazine/chlorambucil@10 + bendamustine@47 (=PX001)
-PD48402   # 367 tips, depth 1213, 367 hg38 WGS  # =KX008
-PD50307   # 41 tips, depth 1174, 41 hg38 WGS  # =PX003; CHEMO age40 carboplatin+etoposide (=PX003)
 
-# --- CHEMO cohort members not already listed above (Mitchell 2025) ---
-PD37580   # 84 tips (Mendeley). =PX007; CHEMO age43 F, AML + 30y Behcet's; AML induction DA x1
-          # + MEC x1 (daunorubicin 1, cytarabine 2, etoposide 1, mitoxantrone 1) and long-term
-          # chlorambucil (cycles recorded as "NK-Long-term") + mycophenolate FOR BEHCET'S.
-          # [CORRECTED 2026-07-17: was "chlorambucil from childhood" -- the table says the
-          #  chlorambucil is for Behcet's, duration not quantified.]
-PD47537   # CHEMO age61 F, metastatic colon ca; Ox/Cape, Irinotecan/5FU, Ox/5FU; 16 cy (oxaliplatin 11, cyclophosphamide 0); radiotherapy 3y  [CORRECTED 2026-07-17, was "cyclophosphamide+oxaliplatin"]
-PD47699   # 10 tips (Mendeley). CHEMO age79 F, myeloma + metastatic colon ca.
-          # Per-drug cycles: 5FU/capecitabine 3, oxaliplatin 3. **MELPHALAN = 0.**
-          # [CORRECTED 2026-07-17: was "low-dose melphalan" -- the melphalan column is 0.
-          #  CAVEAT, an inconsistency INSIDE the paper: the regimen text reads "Myeloma:VMP",
-          #  and VMP is bortezomib+melphalan+prednisone, yet the melphalan cycle count is 0.
-          #  Do not assume melphalan exposure either way without asking the authors.]
-PD50308   # 41 tips (Mendeley). =PX004; CHEMO age27 F, Hodgkins lymphoma, escalated BEACOPP x6,
-          # 2.2y since. Per-drug: cyclophosphamide 6, procarbazine 6, etoposide 6, bleomycin 6.
-          # **CHLORAMBUCIL = 0.**
-          # [CORRECTED 2026-07-17: was "age29 ... procarbazine+chlorambucil". Age is 27 and the
-          #  chlorambucil column is 0 -- that drug belongs to PD47703's ChlVPP, not this donor.]
-PD60010   # CHEMO bendamustine
 
-# --- BCR::ABL1 CML cohort (Kamizela 2025), GRCh38, colonies per manifest ---
-PD51632   # CML, 101 samples
-PD51633   # CML, 101 samples
-PD51634   # CML, 151 samples
-PD51635   # CML, 129 samples
-PD56961   # CML, 192 samples
-PD57332   # CML, 41 samples
-PD57333   # CML, 80 samples
-PD57334   # CML, 98 samples
-PD57335   # CML, 146 samples
-PD60243   # CML, blast phase. **BULK ONLY -- NO COLONIES.** Granulocytes/MNC/buccal, analysed
-          # by bulk DPClust. Absent from the paper's patients.txt and n=1023 manifest because
-          # it has no colonies to list. Do NOT feed it a colony-phylogeny pipeline.
+# --- Mitchell 2025 NatGenet 10.1038/s41588-025-02234-x  (25 donors) ---
+PD37580   # 84 (Mitchell2025 Mendeley) tips; peripheral blood (HSPC colony); age 43 F; AML + 30y Behcet's; DA x1, MEC x1, long-term chlorambucil + mycophenolate
+PD44579   # 174 tips; peripheral blood (HSPC colony); age 63 F; Follicular lymphoma; R-CVP x6 (cyclophosphamide 6, vincristine 6, OXALIPLATIN 0); 1.3y since
+PD47536   # 5 (Mitchell2025 Mendeley) tips; peripheral blood (HSPC colony); age 67 F; Metastatic colon ca; Ox/FU, Irino/FU, Ox/FU, capecitabine; 53 cy (oxalipl...
+PD47537   # 44 (Mitchell2025 Mendeley) tips; peripheral blood (HSPC colony); age 61 F; Metastatic colon ca; Ox/Cape, Irinotecan/5FU, Ox/5FU; 16 cy (oxaliplatin...
+PD47538   # 10 (Mitchell2025 Mendeley) tips; peripheral blood (HSPC colony); age 61 F; Metastatic colon ca; Irinotecan/5FU; 12 cy (oxaliplatin 0)
+PD47539   # 5 (Mitchell2025 Mendeley) tips; peripheral blood (HSPC colony); age 64 F; Follicular lymphoma; R-CVP x6 (cyclophosphamide 6); 5.8y since
+PD47540   # 5 (Mitchell2025 Mendeley) tips; peripheral blood (HSPC colony); age 57 F; Follicular lymphoma; R-CHOP x6; 2.7y since
+PD47541   # 10 (Mitchell2025 Mendeley) tips; peripheral blood (HSPC colony); age 64 M; Follicular lymphoma; rituximab+bendamustine x5; 0.1y since
+PD47695   # 5 (Mitchell2025 Mendeley) tips; peripheral blood (HSPC colony); age 72 F; Follicular lymphoma transformed to DLBCL; R-CHOP x6; 5.4y since
+PD47696   # 5 (Mitchell2025 Mendeley) tips; peripheral blood (HSPC colony); age 74 M; DLBCL; R-CHOP x5
+PD47697   # 10 (Mitchell2025 Mendeley) tips; peripheral blood (HSPC colony); age 72 F; Colon ca; XELOX then surgery, adjuvant capecitabine; 5 cy; radiotherapy <1y
+PD47698   # 10 (Mitchell2025 Mendeley) tips; peripheral blood (HSPC colony); age 68 M; Colon ca; XELOX then surgery, adjuvant capecitabine; 7 cy; radiotherapy <1y
+PD47699   # 10 (Mitchell2025 Mendeley) tips; peripheral blood (HSPC colony); age 79 F; Myeloma + metastatic colon ca; VMP/lenalidomide + Ox/Cape (dose-reduced)
+PD47700   # 4 (Mitchell2025 Mendeley) tips; peripheral blood (HSPC colony); age 80 M; Metastatic colon ca; FOLFIRI, irinotecan/capecitabine, oxaliplatin/capeci...
+PD47701   # 10 (Mitchell2025 Mendeley) tips; peripheral blood (HSPC colony); age 68 F; Metastatic colon ca; capecitabine, XELOX, irinotecan/5FU; 16 cy; radioth...
+PD47702   # 10 (Mitchell2025 Mendeley) tips; peripheral blood (HSPC colony); age 63 F; Metastatic colon ca; Ox/5FU; 11 cy (oxaliplatin 11)
+PD47703   # 259 tips; peripheral blood (HSPC colony); age 48 and 49 F; Hodgkins @10 (ChlVPP), relapse @47 (BGeV), DLBCL 2019 (R-CHOP @48); radiotherapy 39y; TW...
+PD49236   # 422 tips; bone marrow (HSPC colony); age 63 M; normal (organ donor); unpublished before 2025
+PD49237   # 231 tips; bone marrow (HSPC colony); age 60 F; normal (organ donor); unpublished before 2025
+PD50306   # 9 (Mitchell2025 Mendeley) tips; peripheral blood (HSPC colony); age 3 M; Neuroblastoma; Rapid COJEC, Bu/Mel autograft; 0.4y since
+PD50307   # 41 tips; peripheral blood (HSPC colony); age 40 F; NSCLC; carboplatin+etoposide x6; 0.9y since; radiotherapy <1y
+PD50308   # 41 (Mitchell2025 Mendeley) tips; peripheral blood (HSPC colony); age 27 F; Hodgkins lymphoma; escalated BEACOPP x6; 2.2y since
+PD60009   # 9 (Mitchell2025 Mendeley) tips; peripheral blood (HSPC colony); age 58 M; Marginal zone lymphoma; rituximab+bendamustine x6; 1.7y since
+PD60010   # 10 (Mitchell2025 Mendeley) tips; peripheral blood (HSPC colony); age 77 M; Follicular lymphoma; rituximab+bendamustine x6; 0.3y since
+PD60011   # 9 (Mitchell2025 Mendeley) tips; peripheral blood (HSPC colony); age 76 M; Lymphoplasmacytic lymphoma; rituximab+bendamustine x6; 4.1y since
 
-# --- have a tree, not yet scanned ---
-PD26988
-PD30160
-PD34204
-PD34205
-PD34206
-PD34207
-PD34209
-PD34210
-PD34211
-PD34215
-PD34493
-PD37451
-PD37452
-PD37453
-PD37454
-PD37455
-PD37456
-PD40315
-PD41276
-PD41305
-PD41768
-PD45792
-PD45793
-PD45794
-PD45795
-PD45798
-PD45799
-PD45800
-PD45801
-PD45802
-PD45803
-PD45804
-PD45805
-PD45806
-PD45807
-PD45808
-PD45809
-PD45810
-PD45811
-PD45812
-PD45813
-PD47738
-PD49226
-PD49227
-PD49228
-PD49229
-PD5117
-PD5163
-PD5179
-PD53373
-PD53374
-PD5847
-PD6629
-PD6634
-PD6646
-PD7271
+# --- SpencerChapman 2024 Nature 10.1038/s41586-024-08128-y  (24 donors) ---
+PD45790   # 0 (dropped from paper) tips; peripheral blood (CD34+ HSPC colony (plated, no tree)); recruited then excluded before final analysis; reason not stated
+PD45791   # 0 (dropped from paper) tips; peripheral blood (CD34+ HSPC colony (plated, no tree)); recruited then excluded before final analysis; reason not stated
+PD45792   # 179 (Demographics_table; tree is SHARED with pair partner) tips; peripheral blood (CD34+ HSPC colony); age 74.8 (HSCT at 66) M; healthy sibling don...
+PD45793   # 146 (Demographics_table; tree is SHARED with pair partner) tips; peripheral blood (CD34+ HSPC colony); age 69.9 (HSCT at 61) M; AML; BuCy (MAC); 9y...
+PD45794   # 104 (Demographics_table; tree is SHARED with pair partner) tips; peripheral blood (CD34+ HSPC colony); age 65.5 (HSCT at 36) M; healthy sibling don...
+PD45795   # 194 (Demographics_table; tree is SHARED with pair partner) tips; peripheral blood (CD34+ HSPC colony); age 59.6 (HSCT at 30) M; NHL; Cy-TBI (MAC); ...
+PD45796   # 0 (dropped from paper) tips; peripheral blood (CD34+ HSPC colony (plated, no tree)); recruited then excluded before final analysis; reason not stated
+PD45797   # 0 (dropped from paper) tips; peripheral blood (CD34+ HSPC colony (plated, no tree)); recruited then excluded before final analysis; reason not stated
+PD45798   # 142 (Demographics_table; tree is SHARED with pair partner) tips; peripheral blood (CD34+ HSPC colony); age 64.5 (HSCT at 50) F; healthy sibling don...
+PD45799   # 195 (Demographics_table; tree is SHARED with pair partner) tips; peripheral blood (CD34+ HSPC colony); age 69.0 (HSCT at 54) F; AML; Flu-Bu-ATG (RI...
+PD45800   # 163 (Demographics_table; tree is SHARED with pair partner) tips; peripheral blood (CD34+ HSPC colony); age 34.2 (HSCT at 18) F; healthy sibling don...
+PD45801   # 174 (Demographics_table; tree is SHARED with pair partner) tips; peripheral blood (CD34+ HSPC colony); age 36.3 (HSCT at 21) F; secondary AML; BuCy...
+PD45802   # 155 (Demographics_table; tree is SHARED with pair partner) tips; peripheral blood (CD34+ HSPC colony); age 58.4 (HSCT at 47) M; healthy sibling don...
+PD45803   # 188 (Demographics_table; tree is SHARED with pair partner) tips; peripheral blood (CD34+ HSPC colony); age 69.7 (HSCT at 58) M; AML; Flu-Bu-ATG (RI...
+PD45804   # 66 (Demographics_table; tree is SHARED with pair partner) tips; peripheral blood (CD34+ HSPC colony); age 79.9 (HSCT at 63) F; healthy sibling dono...
+PD45805   # 174 (Demographics_table; tree is SHARED with pair partner) tips; peripheral blood (CD34+ HSPC colony); age 73.0 (HSCT at 56) F; CML; Flu-Bu-ATG (RI...
+PD45806   # 67 (Demographics_table; tree is SHARED with pair partner) tips; peripheral blood (CD34+ HSPC colony); age 65.2 (HSCT at 43) F; healthy sibling dono...
+PD45807   # 125 (Demographics_table; tree is SHARED with pair partner) tips; peripheral blood (CD34+ HSPC colony); age 67.5 (HSCT at 46) F; AML; conditioning u...
+PD45808   # 143 (Demographics_table; tree is SHARED with pair partner) tips; peripheral blood (CD34+ HSPC colony); age 65.8 (HSCT at 35) F; healthy sibling don...
+PD45809   # 109 (Demographics_table; tree is SHARED with pair partner) tips; peripheral blood (CD34+ HSPC colony); age 67.7 (HSCT at 37) F; AML; Cy-TBI (MAC); ...
+PD45810   # 143 (Demographics_table; tree is SHARED with pair partner) tips; peripheral blood (CD34+ HSPC colony); age 51.9 (HSCT at 35) F; healthy sibling don...
+PD45811   # 136 (Demographics_table; tree is SHARED with pair partner) tips; peripheral blood (CD34+ HSPC colony); age 47.3 (HSCT at 30) F; AML; Cy-TBI (MAC); ...
+PD45812   # 119 (Demographics_table; tree is SHARED with pair partner) tips; peripheral blood (CD34+ HSPC colony); age 42.4 (HSCT at 30) F; healthy sibling don...
+PD45813   # 160 (Demographics_table; tree is SHARED with pair partner) tips; peripheral blood (CD34+ HSPC colony); age 35.8 (HSCT at 24) M; AML; Cy-TBI (MAC); ...
 
-# ---- Mitchell 2025 chemo cohort: 12 donors added 2026-07-17 ----
-# Found via the Mendeley trees (10.17632/2fczcd49yj.1). All were in the paper's Supp Table 1
-# but had no tree in our catalogue, so they never reached donor_table.tsv. All peripheral-blood
-# HSPC colonies. NB the tip counts are 4-10: real chemo-exposed donors, but too few colonies to
-# act as phylogenetic truth for MEI calling. Regimens in cluster/trees/donor_clinical.tsv.
-PD47536   # 5 tips;  67F metastatic colon ca; Ox/FU+Irino/FU+capecitabine, 53 cy (oxaliplatin 22)
-PD47538   # 10 tips; 61F metastatic colon ca; Irinotecan/5FU, 12 cy (oxaliplatin 0)
-PD47539   # 5 tips;  64F follicular lymphoma; R-CVP x6; 5.8y since
-PD47695   # 5 tips;  72F follicular lymphoma -> DLBCL; R-CHOP x6; 5.4y since
-PD47696   # 5 tips;  74M DLBCL; R-CHOP x5
-PD47697   # 10 tips; 72F colon ca; XELOX + adjuvant capecitabine, 5 cy; radiotherapy <1y
-PD47698   # 10 tips; 68M colon ca; XELOX + adjuvant capecitabine, 7 cy; radiotherapy <1y
-PD47700   # 4 tips;  80M metastatic colon ca; FOLFIRI + irino/cape + ox/cape, 28 cy
-PD47702   # 10 tips; 63F metastatic colon ca; Ox/5FU, 11 cy (oxaliplatin 11)
-PD60009   # 9 tips;  58M marginal zone lymphoma; rituximab+bendamustine x6; 1.7y since
-PD60010   # 10 tips; 77M follicular lymphoma; rituximab+bendamustine x6; 0.3y since
-PD60011   # 9 tips;  76M lymphoplasmacytic lymphoma; rituximab+bendamustine x6; 4.1y since
+# --- Ng 2021 Nature 10.1038/s41586-021-03974-6  (20 donors) ---
+PD37230   # 24 tips; liver (cirrhotic explant) (LCM microdissection); age 58.3 M; ARLD, no cancer
+PD37231   # 20 tips; liver (cirrhotic explant) (LCM microdissection); age 45.3 M; ARLD, no cancer
+PD37232   # 26 tips; liver (cirrhotic explant) (LCM microdissection); age 40.7 F; ARLD, no cancer
+PD37234   # 30 tips; liver (cirrhotic explant) (LCM microdissection); age 37.9 F; ARLD, no cancer
+PD37237   # 29 tips; liver (cirrhotic explant) (LCM microdissection); age 50.8 M; ARLD, no cancer
+PD37238   # 26 tips; liver (cirrhotic explant) (LCM microdissection); age 46.0 M; NAFLD, no cancer
+PD37239   # 20 tips; liver (cirrhotic explant) (LCM microdissection); age 56.7 F; NAFLD, no cancer
+PD37240   # 26 tips; liver (cirrhotic explant) (LCM microdissection); age 61.2 M; NAFLD, no cancer
+PD37243   # 32 tips; liver (cirrhotic explant) (LCM microdissection); age 28.6 M; NAFLD, no cancer
+PD37245   # 19 tips; liver (cirrhotic explant) (LCM microdissection); age 42.4 M; NAFLD, no cancer
+PD37904   # 32 tips; liver (background to HCC) (LCM microdissection); age 73.7 M; NAFLD; resected HCC
+PD37907   # 35 tips; liver (background to HCC) (LCM microdissection); age 76.1 M; NAFLD; resected HCC
+PD37909   # 31 tips; liver (background to HCC) (LCM microdissection); age 76.2 M; NAFLD; resected HCC
+PD37910   # 26 tips; liver (background to HCC) (LCM microdissection); age 71.3 M; NAFLD; resected HCC
+PD37914   # 25 tips; liver (background to HCC) (LCM microdissection); age 69.7 F; NAFLD; resected HCC
+PD37915   # 24 tips; liver (background to HCC) (LCM microdissection); age 69.2 M; NAFLD; resected HCC
+PD37917   # 21 tips; liver (background to HCC) (LCM microdissection); age 72.0 M; ARLD; resected HCC
+PD37918   # 33 tips; liver (background to HCC) (LCM microdissection); age 66.2 M; NAFLD; resected HCC
+PD48367   # 154 (8 per-region trees: PD48367=24, PD48367b=20, PD48367c=17, PD48367d=15, PD48367e=22, PD48367f=18, PD48367g=21, PD48367h=17) tips; liver (explan...
+PD48372   # 154 (8 per-region trees: PD48372=14, PD48372b=18, PD48372c=23, PD48372d=19, PD48372e=17, PD48372f=19, PD48372g=22, PD48372h=22) tips; liver (explan...
+
+# --- Yoshida 2020 Nature 10.1038/s41586-020-1961-1  (16 donors) ---
+PD26988   # 24 tips; bronchial epithelium (colony); age 81 M; ex-smoker
+PD30160   # 11 tips; bronchial epithelium (colony); age 71 M; ex-smoker; COPD; carcinoma-in-situ
+PD34204   # 60 tips; bronchial epithelium (colony); age 61 M; current smoker
+PD34205   # 49 tips; bronchial epithelium (colony); age 54 M; ex-smoker
+PD34206   # 54 tips; bronchial epithelium (colony); age 76 M; ex-smoker
+PD34207   # 48 tips; bronchial epithelium (colony); age 65 F; current smoker
+PD34209   # 55 tips; bronchial epithelium (colony); age 75 F; never-smoker
+PD34210   # 45 tips; bronchial epithelium (colony); age 68 F; ex-smoker
+PD34211   # 49 tips; bronchial epithelium (colony); age 74 M; current smoker
+PD34215   # 56 tips; bronchial epithelium (colony); age 73 F; never-smoker
+PD37451   # 30 tips; bronchial epithelium (colony); age 80 F; ?
+PD37452   # 36 tips; bronchial epithelium (colony); age 75 F; ?
+PD37453   # 30 tips; bronchial epithelium (colony); age 3y F; never-smoker (child)
+PD37454   # 30 tips; bronchial epithelium (colony); age 59 M; ?
+PD37455   # 27 tips; bronchial epithelium (colony); age 11mo F; never-smoker (infant)
+PD37456   # 28 tips; bronchial epithelium (colony); age 1y F; never-smoker (infant)
+
+# --- Brunner 2019 Nature 10.1038/s41586-019-1670-9  (14 donors) ---
+PD36713   # 32 tips; liver (normal) (LCM microdissection); age 67.2 M; normal; distal to CRC liver met
+PD36714   # 27 tips; liver (normal) (LCM microdissection); age 77.1 M; normal; distal to CRC liver met
+PD36715   # 28 tips; liver (normal) (LCM microdissection); age 64.1 M; normal; distal to CRC liver met
+PD36717   # 29 tips; liver (normal) (LCM microdissection); age 72.9 M; normal; distal to CRC liver met
+PD36718   # 26 tips; liver (normal) (LCM microdissection); age 49.1 M; normal; pre-op portal vein embolisation
+PD37105   # 26 tips; liver (cirrhotic) (LCM microdissection); age 65.4 F; ARLD cirrhosis + HCC
+PD37107   # 13 tips; liver (cirrhotic) (LCM microdissection); age 43.4 M; ARLD cirrhosis + HCC
+PD37110   # 21 tips; liver (cirrhotic) (LCM microdissection); age 65.8 M; ARLD cirrhosis + HCC
+PD37111   # 29 tips; liver (cirrhotic) (LCM microdissection); age 67.4 M; ARLD cirrhosis + HCC
+PD37113   # 28 tips; liver (cirrhotic) (LCM microdissection); age 65.2 M; NAFLD cirrhosis + HCC
+PD37114   # 28 tips; liver (cirrhotic) (LCM microdissection); age 61.5 M; NAFLD cirrhosis + HCC
+PD37115   # 19 tips; liver (cirrhotic) (LCM microdissection); age 64.8 M; NAFLD cirrhosis + HCC
+PD37116   # 22 tips; liver (cirrhotic) (LCM microdissection); age 66.6 M; NAFLD cirrhosis + HCC
+PD37118   # 24 tips; liver (cirrhotic) (LCM microdissection); age 61.1 M; NAFLD cirrhosis + HCC
+
+# --- Williams 2022 Nature 10.1038/s41586-021-04312-6  (12 donors) ---
+PD4781    # 62 tips; peripheral blood (BFU-E colony); age 73(dx) F; PV
+PD5117    # 89 tips; peripheral blood (BFU-E colony); age 64(dx) F; PV
+PD5147    # 67 tips; peripheral blood (BFU-E colony); age 81(dx) F; PV
+PD5163    # 71 tips; peripheral blood (BFU-E colony); age 31(dx) F; PV; portal/splenic vein thrombosis
+PD5179    # 93 tips; peripheral blood (BFU-E colony); age 34(dx) M; PV; Budd-Chiari at dx; PPV-MF at 48
+PD5182    # 161 tips; bone marrow (BFU-E colony); age 32(dx) M; PV
+PD5847    # 99 tips; bone marrow (BFU-E colony); age 44(dx) F; PV; portal vein thrombosis
+PD6629    # 61 tips; peripheral blood (BFU-E colony); age 54(dx) M; ET
+PD6634    # 36 tips; peripheral blood (BFU-E colony); age 26(dx),59.6(sampled) ?; ET; PPM1D Q462* acquired by age ~5.8
+PD6646    # 118 tips; peripheral blood (BFU-E colony); age 76(dx) F; ET
+PD7271    # 89 tips; peripheral blood (BFU-E colony); age 20(dx) F; ET
+PD9478    # 82 tips; peripheral blood (BFU-E colony); age 53(dx) F; PV; PPV-MF at 71
+
+# --- Kamizela 2025 Nature 10.1038/s41586-025-08817-2  (10 donors) ---
+PD51632   # 0 tips; blood/bone marrow (HSPC colony); age 55(dx), 55+59(sampled) M; CML, e13a2
+PD51633   # 0 tips; blood/bone marrow (HSPC colony); age 52 M; CML, e14a2
+PD51634   # 0 tips; blood/bone marrow (HSPC colony); age 50(dx), 50+55 F; CML, e14a2
+PD51635   # 0 tips; blood/bone marrow (HSPC colony); age 61(dx), 61+70 F; CML, e14a2
+PD56961   # 0 tips; blood/bone marrow (HSPC colony); age 36(dx), 36+48 F; CML, e13a2
+PD57332   # 0 tips; blood/bone marrow (HSPC colony); age 81 M; CML, e14a2
+PD57333   # 0 tips; blood/bone marrow (HSPC colony); age 63(dx), 65 M; CML, e13a2
+PD57334   # 0 tips; blood/bone marrow (HSPC colony); age 22(dx), 23 M; CML, e13a2
+PD57335   # 0 tips; blood/bone marrow (HSPC colony); age 45(dx), 46+47 M; CML, e14a2
+PD60243   # 0 tips; granulocytes / MNC / buccal (BULK -- NO COLONIES); age 81 ?; CML, blast phase
+
+# --- Mitchell 2022 Nature 10.1038/s41586-022-04786-y  (9 donors) ---
+PD40315   # 195 tips; cord blood (HSPC colony); age 0 F; normal
+PD40521   # 407 tips; blood (PB 181 + BM 15) + SPLEEN (37, under PD40667) (HSPC + lymphocyte colony); age 29 M; normal (organ donor, trauma); twisted bowel + a...
+PD40667   # 380 tips; blood (20) + bone marrow (10) + SPLEEN (51) (HSPC + lymphocyte colony); age 38 M; Crohn's disease dx aged 28 (main text: IBD treated with...
+PD41048   # 362 tips; peripheral blood (HSPC colony); age 48 M; selenoprotein deficiency (not known to affect HSC dynamics)
+PD43974   # 328 tips; blood (PB 7 + BM 13) + SPLEEN (12) (HSPC + lymphocyte colony); age 81 M; normal (organ donor, trauma/hypoxic brain damage); appendicectom...
+PD45517   # 379 tips; cord blood (HSPC colony); age 0 F; normal
+PD45534   # 922 tips; bone marrow (HSPC colony); age 77-78 F; normal (organ donor, trauma). Age 77 in Summary_cut.csv vs 78 in Supp T1 — sources disagree
+PD47738   # 315 tips; bone marrow (HSPC colony); age 75 M; normal (organ donor, intracranial haemorrhage)
+PD48402   # 367 tips; bone marrow (HSPC colony); age 76 F; normal (organ donor, intracranial haemorrhage); Lyme disease aged 22
+
+# --- NOT FOUND in literature (has tree, no BAM located)  (6 donors) ---
+PD49226   # 345 tips; ? (?); ?
+PD49227   # 424 tips; ? (?); ?
+PD49228   # 487 tips; ? (?); ?
+PD49229   # 723 tips; ? (?); ?
+PD53373   # 536 tips; ? (?); ?
+PD53374   # 298 tips; ? (?); ?
+
+# --- Fabre 2022 Nature PMC9177423  (3 donors) ---
+PD34493   # 93 tips; peripheral blood (BULK targeted (no colonies)); age 66->82 M; CH: SF3B1 K666N, U2AF1
+PD41276   # 85 tips; peripheral blood (BULK targeted (no colonies)); age 62->77 M; CH: SF3B1, CBL, ZRSR2
+PD41305   # 92 tips; peripheral blood (BULK targeted (no colonies)); age 57->71 M; CH: SRSF2 P95H
+
+# --- Lee-Six 2019 Nature 10.1038/s41586-019-1672-7  (3 donors) ---
+PD34200   # 5 tips; colorectal crypt (44) + ileum (5) (LCM crypt); age 54 M; normal
+PD37449   # 10 tips; colorectal crypt (20) + ileum (10) (LCM crypt); age 36 F; normal (transplant donor cohort)
+PD37590   # 44 tips; colorectal crypt (LCM crypt); age 55 F; normal
+
+# --- Machado 2022 Nature 10.1038/s41586-022-05072-7  (3 donors) ---
+PD42473   # 0 tips; tonsil (lymphocyte colony); age 4 ?; normal (tonsillectomy)
+PD42775   # 9 tips; tonsil (lymphocyte colony); age 4 ?; normal (tonsillectomy)
+PD42874   # 0 tips; cord blood (HSPC + lymphocyte colony); age 0 ?; normal; SAME PERSON as PD40315 (both CB001)
+
+# --- Chapman 2021 Nature 10.1038/s41586-021-03548-6  (2 donors) ---
+PD41768   # 234 tips; foetal liver + 2 femurs (18 pcw) + 5 targeted-seq tissues (see note) (HSPC colony); age 18 pcw M; foetal
+PD43947   # 277 tips; foetal liver (8 pcw) + 10 targeted-seq tissues (see note) (HSPC colony); age 8 pcw M; foetal
+
+# --- Robinson 2022 NatCommun PMC9270427  (2 donors) ---
+PD44887   # 32 tips; colon (normal) (LCM microbiopsy); age 56 F; MUTYH-associated polyposis (Y179C/G396D)
+PD44890   # 49 tips; colon (normal) (LCM microbiopsy); age 16 M; MUTYH-associated polyposis
+
+# --- Mitchell 2022 + Machado 2022 Nature 10.1038/s41586-022-05072-7  (1 donors) ---
+PD43976   # 10 (Mitchell2025 Mendeley) tips; peripheral blood (HSPC colony + lymphocyte); age 63 M; normal
+
+# 150 donors. Generated by cluster/trees/make_donors_txt.sh -- DO NOT EDIT BY HAND.
+# Edit cluster/donors.header (prose) or cluster/trees/donor_table.tsv (the list), then re-run.

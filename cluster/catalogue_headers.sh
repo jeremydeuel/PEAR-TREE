@@ -40,11 +40,16 @@ set -uo pipefail
 IDX="${1:?usage: catalogue_headers.sh <1-based chunk index>}"
 OUT=${OUT:-$HOME/catalogue}
 CHUNK=${CHUNK:-500}
-MAN="$OUT/manifest.tsv"
+# We read todo.tsv, NOT manifest.tsv: catalogue_scan.sh has already subtracted the samples
+# whose headers are in done.tsv. Reading the manifest here would re-read everything.
+MAN="$OUT/todo.tsv"
 mkdir -p "$OUT/parts"
 DEST="$OUT/parts/part.$IDX.tsv"
 
-[ -s "$MAN" ] || { echo "no manifest: $MAN (run catalogue_scan.sh)" >&2; exit 1; }
+[ -s "$MAN" ] || { echo "no todo list: $MAN (run catalogue_scan.sh)" >&2; exit 1; }
+# Within ONE array this is still a valid skip — todo.tsv is fixed for the array's lifetime,
+# so part.N means the same rows on a resubmit. Across scans it is NOT valid, which is why
+# catalogue_scan.sh folds parts into done.tsv and deletes them rather than leaving them here.
 if [ -s "$DEST" ]; then echo "[$IDX] part exists, skipping"; exit 0; fi
 
 module load samtools-1.19/python-3.12.0 2>/dev/null || true

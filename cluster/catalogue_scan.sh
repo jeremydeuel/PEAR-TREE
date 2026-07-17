@@ -16,10 +16,11 @@
 # names. Guessing wrong merges unrelated genomes into one clade — which manufactures
 # exactly the cross-donor sharing this cohort exists to measure. Decide it, then write it.
 #
-# Phase 2 (catalogue_headers.sh, an LSF array) reads the headers for the rows found here.
+# Phase 2 (catalogue_headers.sh, an LSF array) reads the headers for the rows found here —
+# but only for the rows in todo.tsv, which this script computes. See "RESUME" below.
 #
 # Env: NST (default /nfs/cancer_ref01/nst_links/live), OUT (default ~/catalogue),
-#      DONORS (default cluster/donors.txt)
+#      DONORS (default cluster/donors.txt), RESCAN=1 to force a full re-read
 set -uo pipefail
 
 cd "$(dirname "$0")/.."
@@ -33,6 +34,24 @@ MAN="$OUT/manifest.tsv"
 
 [ -d "$NST" ] || { echo "no nst_links at $NST" >&2; exit 1; }
 [ -s "$DONORS" ] || { echo "no donor list: $DONORS" >&2; exit 1; }
+
+# REFUSE TO RUN UNDER A LIVE ARRAY.
+#
+# Phase 2 slices its input BY ROW NUMBER (sed -n START,ENDp). Rewriting that input while
+# tasks are still reading it re-points every task that has not started yet: task 7 keeps
+# writing part.7, but part.7 now holds different samples. Nothing errors. The parts still
+# merge. The catalogue is simply wrong, in a way no row count detects, because the row count
+# is right. Wait for the array, or bkill it — the work is resumable now, so killing it costs
+# only the tasks in flight.
+if [ -s "$OUT/jobid" ] && command -v bjobs >/dev/null 2>&1; then
+    JID=$(cat "$OUT/jobid")
+    if bjobs "$JID" 2>/dev/null | grep -qE '\b(RUN|PEND)\b'; then
+        echo "ABORT: catalogue array job $JID is still RUN/PEND." >&2
+        echo "Phase 2 reads its input by row number; rewriting it now silently mis-assigns" >&2
+        echo "headers to the wrong samples. Wait for it, or: bkill $JID" >&2
+        exit 1
+    fi
+fi
 mapfile -t WANT < <(sed 's/#.*//' "$DONORS" | awk 'NF{print $1}')
 [ "${#WANT[@]}" -gt 0 ] || { echo "$DONORS has no donors" >&2; exit 1; }
 echo "scope: ${#WANT[@]} donors from $DONORS${SAMPLES:+ + explicit samples from $SAMPLES}"
@@ -173,5 +192,76 @@ fi
 
 echo "samples: $nsamp   with BAM/CRAM: $nbam"
 echo "manifest: $MAN"
+
+# ---------------------------------------------------------------- RESUME
+#
+# Phase 1 (this script) is stat() only and always re-runs in full — it is cheap, and it is
+# the thing that discovers NEW samples. Phase 2 is the expensive half: ~4 NFS reads per BAM,
+# tens of thousands of them. That is what we skip.
+#
+# THE DONE KEY IS THE ROW'S CONTENT, NOT ITS POSITION: project+sample+donor+bam+bytes.
+#
+# Keying on position (part.N exists -> skip) is what the old `-s "$DEST" && exit 0` did, and
+# it is only safe while the manifest never changes. It changed: donors.txt went 97 -> 150
+# donors, so every row index shifted and every existing part described samples it no longer
+# aligned with. Content-keying is immune to that — and it also re-reads a sample whose BAM
+# was re-released at a different size, or whose donor label we corrected, both of which a
+# position key would happily keep stale forever.
+#
+# UNREADABLE rows are NOT done — a header read that failed is a transient to retry.
+# NO_BAM rows ARE done: "this sample has no BAM" is a finding, and if a BAM later appears
+# the bytes change, so the key changes, so it re-reads anyway.
+DONE="$OUT/done.tsv"
+TODO="$OUT/todo.tsv"
+
+if [ "${RESCAN:-0}" = "1" ]; then
+    echo
+    echo "RESCAN=1: discarding $(( $(wc -l < "$DONE" 2>/dev/null || echo 1) - 1 )) done rows; everything re-reads"
+    rm -f "$DONE"; rm -f "$OUT"/parts/*.tsv 2>/dev/null
+fi
+
+# Fold any completed parts into done.tsv, then clear them: parts are indexed against the
+# todo file we are about to replace, so they cannot survive as parts. Their CONTENT survives.
+mkdir -p "$OUT/parts"
+nharv=$(ls "$OUT"/parts/*.tsv 2>/dev/null | wc -l | tr -d ' ')
+if [ "$nharv" -gt 0 ]; then
+    cat "$OUT"/parts/*.tsv >> "$DONE"
+    rm -f "$OUT"/parts/*.tsv
+    echo
+    echo "harvested $nharv completed part(s) from the previous run into $DONE"
+fi
+
+# dedup done.tsv on the key, keeping the LAST occurrence (a later read supersedes an earlier)
+if [ -s "$DONE" ]; then
+    awk -F'\t' '{ k=$1 SUBSEP $2 SUBSEP $3 SUBSEP $4 SUBSEP $5; if (!(k in seen)) { seen[k]=++n } row[seen[k]]=$0 }
+         END { for (i=1; i<=n; i++) print row[i] }' "$DONE" > "$DONE.tmp" && mv -f "$DONE.tmp" "$DONE"
+fi
+
+awk -F'\t' -v done_f="$DONE" '
+BEGIN {
+    ndone = 0
+    while ((getline line < done_f) > 0) {
+        n = split(line, a, "\t"); if (n < 7) continue
+        if (a[7] == "UNREADABLE") continue          # transient failure: retry it
+        done[a[1] SUBSEP a[2] SUBSEP a[3] SUBSEP a[4] SUBSEP a[5]] = 1; ndone++
+    }
+}
+NR == 1 { print; next }
+{
+    k = $1 SUBSEP $2 SUBSEP $3 SUBSEP $4 SUBSEP $5
+    if (k in done) { skipped++; next }
+    print; todo++
+}
+END {
+    printf("resume: %d already read, %d to read", skipped+0, todo+0) > "/dev/stderr"
+    printf(" (%d done rows loaded)\n", ndone) > "/dev/stderr"
+}' "$MAN" > "$TODO"
+
+TODOROWS=$(( $(wc -l < "$TODO") - 1 ))
+echo "todo:     $TODO  ($TODOROWS samples need header reads)"
 echo
-echo "next: bash cluster/submit_catalogue.sh   # header reads, as a throttled LSF array"
+if [ "$TODOROWS" -le 0 ]; then
+    echo "nothing to read — next: bash cluster/catalogue_merge.sh"
+else
+    echo "next: bash cluster/submit_catalogue.sh   # header reads, as a throttled LSF array"
+fi

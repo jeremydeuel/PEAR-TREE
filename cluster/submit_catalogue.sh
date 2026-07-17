@@ -18,15 +18,17 @@ CHUNK=${CHUNK:-500}
 THROTTLE=${THROTTLE:-20}
 MEM=${MEM:-2000}          # header reads are tiny; this is samtools + bash overhead only
 QUEUE=${QUEUE:-normal}
-MAN="$OUT/manifest.tsv"
+MAN="$OUT/todo.tsv"
 
-[ -s "$MAN" ] || { echo "no manifest: $MAN — run cluster/catalogue_scan.sh first" >&2; exit 1; }
+[ -s "$MAN" ] || { echo "no todo list: $MAN — run cluster/catalogue_scan.sh first" >&2; exit 1; }
 ROWS=$(( $(wc -l < "$MAN") - 1 ))
-[ "$ROWS" -gt 0 ] || { echo "manifest has no rows" >&2; exit 1; }
+[ "$ROWS" -gt 0 ] || { echo "nothing to do — todo.tsv is empty; run cluster/catalogue_merge.sh" >&2; exit 1; }
 N=$(( (ROWS + CHUNK - 1) / CHUNK ))
 mkdir -p logs "$OUT/parts"
 
-echo "  MANIFEST = $MAN  ($ROWS samples)"
+echo "  TODO     = $MAN  ($ROWS samples still needing header reads)"
+DONEROWS=$(wc -l < "$OUT/done.tsv" 2>/dev/null | tr -d ' ') || DONEROWS=0
+echo "  DONE     = ${DONEROWS:-0} samples already read (skipped; see catalogue_scan.sh)"
 echo "  CHUNK    = $CHUNK rows/task  ->  $N tasks"
 echo "  THROTTLE = $THROTTLE concurrent"
 echo "  OUT      = $OUT/parts  ($(ls "$OUT/parts" 2>/dev/null | wc -l | tr -d ' ') parts already present)"
@@ -38,7 +40,13 @@ bsub \
     -o "logs/cat.%I.out" -e "logs/cat.%I.err" \
     -n 1 -q "$QUEUE" "${GROUP_ARG[@]}" \
     -R "select[mem>${MEM}] rusage[mem=${MEM}] span[hosts=1]" -M "${MEM}" \
-    "OUT='$OUT' CHUNK='$CHUNK' bash cluster/catalogue_headers.sh \$LSB_JOBINDEX"
+    "OUT='$OUT' CHUNK='$CHUNK' bash cluster/catalogue_headers.sh \$LSB_JOBINDEX" | tee /dev/stderr \
+    | sed -n 's/^Job <\([0-9]*\)>.*/\1/p' > "$OUT/jobid"
+
+# catalogue_scan.sh reads this to refuse rewriting todo.tsv under a live array — which would
+# re-point tasks at rows they were not submitted for, silently.
+# `|| true` because set -e would take a failing test as the whole script failing
+[ -s "$OUT/jobid" ] && echo "  jobid recorded: $(cat "$OUT/jobid") -> $OUT/jobid" || true
 
 echo
 echo "watch:     bjobs -A"

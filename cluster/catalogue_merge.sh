@@ -5,32 +5,76 @@
 #
 # Refuses to merge if parts are missing: a catalogue with silent holes is worse than no
 # catalogue, because you would query it and believe the answer.
+#
+# COMPLETENESS IS CHECKED PER SAMPLE, NOT PER PART. The catalogue is assembled from two
+# sources — done.tsv (earlier scans) and parts/ (this array) — so "all N parts present" no
+# longer means "all manifest samples covered", and counting rows does not either: done.tsv
+# can hold rows for samples the CURRENT manifest no longer asks for (a donor removed from
+# donors.txt), which inflates the count while real samples are missing. So we ask the only
+# question that matters: is every project+sample in the manifest present in the output?
 set -uo pipefail
 
 OUT=${OUT:-$HOME/catalogue}
-CHUNK=${CHUNK:-500}
 MAN="$OUT/manifest.tsv"
+DONE="$OUT/done.tsv"
 DEST="$OUT/catalogue.tsv"
 
 [ -s "$MAN" ] || { echo "no manifest: $MAN" >&2; exit 1; }
 ROWS=$(( $(wc -l < "$MAN") - 1 ))
-N=$(( (ROWS + CHUNK - 1) / CHUNK ))
 
-missing=()
-for i in $(seq 1 "$N"); do [ -s "$OUT/parts/part.$i.tsv" ] || missing+=("$i"); done
-if [ "${#missing[@]}" -gt 0 ]; then
-    echo "MISSING ${#missing[@]}/$N parts: ${missing[*]:0:20}${missing[20]:+ ...}" >&2
-    echo "re-run just those: for i in ${missing[*]:0:20}; do bash cluster/catalogue_headers.sh \$i; done" >&2
-    echo "(or resubmit the array — completed parts are skipped)" >&2
-    exit 1
-fi
+TMP="$DEST.tmp.$$"
+cat "$DONE" "$OUT"/parts/part.*.tsv 2>/dev/null > "$TMP"
+[ -s "$TMP" ] || { echo "no header rows at all: neither $DONE nor $OUT/parts/*" >&2; rm -f "$TMP"; exit 1; }
 
+# Restrict to the current manifest and report what is missing. Dedup on project+sample,
+# last row wins — a fresh part supersedes an older done.tsv row for the same sample.
 printf 'project\tsample\tdonor\tbam\tbam_bytes\tbai_stale\tassay\tassembly\tasm_name\tref_len\tchr1_md5\tn_seqs\tsort_order\tread_len\tmapped_reads\tunmapped_reads\tmedian_insert\tplatform\tmodel\tcentre\trun_dates\tn_readgroups\tn_libraries\tn_runs\tfirst_run_lane\tdup_tool\tbwa_version\n' > "$DEST"
-cat "$OUT"/parts/part.*.tsv >> "$DEST"
+
+awk -F'\t' -v man="$MAN" -v dest="$DEST" '
+BEGIN {
+    while ((getline line < man) > 0) {
+        n = split(line, a, "\t"); if (n < 3 || a[1] == "project") continue
+        want[a[1] SUBSEP a[2]] = 1; nwant++
+    }
+}
+{
+    k = $1 SUBSEP $2
+    if (!(k in want)) { extra++; next }        # stale: not in the current scope
+    if (!(k in seen)) seen[k] = ++nrow
+    row[seen[k]] = $0
+}
+END {
+    for (i = 1; i <= nrow; i++) print row[i] >> dest
+    nmiss = 0
+    for (k in want) if (!(k in seen)) { nmiss++; if (nmiss <= 20) { split(k, b, SUBSEP); miss = miss "  " b[1] "/" b[2] "\n" } }
+    printf("covered %d/%d manifest samples", nrow+0, nwant+0) > "/dev/stderr"
+    if (extra) printf("; dropped %d row(s) not in the current manifest", extra) > "/dev/stderr"
+    printf("\n") > "/dev/stderr"
+    if (nmiss) {
+        printf("MISSING %d sample(s) — header never read:\n%s", nmiss, miss) > "/dev/stderr"
+        if (nmiss > 20) printf("  ... and %d more\n", nmiss - 20) > "/dev/stderr"
+        printf("re-run: bash cluster/catalogue_scan.sh && bash cluster/submit_catalogue.sh\n") > "/dev/stderr"
+        exit 1
+    }
+}' "$TMP"
+INCOMPLETE=$?
+rm -f "$TMP"
 
 got=$(( $(wc -l < "$DEST") - 1 ))
 echo "catalogue: $DEST  ($got rows of $ROWS manifest samples)"
-[ "$got" -eq "$ROWS" ] || echo "WARNING: row count $got != manifest $ROWS — investigate before trusting queries" >&2
+if [ "$INCOMPLETE" -ne 0 ]; then
+    echo "REFUSING to call this complete — a catalogue with silent holes is worse than none." >&2
+    echo "The file above is written but INCOMPLETE. Do not query it as if it were the cohort." >&2
+    exit 1
+fi
+
+# Fold this array's parts into done.tsv so the next scan skips them, then drop the parts:
+# they are indexed against a todo.tsv that the next scan will replace.
+if ls "$OUT"/parts/part.*.tsv >/dev/null 2>&1; then
+    cat "$OUT"/parts/part.*.tsv >> "$DONE"
+    rm -f "$OUT"/parts/part.*.tsv
+    echo "done.tsv: $(wc -l < "$DONE" | tr -d ' ') samples banked for the next scan"
+fi
 echo
 echo "== assay =="
 awk -F'\t' 'NR>1{c[$7]++} END{for(k in c) printf "  %-28s %6d\n", k, c[k]}' "$DEST" | sort -k2 -rn
