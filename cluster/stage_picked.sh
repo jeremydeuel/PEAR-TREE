@@ -168,7 +168,15 @@ if [ "$MODE" = "--fofn" ]; then
         return 1
     }
 
+    # Emit the pooled fofn AND one per donor. combine_mei.sh's assembly gate checks one BAM
+    # per donor and reads $FOFNDIR/$DONOR.bams.fofn to find it; without these it dies on
+    # "no fofn for PD40521" after the pooled one looked complete. Per-donor fofns are also
+    # the only place the donor->colony map is written down for the caller: combine_insertions
+    # pools all 90 and is deliberately blind to which donor a colony came from, so the
+    # independence has to be held out here (see cluster/combine_mei.sh's header).
     FOFN="$WORK/all.bams.fofn"; TMP="$FOFN.tmp.$$"; : > "$TMP"; miss=0; bad=0
+    DONORS=$(awk -F'\t' '{print $1}' "$WORK/resolved.tsv" | sort -u)
+    for d in $DONORS; do : > "$WORK/$d.bams.fofn.tmp.$$"; done
     while IFS=$'\t' read -r donor role proj sample src; do
         if ! b=$(staged_bam "$proj" "$sample"); then
             echo "  NOT STAGED: $proj/$sample" >&2; miss=$((miss+1)); continue
@@ -182,18 +190,30 @@ if [ "$MODE" = "--fofn" ]; then
             bad=$((bad+1)); continue
         fi
         printf '%s\n' "$b" >> "$TMP"
+        printf '%s\n' "$b" >> "$WORK/$donor.bams.fofn.tmp.$$"
     done < "$WORK/resolved.tsv"
     if [ "$miss" -gt 0 ] || [ "$bad" -gt 0 ]; then
-        rm -f "$TMP" "$FOFN"      # also drop any fofn from an earlier, now-superseded run
+        # Drop the PARTIALS AND any fofn from an earlier, now-superseded run -- pooled and
+        # per-donor alike. A stale per-donor fofn is the more dangerous leftover: the pooled
+        # one is gone so combine refuses to start, but if it did start, the assembly gate
+        # would check a BAM from a cohort that no longer exists and pass.
+        rm -f "$TMP" "$FOFN"
+        for d in $DONORS; do rm -f "$WORK/$d.bams.fofn.tmp.$$" "$WORK/$d.bams.fofn"; done
         echo >&2 "$miss missing, $bad incomplete, of $GOT under $STAGE -- no fofn written."
         echo >&2 "If colonies are STILL STAGING, wait for stageBam.pl to finish and retry --fofn."
         echo >&2 "If MISSING, re-run the stageBam.pl command for the affected project(s)."
         exit 1
     fi
     mv -f "$TMP" "$FOFN"
+    for d in $DONORS; do mv -f "$WORK/$d.bams.fofn.tmp.$$" "$WORK/$d.bams.fofn"; done
     echo
     echo "fofn: $FOFN  ($(wc -l < "$FOFN") BAMs, all on Lustre)"
-    echo "next: PT_ROOT=$PT_ROOT BAMS=$FOFN bash cluster/submit_combine_mei.sh"
+    echo "per donor:"
+    for d in $DONORS; do echo "  $WORK/$d.bams.fofn  ($(wc -l < "$WORK/$d.bams.fofn"))"; done
+    echo
+    echo "next: FOFNDIR=$WORK PATIENTS='$(echo $DONORS | tr '\n' ' ')' \\"
+    echo "        DISCDIR=discovery_grch38_noslip OUTDIR=insertions_grch38 STEM=mei9x10 \\"
+    echo "        bash cluster/submit_combine_mei.sh"
     exit 0
 fi
 
