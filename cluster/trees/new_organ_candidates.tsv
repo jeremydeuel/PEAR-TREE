@@ -1,0 +1,99 @@
+# CANDIDATE DONORS IN ORGANS WE DO NOT YET COVER — built 2026-07-17
+#
+# Source: PD ids extracted from the SUPPLEMENTARY TABLES of papers by Martincorena /
+# Stratton / Cagan / Nangalia (2024-2026), diffed against cluster/trees/donor_table.tsv.
+# Every id below is literally present in a paper's supplement. None are inferred.
+#
+# ONLY WGS DONORS ARE LISTED. Targeted/duplex/exome-only cohorts are excluded because they
+# cannot support insertion discovery — see the EXCLUDED block at the bottom.
+#
+# assay        = what the paper actually ran on this donor
+# n_wgs        = number of WGS samples (from the paper's own QC table)
+# tree         = do we now have a tree?
+# ega          = accession to search on the farm / iRODS
+#
+donor	organ	assay	n_wgs	age	sex	diagnosis	paper	build	ega	tree
+# ---- STOMACH: Coorens 2025 Nature, PMC11981919, 10.1038/s41586-025-08708-6 ----
+# TREES FETCHED to cluster/trees/coorens2025stomach/ (30 Sequoia trees, validated 239 tips).
+PD40293	gastric epithelium	LCM WGS	12	64	M	gastric cancer (normal glands)	Coorens2025	GRCh38	EGAD00001015351	YES
+PD40294	gastric epithelium	LCM WGS	14	85	M	gastric cancer (normal glands)	Coorens2025	GRCh38	EGAD00001015351	YES
+PD40295	gastric epithelium	LCM WGS	6	64	M	gastric cancer (normal glands)	Coorens2025	GRCh38	EGAD00001015351	YES
+PD40296	gastric epithelium	LCM WGS	2	46	F	gastric cancer (normal glands)	Coorens2025	GRCh38	EGAD00001015351	YES
+PD40297	gastric epithelium	LCM WGS	8	24	F	obesity surgery	Coorens2025	GRCh38	EGAD00001015351	YES
+PD41751	gastric epithelium	LCM WGS	3	25	M	autopsy - cardiovascular	Coorens2025	GRCh38	EGAD00001015351	YES
+PD41752	gastric epithelium	LCM WGS	5	55	M	autopsy - cardiovascular	Coorens2025	GRCh38	EGAD00001015351	YES
+PD41753	gastric epithelium	LCM WGS	10	67	M	autopsy - cardiovascular	Coorens2025	GRCh38	EGAD00001015351	YES
+PD41754	gastric epithelium	LCM WGS	4	31	M	autopsy - cardiovascular	Coorens2025	GRCh38	EGAD00001015351	YES
+PD41756	gastric epithelium	LCM WGS	1	54	F	autopsy - traumatic injury	Coorens2025	GRCh38	EGAD00001015351	YES
+PD41757	gastric epithelium	LCM WGS	5	54	M	autopsy - traumatic injury	Coorens2025	GRCh38	EGAD00001015351	YES
+PD41758	gastric epithelium	LCM WGS	4	48	M	autopsy - traumatic injury	Coorens2025	GRCh38	EGAD00001015351	YES
+PD41759	gastric epithelium	LCM WGS	23	59	F	gastric cancer -- HYPERMUTATOR clones (25600 SNV)	Coorens2025	GRCh38	EGAD00001015351	YES
+PD41760	gastric epithelium	LCM WGS	5	71	M	gastric cancer (normal glands)	Coorens2025	GRCh38	EGAD00001015351	YES
+PD41761	gastric epithelium	LCM WGS	4	30	M	gastric cancer (normal glands)	Coorens2025	GRCh38	EGAD00001015351	YES
+PD41762	gastric epithelium	LCM WGS	5	60	F	gastric cancer -- HYPERMUTATOR clones (64203 SNV); tree has 'Ancestral' tip	Coorens2025	GRCh38	EGAD00001015351	YES
+PD41763	gastric epithelium	LCM WGS	10	74	F	gastric cancer (normal glands)	Coorens2025	GRCh38	EGAD00001015351	YES
+PD41764	gastric epithelium	LCM WGS	5	60	M	gastric cancer (normal glands)	Coorens2025	GRCh38	EGAD00001015351	YES
+PD41765	gastric epithelium	LCM WGS	8	69	F	gastric cancer (normal glands)	Coorens2025	GRCh38	EGAD00001015351	YES
+PD41766	gastric epithelium	LCM WGS	10	57	M	gastric cancer (normal glands)	Coorens2025	GRCh38	EGAD00001015351	YES
+PD41767	gastric epithelium	LCM WGS	17	73	M	gastric cancer (normal glands)	Coorens2025	GRCh38	EGAD00001015351	YES
+PD42787	gastric epithelium	LCM WGS	20	75	F	transplant donor	Coorens2025	GRCh38	EGAD00001015351	YES
+PD42788	gastric epithelium	LCM WGS	6	38	M	transplant donor	Coorens2025	GRCh38	EGAD00001015351	YES
+PD42789	gastric epithelium	LCM WGS	16	52	F	gastric cancer (normal glands)	Coorens2025	GRCh38	EGAD00001015351	YES
+PD42790	gastric epithelium	LCM WGS	11	80	M	gastric cancer (normal glands)	Coorens2025	GRCh38	EGAD00001015351	YES
+PD42791	gastric epithelium	LCM WGS	2	40	F	gastric cancer (normal glands)	Coorens2025	GRCh38	EGAD00001015351	YES
+PD42792	gastric epithelium	LCM WGS	5	67	M	gastric cancer (normal glands)	Coorens2025	GRCh38	EGAD00001015351	YES
+PD42793	gastric epithelium	LCM WGS	4	37	M	gastric cancer (normal glands)	Coorens2025	GRCh38	EGAD00001015351	YES
+PD42794	gastric epithelium	LCM WGS	9	53	F	obesity surgery	Coorens2025	GRCh38	EGAD00001015351	YES
+PD45518	gastric epithelium	LCM WGS	4	23	F	transplant donor -- NOT PD45517/CB002	Coorens2025	GRCh38	EGAD00001015351	YES
+# ---- MULTI-ORGAN AUTOPSY (brain-heavy): Oliver 2025 Nat Genet, PMC11906363, 10.1038/s41588-025-02097-2 ----
+# THE BIGGEST PRIZE. 3 NF1 patients autopsied and LCM'd across 26-48 DISTINCT ANATOMICAL SITES each:
+# brain (cortex/cerebellum/pons/thalamus/hippocampus/SVZ/pineal/pituitary/midbrain/medulla),
+# spinal cord, peripheral nerve (sciatic/optic/trigeminal/dorsal root ganglion), adrenal, kidney,
+# liver, spleen, skin, thyroid, bladder, stomach, bowel, heart, muscle, trachea, bronchus.
+# NO TREES PUBLISHED - repo github.com/trwo/nf1_second_hit_normal_tissues has 8 files, none are trees.
+# CAVEAT: NF1 germline patients; a subset of sites are TUMOUR (glioma). Sites are labelled in Supp Table 1.
+# BRAIN IS WHERE SOMATIC L1 RETROTRANSPOSITION IS REPORTED TO BE ACTIVE -- highest-value target for us.
+PD50297	multi-organ (48 sites; brain+viscera)	LCM WGS + bulk WGS	280 LCM + 25 bulk	child	?	NF1 sporadic	Oliver2025	?	EGAD00001015398	NO
+PD51122	multi-organ (32 sites; brain+viscera)	LCM WGS + bulk WGS	389 LCM + 24 bulk	?	?	NF1 germline	Oliver2025	?	EGAD00001015398	NO
+PD51123	multi-organ (26 sites; brain+spine+skin)	LCM WGS + bulk WGS	169 LCM + 22 bulk	?	?	NF1 sporadic	Oliver2025	?	EGAD00001015398	NO
+# ---- INFANT KIDNEY / WILMS: Lee-Six 2025 Nat Commun, PMC12122882, 10.1038/s41467-025-59854-4 ----
+# Newick strings are IN the supplement (MOESM4, sheets fig2 + supp_fig8) and R scripts are at
+# github.com/HLee-Six/infant_Wilms. MOSTLY TUMOUR samples -- limited value as "normal organ".
+# "Sc-organoid" = single-cell-derived organoid WGS (literally single-cell-derived organ material).
+PD49348	kidney (Wilms tumour + normal)	bulk WGS + sc-organoid WGS	4 bulk + 9 sc-organoid	neonate	?	neonatal Wilms, FOXR2-mutant	LeeSix2025	?	EGAD00001009812	newick-in-supp
+PD54846	kidney (Wilms tumour)	bulk WGS + LCM WGS	4 bulk + 23 LCM	neonate	?	neonatal Wilms, FOXR2-mutant	LeeSix2025	?	EGAD00001009812	newick-in-supp
+PD63760	kidney (Wilms tumour + normal)	bulk WGS + NanoSeq	4 bulk	4 months	?	Wilms, FOXR2-mutant	LeeSix2025	?	EGAD00001009812	NO
+PD37585	kidney (Wilms tumour + normal)	bulk WGS + sc-organoid WGS	3 bulk + 10 sc-organoid	6 months	?	Wilms, REST-mutant	LeeSix2025	?	EGAD00001009812	newick-in-supp
+PD52209	kidney (Wilms tumour)	bulk WGS + LCM WGS	2 bulk + 29 LCM	school age	?	Wilms	LeeSix2025	?	EGAD00001009812	newick-in-supp
+PD52230	kidney (Wilms tumour)	bulk WGS + LCM WGS	2 bulk + 30 LCM	school age	?	Wilms	LeeSix2025	?	EGAD00001009812	newick-in-supp
+PD26636	kidney (Wilms)	sc-organoid WGS	organoids	?	?	Wilms	LeeSix2025	?	EGAD00001009812	newick-in-supp
+#
+# ================================ EXCLUDED — DO NOT SEARCH THE FARM FOR THESE ==================
+#
+# THYROID (Nature 2026, PMC13233322, thyroid autoimmunity / Hashimoto + Graves):
+#   PD43850 PD43851 PD56386 PD63118 PD63121 PD63126 PD66707 PD66708 PD66709 PD66710 PD66711
+#   PD66714 PD66715 PD66716 PD66717 PD66718 PD66884
+#   -> 69 Targeted + 17 Exome, ZERO WGS. Verified from Supp Table (MOESM3, sequencing_type col).
+#      Thyroid is an uncovered organ but there is no WGS to call insertions in. Skip.
+#
+# NF1 targeted-only cases (PMC11906363 Supp Tables 16/17): PD61044 PD61045 PD61046 PD61047
+#   PD61049 PD61050 PD61051 PD61052 PD61053  -> `tds` targeted duplex on muscle etc. No WGS.
+#
+# LUNG basal (PMC7617789): the ids PD0223/PD37786/PD5195/PD6333/PD6378/PD7371 that a naive
+#   grep returns ARE NOT REAL. They are fragments inside base64-encoded images in the
+#   supplement. Structured-table-only extraction returns ZERO ids for this paper.
+#   *** ALWAYS extract PD ids from xl/sharedStrings.xml / tsv / csv ONLY. Never grep a PDF,
+#   an HTML, or a whole supplement dir -- base64 blobs manufacture plausible fake PD ids. ***
+#
+# BULK TUMOUR COHORTS (not normal-organ phylogenies; thousands of ids, wrong experiment):
+#   PMC11111402 kidney cancer (962), PMC12221974 colorectal cancer (981),
+#   PMC12611758 population-scale (1232), PMC11985354 head&neck (265).
+#
+# ALREADY OURS — do not re-ingest:
+#   PD37590. The Wilms paper (github + Mendeley filenames) calls an LCM case `PD37590` and
+#   sheet fig2 labels the same tree `PD37950`. Its 16 tips are an EXACT SUBSET of our 44
+#   PD37590 tips, so it is the same donor -- but our PD37590 tree carries 3358 median SNVs,
+#   impossible for an infant (real Wilms cases here: 30-91 subs). PD37590 is our 55F
+#   Lee-Six 2019 COLORECTAL donor, included by the Wilms paper as an adult comparator
+#   (it also uses colorectal PD21928). `PD37950` is a transposition typo. See
+#   [[never-infer-tissue-from-pd-number]].

@@ -1,0 +1,45 @@
+# 40 candidate donors in organs we do not cover — built 2026-07-17
+# Source: cluster/trees/new_organ_candidates.tsv (ids read from paper supplements).
+# Hunt:  DO_IRODS=1 bash cluster/locate_donors.sh $(grep -v '^#' cluster/donors.new_organs.txt | awk '{print $1}')
+#
+# donor   organ                  paper        ega
+PD40293   gastric epithelium     Coorens2025  EGAD00001015351
+PD40294   gastric epithelium     Coorens2025  EGAD00001015351
+PD40295   gastric epithelium     Coorens2025  EGAD00001015351
+PD40296   gastric epithelium     Coorens2025  EGAD00001015351
+PD40297   gastric epithelium     Coorens2025  EGAD00001015351
+PD41751   gastric epithelium     Coorens2025  EGAD00001015351
+PD41752   gastric epithelium     Coorens2025  EGAD00001015351
+PD41753   gastric epithelium     Coorens2025  EGAD00001015351
+PD41754   gastric epithelium     Coorens2025  EGAD00001015351
+PD41756   gastric epithelium     Coorens2025  EGAD00001015351
+PD41757   gastric epithelium     Coorens2025  EGAD00001015351
+PD41758   gastric epithelium     Coorens2025  EGAD00001015351
+PD41759   gastric epithelium     Coorens2025  EGAD00001015351
+PD41760   gastric epithelium     Coorens2025  EGAD00001015351
+PD41761   gastric epithelium     Coorens2025  EGAD00001015351
+PD41762   gastric epithelium     Coorens2025  EGAD00001015351
+PD41763   gastric epithelium     Coorens2025  EGAD00001015351
+PD41764   gastric epithelium     Coorens2025  EGAD00001015351
+PD41765   gastric epithelium     Coorens2025  EGAD00001015351
+PD41766   gastric epithelium     Coorens2025  EGAD00001015351
+PD41767   gastric epithelium     Coorens2025  EGAD00001015351
+PD42787   gastric epithelium     Coorens2025  EGAD00001015351
+PD42788   gastric epithelium     Coorens2025  EGAD00001015351
+PD42789   gastric epithelium     Coorens2025  EGAD00001015351
+PD42790   gastric epithelium     Coorens2025  EGAD00001015351
+PD42791   gastric epithelium     Coorens2025  EGAD00001015351
+PD42792   gastric epithelium     Coorens2025  EGAD00001015351
+PD42793   gastric epithelium     Coorens2025  EGAD00001015351
+PD42794   gastric epithelium     Coorens2025  EGAD00001015351
+PD45518   gastric epithelium     Coorens2025  EGAD00001015351
+PD50297   multi-organ (48 sites; brain+viscera) Oliver2025   EGAD00001015398
+PD51122   multi-organ (32 sites; brain+viscera) Oliver2025   EGAD00001015398
+PD51123   multi-organ (26 sites; brain+spine+skin) Oliver2025   EGAD00001015398
+PD49348   kidney (Wilms tumour + normal) LeeSix2025   EGAD00001009812
+PD54846   kidney (Wilms tumour)  LeeSix2025   EGAD00001009812
+PD63760   kidney (Wilms tumour + normal) LeeSix2025   EGAD00001009812
+PD37585   kidney (Wilms tumour + normal) LeeSix2025   EGAD00001009812
+PD52209   kidney (Wilms tumour)  LeeSix2025   EGAD00001009812
+PD52230   kidney (Wilms tumour)  LeeSix2025   EGAD00001009812
+PD26636   kidney (Wilms)         LeeSix2025   EGAD00001009812
