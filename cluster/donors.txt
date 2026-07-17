@@ -1,0 +1,127 @@
+# Donors in scope for the PEAR-TREE sample catalogue.
+#
+# DERIVED FROM TREE TIP LABELS + the published cohorts, not from filenames or memory.
+#   spar_2ndrev/human/trees.rds                       (92 donors, PD-named)
+#   JAK2_HNRNPA1_paper/.../mpn_trees/PD_MPN_CUT.RDS   (12 MPN donors)
+#   spar_2ndrev/human/all_trees/*.tree                (116 files, study codenames)
+# Rebuild: cluster/trees/master.R + dedup.R.  Tip->donor map: cluster/trees/tips.tsv
+#
+# CODENAME = PD ID (verified by identical tip sets; treating a codename as a separate donor
+# double-counts): KX004=PD45534 KX001=PD40521 KX002=PD40667 CB002=PD45517 KX008=PD48402
+# SX001=PD41048 KX003=PD43974 PX001=PD47703 PX002=PD44579 PX003=PD50307 Tree_8pcw=PD43947
+# AX001=BMH1_TG (361 tips, all named BMH1_TG001_*)
+#
+# A TREE IS THE ONLY RELIABLE EVIDENCE OF CLONALITY. The `_lo` naming convention is not:
+# PD45534's colonies are letter-coded (aoj, ww, my2) and have a 922-tip tree.
+#
+# TREE DEPTH IS NOT TISSUE. Median root->tip SNVs = tissue x age x CHEMOTHERAPY. Several
+# high-depth donors here are chemo-exposed blood, not crypts (Mitchell 2025). Do not infer
+# tissue from depth alone.
+#
+# COHORTS
+#  Machado 2022 Nature 608:724     lymphocytes; KX001/2/3, AX001, CB001, TX001/2; GRCh37d5
+#                                  EGAD00001008107. Lymphocytes = EXTRA TISSUE from donors
+#                                  whose HSC trees we already have.
+#  Fabre 2022 Nature 606:335       longitudinal CH (SardiNIA); PD41276/PD34493/PD41305, 96
+#                                  colonies each; NCBI build37; EGAD00001007682-4.
+#  Mitchell 2025 Nat Genet         CHEMOTHERAPY, 23 exposed + 9 controls; build37;
+#                                  EGAD00001015339 (WGS) / EGAD00001015340 (NanoSeq);
+#                                  zenodo 10.5281/zenodo.15235476.
+#  Spencer Chapman 2024 Nature 635 transplant, 10 donor-recipient PAIRS = Pair* trees;
+#                                  PD45792-PD45813. Each Pair is TWO people.
+#  Kamizela 2025 Nature 640:982    BCR::ABL1 CML; GRCh38; EGAD00001015353;
+#                                  github nangalialab/CML has the sample manifest + trees.
+
+# --- CONFIRMED USABLE: >=6 GRCh38 WGS colonies AND a tree ---
+PD37449   # 10 tips, depth 1636, 10 hg38 WGS
+PD37590   # 44 tips, depth 3358, 44 hg38 WGS
+PD40521   # 407 tips, depth 419, 407 hg38 WGS  # =KX001
+PD40667   # 380 tips, depth 518, 380 hg38 WGS  # =KX002
+PD41048   # 362 tips, depth 708, 360 hg38 WGS  # =SX001
+PD43947   # 277 tips, depth 29, 277 hg38 WGS  # =Tree_8pcw
+PD43974   # 328 tips, depth 1382, 328 hg38 WGS  # =KX003
+PD44579   # 174 tips, depth 1144, 174 hg38 WGS  # =PX002; CHEMO age63 cyclophosphamide+oxaliplatin (=PX002) -- AND filters were DEVELOPED here
+PD44887   # 32 tips, depth 7038, 32 hg38 WGS
+PD44890   # 49 tips, depth 22902, 49 hg38 WGS
+PD45517   # 379 tips, depth 47, 379 hg38 WGS  # =CB002
+PD45534   # 922 tips, depth 1200, 922 hg38 WGS  # =KX004
+PD47703   # 259 tips, depth 3519, 259 hg38 WGS  # =PX001; CHEMO age48 Hodgkin, procarbazine/chlorambucil@10 + bendamustine@47 (=PX001)
+PD48402   # 367 tips, depth 1213, 367 hg38 WGS  # =KX008
+PD50307   # 41 tips, depth 1174, 41 hg38 WGS  # =PX003; CHEMO age40 carboplatin+etoposide (=PX003)
+
+# --- CHEMO cohort members not already listed above (Mitchell 2025) ---
+PD37580   # CHEMO age43 chlorambucil from childhood + AML induction
+PD47537   # CHEMO age61 cyclophosphamide+oxaliplatin
+PD47699   # CHEMO low-dose melphalan
+PD50308   # CHEMO age29 Hodgkin, procarbazine+chlorambucil
+PD60010   # CHEMO bendamustine
+
+# --- BCR::ABL1 CML cohort (Kamizela 2025), GRCh38, colonies per manifest ---
+PD51632   # CML, 101 samples
+PD51633   # CML, 101 samples
+PD51634   # CML, 151 samples
+PD51635   # CML, 129 samples
+PD56961   # CML, 192 samples
+PD57332   # CML, 41 samples
+PD57333   # CML, 80 samples
+PD57334   # CML, 98 samples
+PD57335   # CML, 146 samples
+PD60243   # CML, blast phase (in paper, not in manifest)
+
+# --- have a tree, not yet scanned ---
+PD26988
+PD30160
+PD34204
+PD34205
+PD34206
+PD34207
+PD34209
+PD34210
+PD34211
+PD34215
+PD34493
+PD37451
+PD37452
+PD37453
+PD37454
+PD37455
+PD37456
+PD40315
+PD41276
+PD41305
+PD41768
+PD45792
+PD45793
+PD45794
+PD45795
+PD45798
+PD45799
+PD45800
+PD45801
+PD45802
+PD45803
+PD45804
+PD45805
+PD45806
+PD45807
+PD45808
+PD45809
+PD45810
+PD45811
+PD45812
+PD45813
+PD47738
+PD49226
+PD49227
+PD49228
+PD49229
+PD5117
+PD5163
+PD5179
+PD53373
+PD53374
+PD5847
+PD6629
+PD6634
+PD6646
+PD7271

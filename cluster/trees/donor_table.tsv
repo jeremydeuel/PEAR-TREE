@@ -1,0 +1,163 @@
+donor	alias	build(@SQ)	reference(@PG bwa)	n_bam	tips	assay_DS	readlen	paired	depth_M_med	tissue	BAMs_located
+AX001	BMH1_TG	GRCh38	GRCh38_full+decoy_hla	210	361	WGS	151	PE	629	HSPC+lymphocyte (Machado AX001)	nst_links proj 2315
+PD34200	?	GRCh38	?,GRCh38_full+decoy_hla	60	5	WGS	151	PE	439	?	nst_links proj 2387,2390,3852
+PD34200	?	hs37d5	hs37d5.fa	337	5	TARGETED	75	PE	8	?	nst_links proj 1748
+PD37449	?	GRCh38	?,GRCh38_full+decoy_hla	53	10	WGS	151	PE	437	?	nst_links proj 2390,3852
+PD37449	?	hs37d5	hs37d5.fa	302	10	TARGETED	75	PE	7	?	nst_links proj 1743
+PD37580	?	hs37d5	hs37d5.fa	100	0	WGS	151	PE	253	blood/HSPC chemo	nst_links proj 1805,2919
+PD37590	?	GRCh38	?,GRCh38_full+decoy_hla	64	44	WGS	151	PE	835	?	nst_links proj 2390,3852
+PD40521	KX001	GRCh38	GRCh38_full+decoy_hla	615	407	WGS	151	PE	314	HSPC+lymphocyte (Machado KX001)	nst_links proj 2314,2320
+PD40521	KX001	hs37d5	genome.fa	6	407	WGS	151	PE	288	HSPC+lymphocyte (Machado KX001)	nst_links proj 3638
+PD40667	KX002	GRCh38	GRCh38_full+decoy_hla	493	380	WGS	151	PE	315	HSPC+lymphocyte (Machado KX002)	nst_links proj 2314,2328,2482
+PD40667	KX002	hs37d5	GRCh37d5/genome.fa,hs37d5.fa	4	380	TARGETED,WGS	151	PE	658	HSPC+lymphocyte (Machado KX002)	nst_links proj 2900,3191
+PD41048	SX001	GRCh38	GRCh38_full+decoy_hla	376	362	WGS	151	PE	285	?	nst_links proj 2152,2314,2441
+PD41048	SX001	GRCh37?no-decoy-in-header	GRCh37d5/genome.fa	1	362	WGS	151	PE	1580	?	nst_links proj 3191
+PD41048	SX001	hs37d5	hs37d5.fa	36	362	WGS	151	PE	435	?	nst_links proj 2073
+PD42473	?	GRCh38	GRCh38_full+decoy_hla	40	0	WGS	151	PE	531	?	nst_links proj 2314
+PD42874	?	GRCh38	GRCh38_full+decoy_hla	22	0	WGS	151	PE	542	?	nst_links proj 2314,2317
+PD42874	?	hs37d5	hs37d5.fa	6	0	WGS	151	PE	600	?	nst_links proj 2073
+PD43947	Tree_8pcw	GRCh38	?	298	277	WGS	151	PE	536	embryo 8pcw? INFERRED-from-filename	nst_links proj 2607,2621
+PD43947	Tree_8pcw	hs37d5	hs37d5.fa	362	277	TARGETED,WGS	150,151	PE	9	embryo 8pcw? INFERRED-from-filename	nst_links proj 2149,2243,2244,2447
+PD43947	Tree_8pcw	GRCh37?no-decoy-in-header	hs37d5.fa	253	277	WGS	151	PE	543	embryo 8pcw? INFERRED-from-filename	nst_links proj 2149
+PD43974	KX003	GRCh38	GRCh38_full+decoy_hla	361	328	WGS	151	PE	363	HSPC+lymphocyte (Machado KX003)	nst_links proj 2314,2317,2328,2483
+PD43974	KX003	hs37d5	GRCh37d5/genome.fa,hs37d5.fa	65	328	TARGETED,WGS	151	PE	302	HSPC+lymphocyte (Machado KX003)	nst_links proj 2073,2567,2901,3191
+PD43974	KX003	GRCh37?no-decoy-in-header	hs37d5.fa	3	328	TARGETED	151	PE	578	HSPC+lymphocyte (Machado KX003)	nst_links proj 2761
+PD43976	?	GRCh38	?,GRCh38_full+decoy_hla,genome.fa	256	0	RNA-Seq,WGS	151,90	PE	316	?	nst_links proj 2314,3231,3301,3369,3837
+PD43976	?	GRCh37?no-decoy-in-header	GRCh37d5/genome.fa,hs37d5.fa	194	0	TARGETED,WGS	151	PE	293	?	nst_links proj 2760,2898,3191
+PD43976	?	hs37d5	hs37d5.fa	10	0	WGS	151	PE	606	?	nst_links proj 2898
+PD44579	PX002	GRCh38	GRCh38_full+decoy_hla	192	174	WGS	151	PE	304	blood/HSPC chemo	nst_links proj 2446
+PD44579	PX002	hs37d5	hs37d5.fa	96	174	WGS	151	PE	274	blood/HSPC chemo	nst_links proj 2178
+PD44579	PX002	GRCh37?no-decoy-in-header	hs37d5.fa	94	174	WGS	151	PE	315	blood/HSPC chemo	nst_links proj 2178
+PD44887	?	GRCh38	GRCh38_full+decoy_hla	33	32	WGS	151	PE	808	colonic crypt? UNVERIFIED	nst_links proj 2460
+PD44890	?	GRCh38	GRCh38_full+decoy_hla	50	49	WGS	151	PE	753	colonic crypt? UNVERIFIED	nst_links proj 2460
+PD45517	CB002	GRCh38	GRCh38_full+decoy_hla,genome.fa	497	379	WGS	151	PE	347	cord blood? INFERRED-from-codename	nst_links proj 2449,3230
+PD45517	CB002	hs37d5	genome.fa	6	379	WGS	151	PE	567	cord blood? INFERRED-from-codename	nst_links proj 3638
+PD45534	KX004	GRCh38	GRCh38_full+decoy_hla,genome.fa	945	922	WGS	151	PE	338	?	nst_links proj 2450,3819,3838
+PD45534	KX004	hs37d5	GRCh37d5/genome.fa,hs37d5.fa	572	922	TARGETED,WGS	151	PE	317	?	nst_links proj 2515,2566,2902,3191
+PD45534	KX004	GRCh37?no-decoy-in-header	hs37d5.fa	1	922	WGS	151	PE	315	?	nst_links proj 2515
+PD47537	?	GRCh38	?	46	0	WGS	151	PE	322	blood/HSPC chemo	nst_links proj 2622
+PD47537	?	hs37d5	hs37d5.fa	46	0	WGS	151	PE	319	blood/HSPC chemo	nst_links proj 2278
+PD47540	?	GRCh38	GRCh38_full+decoy_hla	5	0	WGS	151	PE	571	?	nst_links proj 2446
+PD47540	?	hs37d5	hs37d5.fa	5	0	WGS	151	PE	566	?	nst_links proj 2178
+PD47541	?	GRCh38	GRCh38_full+decoy_hla	10	0	WGS	151	PE	509	?	nst_links proj 2446
+PD47541	?	hs37d5	hs37d5.fa	10	0	WGS	151	PE	504	?	nst_links proj 2178
+PD47699	?	GRCh38	?	10	0	WGS	151	PE	568	blood/HSPC chemo	nst_links proj 2622
+PD47699	?	hs37d5	hs37d5.fa	10	0	WGS	151	PE	564	blood/HSPC chemo	nst_links proj 2278
+PD47701	?	GRCh38	?	10	0	WGS	151	PE	552	?	nst_links proj 2622
+PD47701	?	hs37d5	hs37d5.fa	10	0	WGS	151	PE	549	?	nst_links proj 2278
+PD47703	PX001	GRCh38	GRCh38_full+decoy_hla	278	259	WGS	151	PE	344	blood/HSPC chemo	nst_links proj 2505
+PD47703	PX001	GRCh37?no-decoy-in-header	hs37d5.fa	96	259	WGS	151	PE	318	blood/HSPC chemo	nst_links proj 2275
+PD47703	PX001	hs37d5	hs37d5.fa	182	259	WGS	151	PE	365	blood/HSPC chemo	nst_links proj 2275
+PD4781	?	GRCh37?no-decoy-in-header	hs37d5.fa	14	62	TARGETED,WGS	101,151	PE	811	?	nst_links proj 2281,2529
+PD4781	?	hs37d5	GRCh37d5/genome.fa,hs37d5.fa	76	62	TARGETED,WGS,WXS	151,75	PE	341	?	nst_links proj 1805,1859,2108,3089
+PD48402	KX008	GRCh38	GRCh38_full+decoy_hla	371	367	WGS	151	PE	340	?	nst_links proj 2501
+PD49236	KX009	hs37d5	genome.fa,hs37d5.fa	423	422	WGS	151	PE	357	?	nst_links proj 2510,3191
+PD49237	KX010	hs37d5	genome.fa,hs37d5.fa	232	231	WGS	151	PE	373	?	nst_links proj 2523,3191
+PD49237	KX010	GRCh37?no-decoy-in-header	hs37d5.fa	136	231	WGS	151	PE	346	?	nst_links proj 2523
+PD50306	?	GRCh38	?	10	0	WGS	151	PE	642	?	nst_links proj 2622
+PD50306	?	hs37d5	hs37d5.fa	10	0	WGS	151	PE	637	?	nst_links proj 2278
+PD50307	PX003	GRCh38	?	61	41	WGS	151	PE	334	blood/HSPC chemo	nst_links proj 2622
+PD50307	PX003	hs37d5	hs37d5.fa	61	41	WGS	151	PE	331	blood/HSPC chemo	nst_links proj 2278
+PD50308	?	GRCh38	?	49	0	WGS	151	PE	384	blood/HSPC chemo	nst_links proj 2622
+PD50308	?	hs37d5	hs37d5.fa	49	0	WGS	151	PE	381	blood/HSPC chemo	nst_links proj 2278
+PD5147	?	GRCh37?no-decoy-in-header	hs37d5.fa	4	67	TARGETED	101	PE	846	?	nst_links proj 2281
+PD5147	?	hs37d5	hs37d5.fa	91	67	WGS	151	PE	395	?	nst_links proj 1805,2108
+PD5182	?	GRCh38	?,GRCh38_full+decoy_hla	7	161	WGS	151	PE	673	?	nst_links proj 2611,3535
+PD5182	?	GRCh37?no-decoy-in-header	hs37d5.fa	9	161	TARGETED	101	PE	737	?	nst_links proj 2281
+PD5182	?	hs37d5	GRCh37d5/genome.fa,hs37d5.fa	175	161	WGS,WXS	150,151,75	PE	417	?	nst_links proj 1500,1805,1859,2108,2743
+PD9478	?	GRCh37?no-decoy-in-header	hs37d5.fa	15	82	TARGETED	101	PE	733	?	nst_links proj 2281
+PD9478	?	hs37d5	GRCh37d5/genome.fa,hs37d5.fa	92	82	TARGETED,WGS	100,151	PE	428	?	nst_links proj 1661,1805,2108,2642
+PD26988	?	?	?	0	24	?	?	?	?	?	NO — not scanned; has tree
+PD30160	?	?	?	0	11	?	?	?	?	?	NO — not scanned; has tree
+PD34204	?	?	?	0	60	?	?	?	?	?	NO — not scanned; has tree
+PD34205	?	?	?	0	49	?	?	?	?	?	NO — not scanned; has tree
+PD34206	?	?	?	0	54	?	?	?	?	?	NO — not scanned; has tree
+PD34207	?	?	?	0	48	?	?	?	?	?	NO — not scanned; has tree
+PD34209	?	?	?	0	55	?	?	?	?	?	NO — not scanned; has tree
+PD34210	?	?	?	0	45	?	?	?	?	?	NO — not scanned; has tree
+PD34211	?	?	?	0	49	?	?	?	?	?	NO — not scanned; has tree
+PD34215	?	?	?	0	56	?	?	?	?	?	NO — not scanned; has tree
+PD34493	?	NCBI build37 (per paper)	?	0	93	?	?	?	?	blood/HSPC (Fabre SardiNIA)	NO — EGA EGAD00001007682/3/4
+PD36713	PD36713b	?	?	0	32	?	?	?	?	?	NO — not scanned; has tree
+PD36714	PD36714b	?	?	0	27	?	?	?	?	?	NO — not scanned; has tree
+PD36715	PD36715b	?	?	0	28	?	?	?	?	?	NO — not scanned; has tree
+PD36717	PD36717b	?	?	0	29	?	?	?	?	?	NO — not scanned; has tree
+PD36718	PD36718b	?	?	0	26	?	?	?	?	?	NO — not scanned; has tree
+PD37105	PD37105b	?	?	0	26	?	?	?	?	?	NO — not scanned; has tree
+PD37107	PD37107b	?	?	0	13	?	?	?	?	?	NO — not scanned; has tree
+PD37110	PD37110b	?	?	0	21	?	?	?	?	?	NO — not scanned; has tree
+PD37111	PD37111b	?	?	0	29	?	?	?	?	?	NO — not scanned; has tree
+PD37113	PD37113b	?	?	0	28	?	?	?	?	?	NO — not scanned; has tree
+PD37114	PD37114b	?	?	0	28	?	?	?	?	?	NO — not scanned; has tree
+PD37115	PD37115b	?	?	0	19	?	?	?	?	?	NO — not scanned; has tree
+PD37116	PD37116b	?	?	0	22	?	?	?	?	?	NO — not scanned; has tree
+PD37118	PD37118b	?	?	0	24	?	?	?	?	?	NO — not scanned; has tree
+PD37230	PD37230b	?	?	0	24	?	?	?	?	?	NO — not scanned; has tree
+PD37231	PD37231b	?	?	0	20	?	?	?	?	?	NO — not scanned; has tree
+PD37232	PD37232b	?	?	0	26	?	?	?	?	?	NO — not scanned; has tree
+PD37234	PD37234b	?	?	0	30	?	?	?	?	?	NO — not scanned; has tree
+PD37237	PD37237b	?	?	0	29	?	?	?	?	?	NO — not scanned; has tree
+PD37238	PD37238b	?	?	0	26	?	?	?	?	?	NO — not scanned; has tree
+PD37239	PD37239b	?	?	0	20	?	?	?	?	?	NO — not scanned; has tree
+PD37240	PD37240b	?	?	0	26	?	?	?	?	?	NO — not scanned; has tree
+PD37243	PD37243b	?	?	0	32	?	?	?	?	?	NO — not scanned; has tree
+PD37245	PD37245b	?	?	0	19	?	?	?	?	?	NO — not scanned; has tree
+PD37451	?	?	?	0	30	?	?	?	?	?	NO — not scanned; has tree
+PD37452	?	?	?	0	36	?	?	?	?	?	NO — not scanned; has tree
+PD37453	?	?	?	0	30	?	?	?	?	?	NO — not scanned; has tree
+PD37454	?	?	?	0	30	?	?	?	?	?	NO — not scanned; has tree
+PD37455	?	?	?	0	27	?	?	?	?	?	NO — not scanned; has tree
+PD37456	?	?	?	0	28	?	?	?	?	?	NO — not scanned; has tree
+PD37904	PD37904b	?	?	0	32	?	?	?	?	?	NO — not scanned; has tree
+PD37907	PD37907b	?	?	0	35	?	?	?	?	?	NO — not scanned; has tree
+PD37909	PD37909b	?	?	0	31	?	?	?	?	?	NO — not scanned; has tree
+PD37910	PD37910b	?	?	0	26	?	?	?	?	?	NO — not scanned; has tree
+PD37914	PD37914b	?	?	0	25	?	?	?	?	?	NO — not scanned; has tree
+PD37915	PD37915b	?	?	0	24	?	?	?	?	?	NO — not scanned; has tree
+PD37917	PD37917b	?	?	0	21	?	?	?	?	?	NO — not scanned; has tree
+PD37918	PD37918b	?	?	0	33	?	?	?	?	?	NO — not scanned; has tree
+PD40315	CB001	?	?	0	195	?	?	?	?	?	NO — not scanned; has tree
+PD41276	?	NCBI build37 (per paper)	?	0	85	?	?	?	?	blood/HSPC (Fabre SardiNIA)	NO — EGA EGAD00001007682/3/4
+PD41305	?	NCBI build37 (per paper)	?	0	92	?	?	?	?	blood/HSPC (Fabre SardiNIA)	NO — EGA EGAD00001007682/3/4
+PD41768	Tree_18pcw	?	?	0	234	?	?	?	?	?	NO — not scanned; has tree
+PD47738	KX007	?	?	0	315	?	?	?	?	?	NO — not scanned; has tree
+PD48367	PD48367i	?	?	0	24	?	?	?	?	?	NO — not scanned; has tree
+PD48367b	?	?	?	0	20	?	?	?	?	?	NO — not scanned; has tree
+PD48367c	?	?	?	0	17	?	?	?	?	?	NO — not scanned; has tree
+PD48367d	?	?	?	0	15	?	?	?	?	?	NO — not scanned; has tree
+PD48367e	?	?	?	0	22	?	?	?	?	?	NO — not scanned; has tree
+PD48367f	?	?	?	0	18	?	?	?	?	?	NO — not scanned; has tree
+PD48367g	?	?	?	0	21	?	?	?	?	?	NO — not scanned; has tree
+PD48367h	?	?	?	0	17	?	?	?	?	?	NO — not scanned; has tree
+PD48372	PD48372i	?	?	0	14	?	?	?	?	?	NO — not scanned; has tree
+PD48372b	?	?	?	0	18	?	?	?	?	?	NO — not scanned; has tree
+PD48372c	?	?	?	0	23	?	?	?	?	?	NO — not scanned; has tree
+PD48372d	?	?	?	0	19	?	?	?	?	?	NO — not scanned; has tree
+PD48372e	?	?	?	0	17	?	?	?	?	?	NO — not scanned; has tree
+PD48372f	?	?	?	0	19	?	?	?	?	?	NO — not scanned; has tree
+PD48372g	?	?	?	0	22	?	?	?	?	?	NO — not scanned; has tree
+PD48372h	?	?	?	0	22	?	?	?	?	?	NO — not scanned; has tree
+PD49226	BCL009	?	?	0	345	?	?	?	?	?	NO — not scanned; has tree
+PD49227	BCL008	?	?	0	424	?	?	?	?	?	NO — not scanned; has tree
+PD49228	BCL004	?	?	0	487	?	?	?	?	?	NO — not scanned; has tree
+PD49229	BCL002	?	?	0	723	?	?	?	?	?	NO — not scanned; has tree
+PD5117	?	?	?	0	89	?	?	?	?	?	NO — not scanned; has tree
+PD5163	?	?	?	0	71	?	?	?	?	?	NO — not scanned; has tree
+PD51632	?	GRCh38 (per paper)	?	0	0	?	?	?	?	CML blood (colony/bulk_blood/bulk_buccal)	NO — EGA EGAD00001015353
+PD51633	?	GRCh38 (per paper)	?	0	0	?	?	?	?	CML blood (colony/bulk_blood/bulk_buccal)	NO — EGA EGAD00001015353
+PD51634	?	GRCh38 (per paper)	?	0	0	?	?	?	?	CML blood (colony/bulk_blood/bulk_buccal)	NO — EGA EGAD00001015353
+PD51635	?	GRCh38 (per paper)	?	0	0	?	?	?	?	CML blood (colony/bulk_blood/bulk_buccal)	NO — EGA EGAD00001015353
+PD5179	?	?	?	0	93	?	?	?	?	?	NO — not scanned; has tree
+PD53373	BCL003	?	?	0	536	?	?	?	?	?	NO — not scanned; has tree
+PD53374	BCL006	?	?	0	298	?	?	?	?	?	NO — not scanned; has tree
+PD56961	?	GRCh38 (per paper)	?	0	0	?	?	?	?	CML blood (colony/bulk_blood/bulk_buccal)	NO — EGA EGAD00001015353
+PD57332	?	GRCh38 (per paper)	?	0	0	?	?	?	?	CML blood (colony/bulk_blood/bulk_buccal)	NO — EGA EGAD00001015353
+PD57333	?	GRCh38 (per paper)	?	0	0	?	?	?	?	CML blood (colony/bulk_blood/bulk_buccal)	NO — EGA EGAD00001015353
+PD57334	?	GRCh38 (per paper)	?	0	0	?	?	?	?	CML blood (colony/bulk_blood/bulk_buccal)	NO — EGA EGAD00001015353
+PD57335	?	GRCh38 (per paper)	?	0	0	?	?	?	?	CML blood (colony/bulk_blood/bulk_buccal)	NO — EGA EGAD00001015353
+PD5847	?	?	?	0	99	?	?	?	?	?	NO — not scanned; has tree
+PD60243	?	GRCh38 (per paper)	?	0	0	?	?	?	?	CML blast phase	NO — EGA EGAD00001015353
+PD6629	?	?	?	0	61	?	?	?	?	?	NO — not scanned; has tree
+PD6634	?	?	?	0	36	?	?	?	?	?	NO — not scanned; has tree
+PD6646	?	?	?	0	118	?	?	?	?	?	NO — not scanned; has tree
+PD7271	?	?	?	0	89	?	?	?	?	?	NO — not scanned; has tree
