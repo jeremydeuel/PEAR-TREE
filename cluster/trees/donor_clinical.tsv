@@ -255,3 +255,60 @@ PD42775	TX002	tonsil	lymphocyte colony	4	?	normal (tonsillectomy)	9	EGAD00001008
 #   Pair41=PD45812+PD45813
 # Transplant EGA: EGAD00001010872. These 20 people are NOT yet rows in this file -- they need
 # the Spencer Chapman 2024 transplant paper's manifest for tissue/age/sex.
+#
+# ---- Spencer Chapman et al., Nature 635:926-934 (2024), doi 10.1038/s41586-024-08128-y ----
+# PMID 39478227, PMC11602715. Allogeneic HSCT: 10 HLA-MATCHED SIBLING donor-recipient pairs,
+# sampled 9-31 years after transplant. 2,824 colonies.
+#
+# THE MANIFEST IS IN THE REPO, NOT THE SUPPLEMENTS: github mspencerchapman/
+# Clonal_dynamics_of_HSCT, tables/Demographics_table.xlsx (= Extended Data Table 1). All three
+# MOESM supplements are PDFs and contain NO PD ids at all.
+#
+# *** EACH "Pair" TREE IS TWO PEOPLE. *** Donor and recipient share an engrafted clone and are
+# drawn on ONE tree. They are different individuals with different ages and diagnoses. Never
+# treat a Pair as one donor. Rule (from the table's own `Donor or Recipient` column, not from
+# adjacency): LOWER PD id = DONOR, HIGHER = RECIPIENT. Holds for all 10 pairs.
+#
+# *** THE PUBLISHED PAIR NUMBERS ARE NOT THE INTERNAL ONES. *** data/metadata_files/
+# Pair_metadata.csv (cols Pair,Pair_new) gives the renumbering. Our tree FILENAMES use the
+# INTERNAL numbers:
+#   internal -> published:  11->Pair_9  13->Pair_7  21->Pair_5  24->Pair_1  25->Pair_4
+#                           28->Pair_10 31->Pair_6  38->Pair_8  40->Pair_3  41->Pair_2
+#   A LIVE COLLISION: internal Pair 3 (PD45790/91, unpublished) is NOT published Pair_3
+#   (= internal Pair40 = PD45810/11). Reading a paper figure against our filenames will
+#   silently pair the wrong people.
+#
+# SIBLINGS: "recipients will share around half the same germline variants of the donor" --
+# relevant to any germline-subtraction or contamination logic we run on these.
+# NO donor has multiple organs or timepoints: one peripheral-blood draw each. `Stem cell
+# source` (BM/PBSC) describes the GRAFT AT TRANSPLANT, not what was sampled.
+# Tissue for all 20 is identical: peripheral blood CD34+ HSPC colonies.
+# EGA EGAD00001010872.
+PD45792	Pair_9 (int.11) DONOR	peripheral blood	CD34+ HSPC colony	74.8 (HSCT at 66)	M	healthy sibling donor; 9y post-HSCT	179	EGAD00001010872	SpencerChapman 2024 Nature 10.1038/s41586-024-08128-y
+PD45793	Pair_9 (int.11) RECIPIENT	peripheral blood	CD34+ HSPC colony	69.9 (HSCT at 61)	M	AML; BuCy (MAC); 9y post-HSCT	146	EGAD00001010872	SpencerChapman 2024 Nature 10.1038/s41586-024-08128-y
+PD45794	Pair_7 (int.13) DONOR	peripheral blood	CD34+ HSPC colony	65.5 (HSCT at 36)	M	healthy sibling donor; 29y post-HSCT	104	EGAD00001010872	SpencerChapman 2024 Nature 10.1038/s41586-024-08128-y
+PD45795	Pair_7 (int.13) RECIPIENT	peripheral blood	CD34+ HSPC colony	59.6 (HSCT at 30)	M	NHL; Cy-TBI (MAC); 29y post-HSCT	194	EGAD00001010872	SpencerChapman 2024 Nature 10.1038/s41586-024-08128-y
+PD45798	Pair_5 (int.21) DONOR	peripheral blood	CD34+ HSPC colony	64.5 (HSCT at 50)	F	healthy sibling donor; 14y post-HSCT	142	EGAD00001010872	SpencerChapman 2024 Nature 10.1038/s41586-024-08128-y
+PD45799	Pair_5 (int.21) RECIPIENT	peripheral blood	CD34+ HSPC colony	69.0 (HSCT at 54)	F	AML; Flu-Bu-ATG (RIC); 14y post-HSCT; **CISPLATIN for lung carcinoma 3y AFTER HSCT**	195	EGAD00001010872	SpencerChapman 2024 Nature 10.1038/s41586-024-08128-y
+PD45800	Pair_1 (int.24) DONOR	peripheral blood	CD34+ HSPC colony	34.2 (HSCT at 18)	F	healthy sibling donor; 15y post-HSCT	163	EGAD00001010872	SpencerChapman 2024 Nature 10.1038/s41586-024-08128-y
+PD45801	Pair_1 (int.24) RECIPIENT	peripheral blood	CD34+ HSPC colony	36.3 (HSCT at 21)	F	secondary AML; BuCy (MAC); 15y post-HSCT	174	EGAD00001010872	SpencerChapman 2024 Nature 10.1038/s41586-024-08128-y
+PD45802	Pair_4 (int.25) DONOR	peripheral blood	CD34+ HSPC colony	58.4 (HSCT at 47)	M	healthy sibling donor; 11y post-HSCT	155	EGAD00001010872	SpencerChapman 2024 Nature 10.1038/s41586-024-08128-y
+PD45803	Pair_4 (int.25) RECIPIENT	peripheral blood	CD34+ HSPC colony	69.7 (HSCT at 58)	M	AML; Flu-Bu-ATG (RIC); 11y post-HSCT	188	EGAD00001010872	SpencerChapman 2024 Nature 10.1038/s41586-024-08128-y
+PD45804	Pair_10 (int.28) DONOR	peripheral blood	CD34+ HSPC colony	79.9 (HSCT at 63)	F	healthy sibling donor; 16y post-HSCT	66	EGAD00001010872	SpencerChapman 2024 Nature 10.1038/s41586-024-08128-y
+PD45805	Pair_10 (int.28) RECIPIENT	peripheral blood	CD34+ HSPC colony	73.0 (HSCT at 56)	F	CML; Flu-Bu-ATG (RIC); 16y post-HSCT	174	EGAD00001010872	SpencerChapman 2024 Nature 10.1038/s41586-024-08128-y
+PD45806	Pair_6 (int.31) DONOR	peripheral blood	CD34+ HSPC colony	65.2 (HSCT at 43)	F	healthy sibling donor; 21y post-HSCT	67	EGAD00001010872	SpencerChapman 2024 Nature 10.1038/s41586-024-08128-y
+PD45807	Pair_6 (int.31) RECIPIENT	peripheral blood	CD34+ HSPC colony	67.5 (HSCT at 46)	F	AML; conditioning unknown (MAC); 21y post-HSCT; **CISPLATIN for oesophageal cancer AFTER HSCT**	125	EGAD00001010872	SpencerChapman 2024 Nature 10.1038/s41586-024-08128-y
+PD45808	Pair_8 (int.38) DONOR	peripheral blood	CD34+ HSPC colony	65.8 (HSCT at 35)	F	healthy sibling donor; 31y post-HSCT	143	EGAD00001010872	SpencerChapman 2024 Nature 10.1038/s41586-024-08128-y
+PD45809	Pair_8 (int.38) RECIPIENT	peripheral blood	CD34+ HSPC colony	67.7 (HSCT at 37)	F	AML; Cy-TBI (MAC); 31y post-HSCT	109	EGAD00001010872	SpencerChapman 2024 Nature 10.1038/s41586-024-08128-y
+PD45810	Pair_3 (int.40) DONOR	peripheral blood	CD34+ HSPC colony	51.9 (HSCT at 35)	F	healthy sibling donor; 16y post-HSCT	143	EGAD00001010872	SpencerChapman 2024 Nature 10.1038/s41586-024-08128-y
+PD45811	Pair_3 (int.40) RECIPIENT	peripheral blood	CD34+ HSPC colony	47.3 (HSCT at 30)	F	AML; Cy-TBI (MAC); 16y post-HSCT	136	EGAD00001010872	SpencerChapman 2024 Nature 10.1038/s41586-024-08128-y
+PD45812	Pair_2 (int.41) DONOR	peripheral blood	CD34+ HSPC colony	42.4 (HSCT at 30)	F	healthy sibling donor; 12y post-HSCT; SEX-MISMATCHED pair (F->M)	119	EGAD00001010872	SpencerChapman 2024 Nature 10.1038/s41586-024-08128-y
+PD45813	Pair_2 (int.41) RECIPIENT	peripheral blood	CD34+ HSPC colony	35.8 (HSCT at 24)	M	AML; Cy-TBI (MAC); 12y post-HSCT; SEX-MISMATCHED pair (F->M)	160	EGAD00001010872	SpencerChapman 2024 Nature 10.1038/s41586-024-08128-y
+# FOUR RECRUITED-BUT-DROPPED individuals: colonies were picked and plated (288/192 and 288/288
+# wells, BFU-E/CFU-GM/CFU-GEMM) but they have NO tree and NO demographics row. They are in
+# data/metadata_files/sample_level_metadata.tsv, which holds 12 pairs; only 10 were published.
+# The paper does not say why they were dropped.
+PD45790	int.Pair3 DONOR (DROPPED)	peripheral blood	CD34+ HSPC colony (plated, no tree)	?	?	recruited then excluded before final analysis; reason not stated	0	EGAD00001010872	SpencerChapman 2024 Nature 10.1038/s41586-024-08128-y
+PD45791	int.Pair3 RECIPIENT (DROPPED)	peripheral blood	CD34+ HSPC colony (plated, no tree)	?	?	recruited then excluded before final analysis; reason not stated	0	EGAD00001010872	SpencerChapman 2024 Nature 10.1038/s41586-024-08128-y
+PD45796	int.Pair18 DONOR (DROPPED)	peripheral blood	CD34+ HSPC colony (plated, no tree)	?	?	recruited then excluded before final analysis; reason not stated	0	EGAD00001010872	SpencerChapman 2024 Nature 10.1038/s41586-024-08128-y
+PD45797	int.Pair18 RECIPIENT (DROPPED)	peripheral blood	CD34+ HSPC colony (plated, no tree)	?	?	recruited then excluded before final analysis; reason not stated	0	EGAD00001010872	SpencerChapman 2024 Nature 10.1038/s41586-024-08128-y
