@@ -18,3 +18,7 @@ diff-test-fail*.txt
 # patient-derived run reports (keep local)
 PD44579_run_report.md
 *_run_report.md
+PD44579_dead_ends.md
+
+# clade-selection run logs (regenerable via pick_clades.R)
+cluster/trees/picked.log
