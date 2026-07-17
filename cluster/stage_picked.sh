@@ -131,16 +131,49 @@ if [ "$MODE" = "--fofn" ]; then
     # PARTIAL fofn on disk after a failed run -- 89 of 90 lines, looking complete to the next
     # person who runs discovery by hand. That is precisely the silent-short-cohort failure
     # this script exists to prevent, so the fofn must never exist unless it is whole.
-    FOFN="$WORK/all.bams.fofn"; TMP="$FOFN.tmp.$$"; : > "$TMP"; miss=0
+    [ -d "$STAGE" ] || { echo >&2 "staging root does not exist: $STAGE"
+                         echo >&2 "Set STAGE= to your staging area (e.g. ~/scratch126_staging)."; exit 1; }
+
+    # stageBam.pl's OUTPUT LAYOUT, measured 2026-07-17:
+    #   $STAGE/$PROJ/$SAMPLE/mapped_sample/$SAMPLE.sample.dupmarked.bam       <- the real one
+    #   $STAGE/$PROJ/$SAMPLE/mapped_sample/tmpExportData/progress/$SAMPLE...  <- IN-PROGRESS copy
+    # I originally assumed a flat $STAGE/$PROJ/$SAMPLE/$SAMPLE... and reported all 90 colonies
+    # missing while all 90 were staged. Hence: CONSTRUCT the path, never glob/find for it. A
+    # `find -name '*.bam'` matches the tmpExportData/progress/ copy too, and that copy is a
+    # PARTIAL FILE being written -- feeding it to discovery would silently truncate a colony.
+    # Constructing the path cannot wander into progress/; a glob can.
+    staged_bam() {   # $1=proj $2=sample -> echoes the path, or returns 1
+        local p=$1 s=$2 c
+        for c in "$STAGE/$p/$s/mapped_sample/$s.sample.dupmarked.bam" \
+                 "$STAGE/$p/$s/$s.sample.dupmarked.bam"; do
+            case "$c" in *tmpExportData*) continue;; esac
+            [ -s "$c" ] && { printf '%s\n' "$c"; return 0; }
+        done
+        return 1
+    }
+
+    FOFN="$WORK/all.bams.fofn"; TMP="$FOFN.tmp.$$"; : > "$TMP"; miss=0; bad=0
     while IFS=$'\t' read -r donor role proj sample src; do
-        b="$STAGE/$proj/$sample/$sample.sample.dupmarked.bam"
-        if [ -s "$b" ]; then printf '%s\n' "$b" >> "$TMP"
-        else echo "  NOT STAGED: $proj/$sample" >&2; miss=$((miss+1)); fi
+        if ! b=$(staged_bam "$proj" "$sample"); then
+            echo "  NOT STAGED: $proj/$sample" >&2; miss=$((miss+1)); continue
+        fi
+        # A staged BAM can exist and still be mid-copy: stageBam.pl writes under
+        # tmpExportData/progress/ and publishes afterwards, so the presence of a sibling
+        # progress/ copy means this project is still running. quickcheck verifies the BGZF EOF
+        # block -- a truncated BAM fails it. This is a metadata-sized read, not a record scan.
+        if [ -e "$STAGE/$proj/$sample/mapped_sample/tmpExportData/progress/$sample.sample.dupmarked.bam" ]; then
+            echo "  STILL STAGING (progress/ copy present): $proj/$sample" >&2; bad=$((bad+1)); continue
+        fi
+        if command -v samtools >/dev/null 2>&1 && ! samtools quickcheck "$b" 2>/dev/null; then
+            echo "  TRUNCATED/INVALID (quickcheck failed): $b" >&2; bad=$((bad+1)); continue
+        fi
+        printf '%s\n' "$b" >> "$TMP"
     done < "$WORK/resolved.tsv"
-    if [ "$miss" -gt 0 ]; then
+    if [ "$miss" -gt 0 ] || [ "$bad" -gt 0 ]; then
         rm -f "$TMP" "$FOFN"      # also drop any fofn from an earlier, now-superseded run
-        echo >&2 "$miss/$GOT colonies missing from $STAGE -- no fofn written."
-        echo >&2 "Re-run the stageBam.pl command for the affected project(s), then retry --fofn."
+        echo >&2 "$miss missing, $bad incomplete, of $GOT under $STAGE -- no fofn written."
+        echo >&2 "If colonies are STILL STAGING, wait for stageBam.pl to finish and retry --fofn."
+        echo >&2 "If MISSING, re-run the stageBam.pl command for the affected project(s)."
         exit 1
     fi
     mv -f "$TMP" "$FOFN"
