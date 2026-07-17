@@ -130,13 +130,13 @@ PD37580	PX007	peripheral blood	HSPC colony	43	F	AML + 30y Behcet's; DA x1, MEC x
 # HSPC colonies. Codename<->PD map is DIRECT, from the Supp Table 3 (SV) `donor`+`sample`
 # columns -- not inferred. Ages may differ by 1 between the 2022 and 2025 papers (rounding).
 PD40315	CB001	cord blood	HSPC colony	0	F	normal	10	EGAD00001007851	Mitchell 2022 Nature 10.1038/s41586-022-04786-y
-PD45517	CB002	cord blood	HSPC colony	0	?	normal	?	EGAD00001007851	Mitchell 2022 Nature 10.1038/s41586-022-04786-y
-PD40521	KX001	bone marrow	HSPC colony	29	M	normal	41	EGAD00001007851	Mitchell 2022 Nature 10.1038/s41586-022-04786-y
-PD40667	KX002	bone marrow	HSPC colony	38	M	inflammatory bowel disease on azathioprine	?	EGAD00001007851	Mitchell 2022 Nature 10.1038/s41586-022-04786-y
-PD43974	KX003	bone marrow	HSPC colony	?	?	normal	?	EGAD00001007851	Mitchell 2022 Nature 10.1038/s41586-022-04786-y
-PD45534	KX004	bone marrow	HSPC colony	77-78	F	normal (organ donor, trauma)	200	EGAD00001007851	Mitchell 2022 Nature 10.1038/s41586-022-04786-y
-PD47738	KX007	bone marrow	HSPC colony	75	M	normal (organ donor)	10	EGAD00001007851	Mitchell 2022 Nature 10.1038/s41586-022-04786-y
-PD48402	KX008	bone marrow	HSPC colony	76	F	normal (organ donor, ICH); Lyme disease aged 22	10	EGAD00001007851	Mitchell 2022 Nature 10.1038/s41586-022-04786-y
+PD45517	CB002	cord blood	HSPC colony	0	F	normal	?	EGAD00001007851	Mitchell 2022 Nature 10.1038/s41586-022-04786-y
+PD40521	KX001	blood (PB 181 + BM 15) + SPLEEN (37, under PD40667)	HSPC + lymphocyte colony	29	M	normal (organ donor, trauma); twisted bowel + appendectomy as infant	41	EGAD00001007851	Mitchell 2022 Nature 10.1038/s41586-022-04786-y
+PD40667	KX002	blood (20) + bone marrow (10) + SPLEEN (51)	HSPC + lymphocyte colony	38	M	Crohn's disease dx aged 28 (main text: IBD treated with azathioprine); died intracranial haemorrhage	?	EGAD00001007851	Mitchell 2022 Nature 10.1038/s41586-022-04786-y
+PD43974	KX003	blood (PB 7 + BM 13) + SPLEEN (12)	HSPC + lymphocyte colony	81	M	normal (organ donor, trauma/hypoxic brain damage); appendicectomy 6, Pagets 68, MI 78	?	EGAD00001007851	Mitchell 2022 Nature 10.1038/s41586-022-04786-y
+PD45534	KX004	bone marrow	HSPC colony	77-78	F	normal (organ donor, trauma). Age 77 in Summary_cut.csv vs 78 in Supp T1 — sources disagree	200	EGAD00001007851	Mitchell 2022 Nature 10.1038/s41586-022-04786-y
+PD47738	KX007	bone marrow	HSPC colony	75	M	normal (organ donor, intracranial haemorrhage)	10	EGAD00001007851	Mitchell 2022 Nature 10.1038/s41586-022-04786-y
+PD48402	KX008	bone marrow	HSPC colony	76	F	normal (organ donor, intracranial haemorrhage); Lyme disease aged 22	10	EGAD00001007851	Mitchell 2022 Nature 10.1038/s41586-022-04786-y
 PD41048	SX001	peripheral blood	HSPC colony	48	M	selenoprotein deficiency (not known to affect HSC dynamics)	200	EGAD00001007851	Mitchell 2022 Nature 10.1038/s41586-022-04786-y
 PD43976	AX001	peripheral blood	HSPC colony + lymphocyte	63	M	normal	10 (2025) / tree in 2022	EGAD00001007851	Mitchell 2022 + Machado 2022 Nature 10.1038/s41586-022-05072-7
 # NEW ORGAN DONORS, first published in the 2025 chemo paper as controls:
@@ -144,8 +144,8 @@ PD49236	KX009	bone marrow	HSPC colony	63	M	normal (organ donor); unpublished bef
 PD49237	KX010	bone marrow	HSPC colony	60	F	normal (organ donor); unpublished before 2025	44	EGAD00001015339	Mitchell 2025 NatGenet 10.1038/s41588-025-02234-x
 #
 # ---- Spencer Chapman et al., Nature 595:85-90 (2021), doi 10.1038/s41586-021-03548-6 ----
-PD41768	-	foetal liver + 2 femurs (18 pcw)	HSPC colony	18 pcw	?	foetal	234 analysed / 268 seq	EGAD00001006162	Chapman 2021 Nature 10.1038/s41586-021-03548-6
-PD43947	Tree_8pcw	foetal liver (8 pcw)	HSPC colony	8 pcw	?	foetal	?	EGAD00001006162	Chapman 2021 Nature 10.1038/s41586-021-03548-6
+PD41768	-	foetal liver + 2 femurs (18 pcw) + 5 targeted-seq tissues (see note)	HSPC colony	18 pcw	M	foetal	234 analysed / 268 seq (Femur1 99, Femur2 86, Liver 83)	EGAD00001006162	Chapman 2021 Nature 10.1038/s41586-021-03548-6
+PD43947	Tree_8pcw	foetal liver (8 pcw) + 10 targeted-seq tissues (see note)	HSPC colony	8 pcw	M	foetal	277 (all passed QC)	EGAD00001006162	Chapman 2021 Nature 10.1038/s41586-021-03548-6
 #
 # ---- Kamizela et al., Nature (2025), doi 10.1038/s41586-025-08817-2 -- CML ----
 # HSPC colonies from blood/BM MNC. n_colonies = sequenced -> passed QC.
@@ -179,8 +179,8 @@ PD41305	-	peripheral blood	BULK targeted (no colonies)	57->71	M	CH: SRSF2 P95H	0
 # data repos (nangalialab/CML, mspencerchapman/Clonal_dynamics_of_HSCT, emily-mitchell/
 # chemotherapy, machadoheather/lymphocyte_somatic_mutation). Europe PMC full-text: 0 hits each.
 # These are most likely UNPUBLISHED. Do not invent a tissue for them.
-PD42473	-	?	?	?	?	?	?	?	NOT FOUND in literature (has BAMs, no tree)
-PD42874	-	?	?	?	?	?	?	?	NOT FOUND in literature (has BAMs, no tree)
+PD42473	TX001	tonsil	lymphocyte colony	4	?	normal (tonsillectomy)	39	EGAD00001008107	Machado 2022 Nature 10.1038/s41586-022-05072-7
+PD42874	CB001	cord blood	HSPC + lymphocyte colony	0	?	normal; SAME PERSON as PD40315 (both CB001)	21	EGAD00001008107	Machado 2022 Nature 10.1038/s41586-022-05072-7
 PD49226	-	?	?	?	?	?	?	?	NOT FOUND in literature (has tree, no BAM located)
 PD49227	-	?	?	?	?	?	?	?	NOT FOUND in literature (has tree, no BAM located)
 PD49228	-	?	?	?	?	?	?	?	NOT FOUND in literature (has tree, no BAM located)
@@ -204,3 +204,54 @@ PD47702	-	peripheral blood	HSPC colony	63	F	Metastatic colon ca; Ox/5FU; 11 cy (
 PD60009	-	peripheral blood	HSPC colony	58	M	Marginal zone lymphoma; rituximab+bendamustine x6; 1.7y since	9	EGAD00001015339	Mitchell 2025 NatGenet 10.1038/s41588-025-02234-x
 PD60010	-	peripheral blood	HSPC colony	77	M	Follicular lymphoma; rituximab+bendamustine x6; 0.3y since	10	EGAD00001015339	Mitchell 2025 NatGenet 10.1038/s41588-025-02234-x
 PD60011	-	peripheral blood	HSPC colony	76	M	Lymphoplasmacytic lymphoma; rituximab+bendamustine x6; 4.1y since	9	EGAD00001015339	Mitchell 2025 NatGenet 10.1038/s41588-025-02234-x
+#
+# ---- Machado et al., Nature 608:724 (2022), doi 10.1038/s41586-022-05072-7 ----
+# Lymphocyte colonies. THIS COHORT IS THE ONLY MULTI-ORGAN ONE WE HAVE.
+# Source: github machadoheather/lymphocyte_somatic_mutation,
+#   data/colonyinfo_AX001_KX001_KX002_KX003_TX001_TX002_CB001.txt (cols: colony, Donor,
+#   CellType, Tissue, Age, Project). Read 2026-07-17.
+# SPLEEN colonies exist for KX001/KX002/KX003 -- a genuinely different organ from blood.
+# TONSIL is a whole organ we did not know we had (TX001/TX002, both age 4).
+#
+# *** UNRESOLVED INCONSISTENCY: PD40667 is used for TWO PEOPLE in this file. KX001's 37 spleen
+# colonies are named PD40667u* with Age=29, while ALL of KX002 is PD40667s* with Age=38. Two
+# ages => two individuals => one assignment is wrong. Our KX002=PD40667 map comes from Mitchell
+# 2022's donor+sample columns and matches the age-38 rows, so the KX001-spleen rows are the
+# suspect ones. Do NOT merge or split these donors until this is settled with the authors. ***
+#
+# CB001 has TWO PD ids: PD40315 (proj 2084) and PD42874 (proj 1903/2073), both age 0 cordblood.
+# Same person, same pattern as AX001=PD43976. Do not count as two donors.
+PD42775	TX002	tonsil	lymphocyte colony	4	?	normal (tonsillectomy)	9	EGAD00001008107	Machado 2022 Nature 10.1038/s41586-022-05072-7
+#
+# ---- Spencer Chapman et al., Nature 595:85-90 (2021), doi 10.1038/s41586-021-03548-6 ----
+# THE FOETAL DONORS ARE THE MOST MULTI-ORGAN INDIVIDUALS WE HAVE, by a wide margin. The HSPC
+# colony phylogeny is only half the design: each foetus also has TARGETED SEQUENCING of bulk /
+# LCM microbiopsies from many non-haematopoietic organs, used to place the tree against the
+# body. Those tissues have NO tree of their own, so they never entered donor_table.tsv.
+#   PD43947 (8 pcw)  - 10 tissues, 68 targeted samples + 21 LCM-WGS microbiopsies:
+#       epidermis 6, gut epithelium 12, heart 9, intervertebral disc 4, kidney 10, limb 6,
+#       placental villi mesenchyme 5, peripheral blood 5, trophoblast 10, bulk placental HSPC 1.
+#       Germ-layer split: mesoderm 29, endoderm 12, trophectoderm 10, ectoderm 6, extra-embryonic
+#       mesoderm 5.
+#   PD41768 (18 pcw) - 5 tissues, 47 targeted samples: epidermis 10, hair follicle 4, heart 10,
+#       kidney 13, peripheral nerve 1. Sub-anatomised further (heart RV/LV/LA/IVS/apex/septum;
+#       kidney glomeruli/proximal tubule/distal tubule/collecting duct/urothelium).
+#       CAVEAT: the per-sample CSV lists 19 heart samples and 47 total against Supp Table 3's
+#       10 and 38 -- probably pre- vs post-QC, NOT confirmed. Counts are table-dependent.
+# Both foetuses are MALE ("Both foetuses displayed a normal diploid male karyotype").
+# EGA: EGAD00001006162 (WGS) AND **EGAD00001006118 (targeted)** -- we only had the first.
+# Trees: github mspencerchapman/Phylogeny_of_foetal_haematopoiesis, Data/{8pcw,18pcw}/.
+# NOT FOUND: the Cell_type codes M/C/H in the 18 pcw QC table are never defined anywhere.
+#
+# ---- Spencer Chapman et al., Nature (2025), doi 10.1038/s41586-024-08423-8 ----
+# "Prolonged persistence of mutagenic DNA lesions in somatic cells". 89 donors, 104 trees.
+# **THIS IS THE SOURCE OF OUR TREE CATALOGUE** -- see chapman2025/README.md. It re-analysed
+# every cohort below and its trees are the ones our tip counts match. It adds NO new donors
+# except PX001=PD47703 and PX002=PD44579, which were unpublished at its press time.
+# Its transplant "Pair" trees each contain TWO people:
+#   Pair11=PD45792+PD45793  Pair13=PD45794+PD45795  Pair21=PD45798+PD45799
+#   Pair24=PD45800+PD45801  Pair25=PD45802+PD45803  Pair28=PD45804+PD45805
+#   Pair31=PD45806+PD45807  Pair38=PD45808+PD45809  Pair40=PD45810+PD45811
+#   Pair41=PD45812+PD45813
+# Transplant EGA: EGAD00001010872. These 20 people are NOT yet rows in this file -- they need
+# the Spencer Chapman 2024 transplant paper's manifest for tissue/age/sex.
