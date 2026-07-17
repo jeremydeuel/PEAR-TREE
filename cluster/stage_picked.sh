@@ -134,14 +134,30 @@ if [ "$MODE" = "--fofn" ]; then
     [ -d "$STAGE" ] || { echo >&2 "staging root does not exist: $STAGE"
                          echo >&2 "Set STAGE= to your staging area (e.g. ~/scratch126_staging)."; exit 1; }
 
+    # quickcheck is now the ONLY completeness test, so samtools is REQUIRED, not optional.
+    # This was previously `command -v samtools && ! samtools quickcheck ...`, which silently
+    # skipped verification when samtools was absent and emitted the fofn regardless -- a check
+    # that disappears when its tool is missing is worse than no check, because the green
+    # result reads as "verified".
+    module load samtools-1.19/python-3.12.0 2>/dev/null || true
+    command -v samtools >/dev/null || {
+        echo >&2 "samtools not on PATH -- cannot verify the staged BAMs are complete."
+        echo >&2 "  module load samtools-1.19/python-3.12.0"
+        echo >&2 "Refusing to emit an unverified fofn."; exit 1; }
+
     # stageBam.pl's OUTPUT LAYOUT, measured 2026-07-17:
     #   $STAGE/$PROJ/$SAMPLE/mapped_sample/$SAMPLE.sample.dupmarked.bam       <- the real one
-    #   $STAGE/$PROJ/$SAMPLE/mapped_sample/tmpExportData/progress/$SAMPLE...  <- IN-PROGRESS copy
+    #   $STAGE/$PROJ/$SAMPLE/mapped_sample/tmpExportData/progress/$SAMPLE...  <- ALSO left behind
     # I originally assumed a flat $STAGE/$PROJ/$SAMPLE/$SAMPLE... and reported all 90 colonies
     # missing while all 90 were staged. Hence: CONSTRUCT the path, never glob/find for it. A
-    # `find -name '*.bam'` matches the tmpExportData/progress/ copy too, and that copy is a
-    # PARTIAL FILE being written -- feeding it to discovery would silently truncate a colony.
-    # Constructing the path cannot wander into progress/; a glob can.
+    # `find -name '*.bam'` under the staging root matches the tmpExportData/ copy too, and we
+    # want the published one. Constructing the path cannot wander into progress/; a glob can.
+    #
+    # tmpExportData/progress/ COPIES PERSIST AFTER STAGING COMPLETES -- they are not an
+    # in-flight marker. I briefly treated their presence as "still staging" and that reported
+    # all 90 finished colonies as incomplete. Do not reintroduce that heuristic: use
+    # quickcheck, which tests the actual property we care about (is this BAM whole?) instead
+    # of guessing at it from a sibling path.
     staged_bam() {   # $1=proj $2=sample -> echoes the path, or returns 1
         local p=$1 s=$2 c
         for c in "$STAGE/$p/$s/mapped_sample/$s.sample.dupmarked.bam" \
@@ -157,15 +173,13 @@ if [ "$MODE" = "--fofn" ]; then
         if ! b=$(staged_bam "$proj" "$sample"); then
             echo "  NOT STAGED: $proj/$sample" >&2; miss=$((miss+1)); continue
         fi
-        # A staged BAM can exist and still be mid-copy: stageBam.pl writes under
-        # tmpExportData/progress/ and publishes afterwards, so the presence of a sibling
-        # progress/ copy means this project is still running. quickcheck verifies the BGZF EOF
-        # block -- a truncated BAM fails it. This is a metadata-sized read, not a record scan.
-        if [ -e "$STAGE/$proj/$sample/mapped_sample/tmpExportData/progress/$sample.sample.dupmarked.bam" ]; then
-            echo "  STILL STAGING (progress/ copy present): $proj/$sample" >&2; bad=$((bad+1)); continue
-        fi
-        if command -v samtools >/dev/null 2>&1 && ! samtools quickcheck "$b" 2>/dev/null; then
-            echo "  TRUNCATED/INVALID (quickcheck failed): $b" >&2; bad=$((bad+1)); continue
+        # A staged BAM can exist and still be mid-copy. quickcheck is the direct test: it
+        # verifies the header parses and the BGZF EOF block is present, so a partial or
+        # truncated file fails. Header + EOF only -- a metadata-sized read, not a record scan,
+        # so it stays inside the reads-only-metadata rule.
+        if ! samtools quickcheck "$b" 2>/dev/null; then
+            echo "  INCOMPLETE/INVALID (quickcheck failed -- still copying, or truncated): $b" >&2
+            bad=$((bad+1)); continue
         fi
         printf '%s\n' "$b" >> "$TMP"
     done < "$WORK/resolved.tsv"
