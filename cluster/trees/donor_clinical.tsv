@@ -1,0 +1,189 @@
+# PAPER-DERIVED donor annotation. NOTHING HERE IS MEASURED FROM OUR DATA.
+#
+# Every row was read out of a published paper's text or supplementary table by a literature
+# sweep on 2026-07-17. Measured facts (build, read length, assay, BAM locations, depth) live
+# in donor_table.tsv and are keyed by the same `donor` column. Keep the two apart: when they
+# disagree, the disagreement is the finding.
+#
+# tissue        = the SOURCE tissue named by the paper. For blood studies the sequenced unit is
+#                 a single-cell-derived colony, not bulk tissue -- see `unit`.
+# unit          = what one tip of the phylogeny actually IS. This drives whether our pipeline
+#                 can use the donor at all: bulk != colony != LCM microbiopsy.
+# age/sex       = as published. "?" where the paper does not state it or PDF extraction was
+#                 ambiguous -- an honest ? beats a guess.
+# n_colonies    = the PAPER's count. Our `tips` count in donor_table.tsv is OUR tree's, and the
+#                 two legitimately differ (QC, re-releases). A large gap is worth investigating.
+# evidence      = first author, journal, year, DOI.
+#
+# WHY THIS FILE EXISTS: we twice reasoned "PD number is close to X, so it must be tissue X".
+# It is wrong. PD34200 is colorectal; PD34204 is bronchial epithelium. PD44887/PD44890 sit
+# beside PD44579 (blood) and are colon. NEVER infer tissue from PD-number adjacency.
+#
+donor	alias	tissue	unit	age	sex	diagnosis_exposure	n_colonies_paper	ega	evidence
+#
+# ---- Williams et al., Nature 602:162-168 (2022), doi 10.1038/s41586-021-04312-6 ----
+# MPN patients. The sequenced unit is a single erythroid colony (BFU-E) grown 14d in MethoCult
+# from PB or BM mononuclear cells, used as a surrogate for its parental HSC genome. Age below
+# is AGE AT DIAGNOSIS, not at sampling -- sampling ages are on the tree axes only.
+# NOTE: this paper uses raw PD ids; there are no KX-style codenames.
+PD9478	-	peripheral blood	BFU-E colony	53(dx)	F	PV; PPV-MF at 71	80	EGAD00001007714	Williams 2022 Nature 10.1038/s41586-021-04312-6
+PD5182	-	bone marrow	BFU-E colony	32(dx)	M	PV	160	EGAD00001007714	Williams 2022 Nature 10.1038/s41586-021-04312-6
+PD5179	-	peripheral blood	BFU-E colony	34(dx)	M	PV; Budd-Chiari at dx; PPV-MF at 48	92	EGAD00001007714	Williams 2022 Nature 10.1038/s41586-021-04312-6
+PD5147	-	peripheral blood	BFU-E colony	81(dx)	F	PV	66	EGAD00001007714	Williams 2022 Nature 10.1038/s41586-021-04312-6
+PD5163	-	peripheral blood	BFU-E colony	31(dx)	F	PV; portal/splenic vein thrombosis	70	EGAD00001007714	Williams 2022 Nature 10.1038/s41586-021-04312-6
+PD5117	-	peripheral blood	BFU-E colony	64(dx)	F	PV	88	EGAD00001007714	Williams 2022 Nature 10.1038/s41586-021-04312-6
+PD4781	-	peripheral blood	BFU-E colony	73(dx)	F	PV	61	EGAD00001007714	Williams 2022 Nature 10.1038/s41586-021-04312-6
+PD6646	-	peripheral blood	BFU-E colony	76(dx)	F	ET	117	EGAD00001007714	Williams 2022 Nature 10.1038/s41586-021-04312-6
+PD6629	-	peripheral blood	BFU-E colony	54(dx)	M	ET	59	EGAD00001007714	Williams 2022 Nature 10.1038/s41586-021-04312-6
+PD5847	-	bone marrow	BFU-E colony	44(dx)	F	PV; portal vein thrombosis	96	EGAD00001007714	Williams 2022 Nature 10.1038/s41586-021-04312-6
+PD7271	-	peripheral blood	BFU-E colony	20(dx)	F	ET	88	EGAD00001007714	Williams 2022 Nature 10.1038/s41586-021-04312-6
+PD6634	-	peripheral blood	BFU-E colony	26(dx),59.6(sampled)	?	ET; PPM1D Q462* acquired by age ~5.8	36	EGAD00001007714	Williams 2022 Nature 10.1038/s41586-021-04312-6
+#
+# ---- Yoshida et al., Nature 578:266-272 (2020), doi 10.1038/s41586-020-1961-1 ----
+# Bronchial epithelium. Supp Table 1 "Characteristics of subjects". n_colonies = ANALYSED.
+# The three infants (PD37453/55/56) are a real age range, not a typo.
+PD26988	-	bronchial epithelium	colony	81	M	ex-smoker	24	EGAD00001005193	Yoshida 2020 Nature 10.1038/s41586-020-1961-1
+PD30160	-	bronchial epithelium	colony	71	M	ex-smoker; COPD; carcinoma-in-situ	11	EGAD00001005193	Yoshida 2020 Nature 10.1038/s41586-020-1961-1
+PD34204	-	bronchial epithelium	colony	61	M	current smoker	60	EGAD00001005193	Yoshida 2020 Nature 10.1038/s41586-020-1961-1
+PD34205	-	bronchial epithelium	colony	54	M	ex-smoker	49	EGAD00001005193	Yoshida 2020 Nature 10.1038/s41586-020-1961-1
+PD34206	-	bronchial epithelium	colony	76	M	ex-smoker	54	EGAD00001005193	Yoshida 2020 Nature 10.1038/s41586-020-1961-1
+PD34207	-	bronchial epithelium	colony	65	F	current smoker	48	EGAD00001005193	Yoshida 2020 Nature 10.1038/s41586-020-1961-1
+PD34209	-	bronchial epithelium	colony	75	F	never-smoker	55	EGAD00001005193	Yoshida 2020 Nature 10.1038/s41586-020-1961-1
+PD34210	-	bronchial epithelium	colony	68	F	ex-smoker	45	EGAD00001005193	Yoshida 2020 Nature 10.1038/s41586-020-1961-1
+PD34211	-	bronchial epithelium	colony	74	M	current smoker	49	EGAD00001005193	Yoshida 2020 Nature 10.1038/s41586-020-1961-1
+PD34215	-	bronchial epithelium	colony	73	F	never-smoker	56	EGAD00001005193	Yoshida 2020 Nature 10.1038/s41586-020-1961-1
+PD37451	-	bronchial epithelium	colony	80	F	?	30	EGAD00001005193	Yoshida 2020 Nature 10.1038/s41586-020-1961-1
+PD37452	-	bronchial epithelium	colony	75	F	?	36	EGAD00001005193	Yoshida 2020 Nature 10.1038/s41586-020-1961-1
+PD37453	-	bronchial epithelium	colony	3y	F	never-smoker (child)	30	EGAD00001005193	Yoshida 2020 Nature 10.1038/s41586-020-1961-1
+PD37454	-	bronchial epithelium	colony	59	M	?	30	EGAD00001005193	Yoshida 2020 Nature 10.1038/s41586-020-1961-1
+PD37455	-	bronchial epithelium	colony	11mo	F	never-smoker (infant)	27	EGAD00001005193	Yoshida 2020 Nature 10.1038/s41586-020-1961-1
+PD37456	-	bronchial epithelium	colony	1y	F	never-smoker (infant)	28	EGAD00001005193	Yoshida 2020 Nature 10.1038/s41586-020-1961-1
+#
+# ---- Lee-Six et al., Nature 574:532-537 (2019), doi 10.1038/s41586-019-1672-7 ----
+# Normal intestinal crypts. WARNING: PD34200 and PD37449 have BOTH colonic AND ileal crypts.
+# The tissue depends on the SAMPLE SUFFIX (e.g. PD37449c/d/e = colon, PD37449f = ileum). If a
+# tree tip is per-sample, do not label the whole donor "colon".
+PD34200	-	colorectal crypt (44) + ileum (5)	LCM crypt	54	M	normal	49	EGAD00001004192	Lee-Six 2019 Nature 10.1038/s41586-019-1672-7
+PD37449	ao	colorectal crypt (20) + ileum (10)	LCM crypt	36	F	normal (transplant donor cohort)	30	EGAD00001004192	Lee-Six 2019 Nature 10.1038/s41586-019-1672-7
+PD37590	-	colorectal crypt	LCM crypt	55	F	normal	28	EGAD00001004192	Lee-Six 2019 Nature 10.1038/s41586-019-1672-7
+#
+# ---- Brunner et al., Nature 574:538-542 (2019), doi 10.1038/s41586-019-1670-9 ----
+# Liver hepatocyte microdissections. PD367xx = NORMAL liver, taken distal to a resected
+# colorectal-cancer metastasis. PD371xx = CIRRHOTIC liver with HCC.
+PD36713	-	liver (normal)	LCM microdissection	67.2	M	normal; distal to CRC liver met	30	EGAD00001004578	Brunner 2019 Nature 10.1038/s41586-019-1670-9
+PD36714	-	liver (normal)	LCM microdissection	77.1	M	normal; distal to CRC liver met	35	EGAD00001004578	Brunner 2019 Nature 10.1038/s41586-019-1670-9
+PD36715	-	liver (normal)	LCM microdissection	64.1	M	normal; distal to CRC liver met	26	EGAD00001004578	Brunner 2019 Nature 10.1038/s41586-019-1670-9
+PD36717	-	liver (normal)	LCM microdissection	72.9	M	normal; distal to CRC liver met	42	EGAD00001004578	Brunner 2019 Nature 10.1038/s41586-019-1670-9
+PD36718	-	liver (normal)	LCM microdissection	49.1	M	normal; pre-op portal vein embolisation	32	EGAD00001004578	Brunner 2019 Nature 10.1038/s41586-019-1670-9
+PD37105	-	liver (cirrhotic)	LCM microdissection	65.4	F	ARLD cirrhosis + HCC	31	EGAD00001004578	Brunner 2019 Nature 10.1038/s41586-019-1670-9
+PD37107	-	liver (cirrhotic)	LCM microdissection	43.4	M	ARLD cirrhosis + HCC	41	EGAD00001004578	Brunner 2019 Nature 10.1038/s41586-019-1670-9
+PD37110	-	liver (cirrhotic)	LCM microdissection	65.8	M	ARLD cirrhosis + HCC	22	EGAD00001004578	Brunner 2019 Nature 10.1038/s41586-019-1670-9
+PD37111	-	liver (cirrhotic)	LCM microdissection	67.4	M	ARLD cirrhosis + HCC	39	EGAD00001004578	Brunner 2019 Nature 10.1038/s41586-019-1670-9
+PD37113	-	liver (cirrhotic)	LCM microdissection	65.2	M	NAFLD cirrhosis + HCC	37	EGAD00001004578	Brunner 2019 Nature 10.1038/s41586-019-1670-9
+PD37114	-	liver (cirrhotic)	LCM microdissection	61.5	M	NAFLD cirrhosis + HCC	41	EGAD00001004578	Brunner 2019 Nature 10.1038/s41586-019-1670-9
+PD37115	-	liver (cirrhotic)	LCM microdissection	64.8	M	NAFLD cirrhosis + HCC	34	EGAD00001004578	Brunner 2019 Nature 10.1038/s41586-019-1670-9
+PD37116	-	liver (cirrhotic)	LCM microdissection	66.6	M	NAFLD cirrhosis + HCC	43	EGAD00001004578	Brunner 2019 Nature 10.1038/s41586-019-1670-9
+PD37118	-	liver (cirrhotic)	LCM microdissection	61.1	M	NAFLD cirrhosis + HCC	26	EGAD00001004578	Brunner 2019 Nature 10.1038/s41586-019-1670-9
+#
+# ---- Ng et al., Nature 598:473-478 (2021), doi 10.1038/s41586-021-03974-6 ----
+# Liver, LCM. NOT in PMC -- supplements came from static-content.springer.com.
+# "Transplant" in the source table is the OPERATION that yielded the explant, i.e. a LIVER
+# transplant recipient. It is NOT a haematopoietic stem cell transplant.
+PD37230	-	liver (cirrhotic explant)	LCM microdissection	58.3	M	ARLD, no cancer	34	EGAD00001006255	Ng 2021 Nature 10.1038/s41586-021-03974-6
+PD37231	-	liver (cirrhotic explant)	LCM microdissection	45.3	M	ARLD, no cancer	39	EGAD00001006255	Ng 2021 Nature 10.1038/s41586-021-03974-6
+PD37232	-	liver (cirrhotic explant)	LCM microdissection	40.7	F	ARLD, no cancer	44	EGAD00001006255	Ng 2021 Nature 10.1038/s41586-021-03974-6
+PD37234	-	liver (cirrhotic explant)	LCM microdissection	37.9	F	ARLD, no cancer	38	EGAD00001006255	Ng 2021 Nature 10.1038/s41586-021-03974-6
+PD37237	-	liver (cirrhotic explant)	LCM microdissection	50.8	M	ARLD, no cancer	52	EGAD00001006255	Ng 2021 Nature 10.1038/s41586-021-03974-6
+PD37238	-	liver (cirrhotic explant)	LCM microdissection	46.0	M	NAFLD, no cancer	45	EGAD00001006255	Ng 2021 Nature 10.1038/s41586-021-03974-6
+PD37239	-	liver (cirrhotic explant)	LCM microdissection	56.7	F	NAFLD, no cancer	43	EGAD00001006255	Ng 2021 Nature 10.1038/s41586-021-03974-6
+PD37240	-	liver (cirrhotic explant)	LCM microdissection	61.2	M	NAFLD, no cancer	43	EGAD00001006255	Ng 2021 Nature 10.1038/s41586-021-03974-6
+PD37243	-	liver (cirrhotic explant)	LCM microdissection	28.6	M	NAFLD, no cancer	43	EGAD00001006255	Ng 2021 Nature 10.1038/s41586-021-03974-6
+PD37245	-	liver (cirrhotic explant)	LCM microdissection	42.4	M	NAFLD, no cancer	22	EGAD00001006255	Ng 2021 Nature 10.1038/s41586-021-03974-6
+PD37904	-	liver (background to HCC)	LCM microdissection	73.7	M	NAFLD; resected HCC	42	EGAD00001006255	Ng 2021 Nature 10.1038/s41586-021-03974-6
+PD37907	-	liver (background to HCC)	LCM microdissection	76.1	M	NAFLD; resected HCC	40	EGAD00001006255	Ng 2021 Nature 10.1038/s41586-021-03974-6
+PD37909	-	liver (background to HCC)	LCM microdissection	76.2	M	NAFLD; resected HCC	43	EGAD00001006255	Ng 2021 Nature 10.1038/s41586-021-03974-6
+PD37910	-	liver (background to HCC)	LCM microdissection	71.3	M	NAFLD; resected HCC	42	EGAD00001006255	Ng 2021 Nature 10.1038/s41586-021-03974-6
+PD37914	-	liver (background to HCC)	LCM microdissection	69.7	F	NAFLD; resected HCC	24	EGAD00001006255	Ng 2021 Nature 10.1038/s41586-021-03974-6
+PD37915	-	liver (background to HCC)	LCM microdissection	69.2	M	NAFLD; resected HCC	24	EGAD00001006255	Ng 2021 Nature 10.1038/s41586-021-03974-6
+PD37917	-	liver (background to HCC)	LCM microdissection	72.0	M	ARLD; resected HCC	21	EGAD00001006255	Ng 2021 Nature 10.1038/s41586-021-03974-6
+PD37918	-	liver (background to HCC)	LCM microdissection	66.2	M	NAFLD; resected HCC	40	EGAD00001006255	Ng 2021 Nature 10.1038/s41586-021-03974-6
+PD48367	-	liver (explant, multi-segment)	LCM microdissection	68.7	M	NAFLD; liver transplant	?	EGAD00001006255	Ng 2021 Nature 10.1038/s41586-021-03974-6
+PD48372	-	liver (explant, multi-segment)	LCM microdissection	68.2	M	NAFLD; liver transplant	?	EGAD00001006255	Ng 2021 Nature 10.1038/s41586-021-03974-6
+#
+# ---- Mitchell et al., Nat Genet (2025), doi 10.1038/s41588-025-02234-x -- CHEMO cohort ----
+# HSPC colonies from peripheral blood. Per-drug cycle counts read DIRECTLY from Supp Table 1
+# (verified locally 2026-07-17), NOT from the main text, which is ambiguous. See the note on
+# PD44579/PD47537 below -- the main-text sentence naming both is DISTRIBUTIVE, not conjunctive.
+PD44579	PX002	peripheral blood	HSPC colony	63	F	Follicular lymphoma; R-CVP x6 (cyclophosphamide 6, vincristine 6, OXALIPLATIN 0); 1.3y since	173	EGAD00001015339	Mitchell 2025 NatGenet 10.1038/s41588-025-02234-x
+PD47537	-	peripheral blood	HSPC colony	61	F	Metastatic colon ca; Ox/Cape, Irinotecan/5FU, Ox/5FU; 16 cy (oxaliplatin 11, CYCLOPHOSPHAMIDE 0); radiotherapy 3y	44	EGAD00001015339	Mitchell 2025 NatGenet 10.1038/s41588-025-02234-x
+PD47540	-	peripheral blood	HSPC colony	57	F	Follicular lymphoma; R-CHOP x6; 2.7y since	5	EGAD00001015339	Mitchell 2025 NatGenet 10.1038/s41588-025-02234-x
+PD47541	-	peripheral blood	HSPC colony	64	M	Follicular lymphoma; rituximab+bendamustine x5; 0.1y since	10	EGAD00001015339	Mitchell 2025 NatGenet 10.1038/s41588-025-02234-x
+PD47699	-	peripheral blood	HSPC colony	79	F	Myeloma + metastatic colon ca; VMP/lenalidomide + Ox/Cape (dose-reduced)	10	EGAD00001015339	Mitchell 2025 NatGenet 10.1038/s41588-025-02234-x
+PD47701	-	peripheral blood	HSPC colony	68	F	Metastatic colon ca; capecitabine, XELOX, irinotecan/5FU; 16 cy; radiotherapy 2y	10	EGAD00001015339	Mitchell 2025 NatGenet 10.1038/s41588-025-02234-x
+PD47703	PX001	peripheral blood	HSPC colony	48 and 49	F	Hodgkins @10 (ChlVPP), relapse @47 (BGeV), DLBCL 2019 (R-CHOP @48); radiotherapy 39y; TWO TIMEPOINTS	200 (t1) + 59 (t2)	EGAD00001015339	Mitchell 2025 NatGenet 10.1038/s41588-025-02234-x
+PD50306	-	peripheral blood	HSPC colony	3	M	Neuroblastoma; Rapid COJEC, Bu/Mel autograft; 0.4y since	9	EGAD00001015339	Mitchell 2025 NatGenet 10.1038/s41588-025-02234-x
+PD50307	PX003	peripheral blood	HSPC colony	40	F	NSCLC; carboplatin+etoposide x6; 0.9y since; radiotherapy <1y	41	EGAD00001015339	Mitchell 2025 NatGenet 10.1038/s41588-025-02234-x
+PD50308	-	peripheral blood	HSPC colony	27	F	Hodgkins lymphoma; escalated BEACOPP x6; 2.2y since	41	EGAD00001015339	Mitchell 2025 NatGenet 10.1038/s41588-025-02234-x
+PD37580	-	peripheral blood	HSPC colony	43	F	AML + 30y Behcet's; DA x1, MEC x1, long-term chlorambucil + mycophenolate	84	EGAD00001015339	Mitchell 2025 NatGenet 10.1038/s41588-025-02234-x
+#
+# ---- Mitchell et al., Nature 606:343-350 (2022), doi 10.1038/s41586-022-04786-y -- NORMALS ----
+# HSPC colonies. Codename<->PD map is DIRECT, from the Supp Table 3 (SV) `donor`+`sample`
+# columns -- not inferred. Ages may differ by 1 between the 2022 and 2025 papers (rounding).
+PD40315	CB001	cord blood	HSPC colony	0	F	normal	10	EGAD00001007851	Mitchell 2022 Nature 10.1038/s41586-022-04786-y
+PD45517	CB002	cord blood	HSPC colony	0	?	normal	?	EGAD00001007851	Mitchell 2022 Nature 10.1038/s41586-022-04786-y
+PD40521	KX001	bone marrow	HSPC colony	29	M	normal	41	EGAD00001007851	Mitchell 2022 Nature 10.1038/s41586-022-04786-y
+PD40667	KX002	bone marrow	HSPC colony	38	M	inflammatory bowel disease on azathioprine	?	EGAD00001007851	Mitchell 2022 Nature 10.1038/s41586-022-04786-y
+PD43974	KX003	bone marrow	HSPC colony	?	?	normal	?	EGAD00001007851	Mitchell 2022 Nature 10.1038/s41586-022-04786-y
+PD45534	KX004	bone marrow	HSPC colony	77-78	F	normal (organ donor, trauma)	200	EGAD00001007851	Mitchell 2022 Nature 10.1038/s41586-022-04786-y
+PD47738	KX007	bone marrow	HSPC colony	75	M	normal (organ donor)	10	EGAD00001007851	Mitchell 2022 Nature 10.1038/s41586-022-04786-y
+PD48402	KX008	bone marrow	HSPC colony	76	F	normal (organ donor, ICH); Lyme disease aged 22	10	EGAD00001007851	Mitchell 2022 Nature 10.1038/s41586-022-04786-y
+PD41048	SX001	peripheral blood	HSPC colony	48	M	selenoprotein deficiency (not known to affect HSC dynamics)	200	EGAD00001007851	Mitchell 2022 Nature 10.1038/s41586-022-04786-y
+PD43976	AX001	peripheral blood	HSPC colony + lymphocyte	63	M	normal	10 (2025) / tree in 2022	EGAD00001007851	Mitchell 2022 + Machado 2022 Nature 10.1038/s41586-022-05072-7
+# NEW ORGAN DONORS, first published in the 2025 chemo paper as controls:
+PD49236	KX009?	bone marrow	HSPC colony	63	M	normal (organ donor); unpublished before 2025	173	EGAD00001015339	Mitchell 2025 NatGenet 10.1038/s41588-025-02234-x
+PD49237	KX010?	bone marrow	HSPC colony	60	F	normal (organ donor); unpublished before 2025	44	EGAD00001015339	Mitchell 2025 NatGenet 10.1038/s41588-025-02234-x
+#
+# ---- Spencer Chapman et al., Nature 595:85-90 (2021), doi 10.1038/s41586-021-03548-6 ----
+PD41768	-	foetal liver + 2 femurs (18 pcw)	HSPC colony	18 pcw	?	foetal	234 analysed / 268 seq	EGAD00001006162	Chapman 2021 Nature 10.1038/s41586-021-03548-6
+PD43947	Tree_8pcw	foetal liver (8 pcw)	HSPC colony	8 pcw	?	foetal	?	EGAD00001006162	Chapman 2021 Nature 10.1038/s41586-021-03548-6
+#
+# ---- Kamizela et al., Nature (2025), doi 10.1038/s41586-025-08817-2 -- CML ----
+# HSPC colonies from blood/BM MNC. n_colonies = sequenced -> passed QC.
+PD51632	-	blood/bone marrow	HSPC colony	55(dx), 55+59(sampled)	M	CML, e13a2	103 -> 83	EGAD00001015353	Kamizela 2025 Nature 10.1038/s41586-025-08817-2
+PD51633	-	blood/bone marrow	HSPC colony	52	M	CML, e14a2	97 -> 81	EGAD00001015353	Kamizela 2025 Nature 10.1038/s41586-025-08817-2
+PD51634	-	blood/bone marrow	HSPC colony	50(dx), 50+55	F	CML, e14a2	140 -> 123	EGAD00001015353	Kamizela 2025 Nature 10.1038/s41586-025-08817-2
+PD51635	-	blood/bone marrow	HSPC colony	61(dx), 61+70	F	CML, e14a2	127 -> 117	EGAD00001015353	Kamizela 2025 Nature 10.1038/s41586-025-08817-2
+PD56961	-	blood/bone marrow	HSPC colony	36(dx), 36+48	F	CML, e13a2	192 -> 163	EGAD00001015353	Kamizela 2025 Nature 10.1038/s41586-025-08817-2
+PD57332	-	blood/bone marrow	HSPC colony	81	M	CML, e14a2	41 -> 35	EGAD00001015353	Kamizela 2025 Nature 10.1038/s41586-025-08817-2
+PD57333	-	blood/bone marrow	HSPC colony	63(dx), 65	M	CML, e13a2	79 -> 75	EGAD00001015353	Kamizela 2025 Nature 10.1038/s41586-025-08817-2
+PD57334	-	blood/bone marrow	HSPC colony	22(dx), 23	M	CML, e13a2	98 -> 55	EGAD00001015353	Kamizela 2025 Nature 10.1038/s41586-025-08817-2
+PD57335	-	blood/bone marrow	HSPC colony	45(dx), 46+47	M	CML, e14a2	146 -> 102	EGAD00001015353	Kamizela 2025 Nature 10.1038/s41586-025-08817-2
+# PD60243 IS BULK ONLY -- granulocytes/MNC/buccal, no colonies at all. It is absent from the
+# paper's own patients.txt and n=1023 manifest. DO NOT feed it a colony-phylogeny pipeline.
+PD60243	-	granulocytes / MNC / buccal	BULK -- NO COLONIES	81	?	CML, blast phase	0 (bulk DPClust)	EGAD00001015353	Kamizela 2025 Nature 10.1038/s41586-025-08817-2
+#
+# ---- Robinson et al., Nat Commun (2022), PMC9270427 -- MUTYH-associated polyposis ----
+PD44887	-	colon (normal)	LCM microbiopsy	56	F	MUTYH-associated polyposis (Y179C/G396D)	?	?	Robinson 2022 NatCommun PMC9270427
+PD44890	-	colon (normal)	LCM microbiopsy	16	M	MUTYH-associated polyposis	?	?	Robinson 2022 NatCommun PMC9270427
+#
+# ---- Fabre et al., Nature 606:335-342 (2022), PMC9177423 -- clonal haematopoiesis ----
+# CAUTION: this study is TARGETED DEEP SEQUENCING of bulk blood across 5 study phases. It has
+# NO WGS colonies. Our donors.txt previously claimed "96 colonies each" -- that was WRONG.
+# If we hold trees for these three, they did not come from Fabre's supplement.
+PD34493	-	peripheral blood	BULK targeted (no colonies)	66->82	M	CH: SF3B1 K666N, U2AF1	0	?	Fabre 2022 Nature PMC9177423
+PD41276	-	peripheral blood	BULK targeted (no colonies)	62->77	M	CH: SF3B1, CBL, ZRSR2	0	?	Fabre 2022 Nature PMC9177423
+PD41305	-	peripheral blood	BULK targeted (no colonies)	57->71	M	CH: SRSF2 P95H	0	?	Fabre 2022 Nature PMC9177423
+#
+# ---- NOT FOUND ----
+# Explicitly absent from every candidate paper's text, supplements, and the authors' public
+# data repos (nangalialab/CML, mspencerchapman/Clonal_dynamics_of_HSCT, emily-mitchell/
+# chemotherapy, machadoheather/lymphocyte_somatic_mutation). Europe PMC full-text: 0 hits each.
+# These are most likely UNPUBLISHED. Do not invent a tissue for them.
+PD42473	-	?	?	?	?	?	?	?	NOT FOUND in literature (has BAMs, no tree)
+PD42874	-	?	?	?	?	?	?	?	NOT FOUND in literature (has BAMs, no tree)
+PD49226	-	?	?	?	?	?	?	?	NOT FOUND in literature (has tree, no BAM located)
+PD49227	-	?	?	?	?	?	?	?	NOT FOUND in literature (has tree, no BAM located)
+PD49228	-	?	?	?	?	?	?	?	NOT FOUND in literature (has tree, no BAM located)
+PD49229	-	?	?	?	?	?	?	?	NOT FOUND in literature (has tree, no BAM located)
+PD53373	-	?	?	?	?	?	?	?	NOT FOUND in literature (has tree, no BAM located)
+PD53374	-	?	?	?	?	?	?	?	NOT FOUND in literature (has tree, no BAM located)

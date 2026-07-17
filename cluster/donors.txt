@@ -9,7 +9,15 @@
 # CODENAME = PD ID (verified by identical tip sets; treating a codename as a separate donor
 # double-counts): KX004=PD45534 KX001=PD40521 KX002=PD40667 CB002=PD45517 KX008=PD48402
 # SX001=PD41048 KX003=PD43974 PX001=PD47703 PX002=PD44579 PX003=PD50307 Tree_8pcw=PD43947
-# AX001=BMH1_TG (361 tips, all named BMH1_TG001_*)
+# AX001=BMH1_TG (361 tips, all named BMH1_TG001_*) = **PD43976**
+#   Established 2026-07-17: Mitchell 2025 Supp T1 lists PD43976 as "Peripheral blood | 63 | M |
+#   Normal - previously published", and its colonies are named PD43976_BMH1_TG001_*. Mitchell
+#   2022 Supp T3 has AX001 -> BMH1_TG001_* and Supp T1 has AX001 = 63/Male. Same colony naming
+#   + same age/sex => same person. Machado 2022 says outright that AX001 "was the same person
+#   as that enrolled in our earlier study of HSC dynamics".
+#   CONSEQUENCE: AX001 and PD43976 are ONE donor under two naming schemes, in DIFFERENT
+#   projects (BMH1_TG001_* in 2315/2445/2318; PD43976* in 2314/3231/3301/3369/3837). Do not
+#   count them as two donors. NOT yet confirmed against the BAMs -- verify before merging.
 #
 # A TREE IS THE ONLY RELIABLE EVIDENCE OF CLONALITY. The `_lo` naming convention is not:
 # PD45534's colonies are letter-coded (aoj, ww, my2) and have a 922-tip tree.
@@ -22,8 +30,13 @@
 #  Machado 2022 Nature 608:724     lymphocytes; KX001/2/3, AX001, CB001, TX001/2; GRCh37d5
 #                                  EGAD00001008107. Lymphocytes = EXTRA TISSUE from donors
 #                                  whose HSC trees we already have.
-#  Fabre 2022 Nature 606:335       longitudinal CH (SardiNIA); PD41276/PD34493/PD41305, 96
-#                                  colonies each; NCBI build37; EGAD00001007682-4.
+#  Fabre 2022 Nature 606:335       longitudinal CH (SardiNIA); PD41276/PD34493/PD41305.
+#                                  *** CORRECTED 2026-07-17: this study is TARGETED DEEP
+#                                  SEQUENCING of bulk blood across 5 study phases. It has NO
+#                                  WGS colonies. The old note here said "96 colonies each" --
+#                                  that was WRONG and would have put bulk data into a
+#                                  colony-phylogeny pipeline. Supp Table 2 holds VAF
+#                                  trajectories, not colonies. NCBI build37.
 #  Mitchell 2025 Nat Genet         CHEMOTHERAPY, 23 exposed + 9 controls; build37;
 #                                  EGAD00001015339 (WGS) / EGAD00001015340 (NanoSeq);
 #                                  zenodo 10.5281/zenodo.15235476.
@@ -40,7 +53,12 @@ PD40667   # 380 tips, depth 518, 380 hg38 WGS  # =KX002
 PD41048   # 362 tips, depth 708, 360 hg38 WGS  # =SX001
 PD43947   # 277 tips, depth 29, 277 hg38 WGS  # =Tree_8pcw
 PD43974   # 328 tips, depth 1382, 328 hg38 WGS  # =KX003
-PD44579   # 174 tips, depth 1144, 174 hg38 WGS  # =PX002; CHEMO age63 cyclophosphamide+oxaliplatin (=PX002) -- AND filters were DEVELOPED here
+# CORRECTED 2026-07-17 from Mitchell 2025 Supp Table 1, read directly (was: "cyclophosphamide
+# +oxaliplatin"). The main text says both PD44579 and PD47537 were "treated with
+# cyclophosphamide and oxaliplatin" -- that sentence is DISTRIBUTIVE, one drug each, and we
+# read it conjunctively. Per-drug cycle counts from the table: PD44579 oxaliplatin=0.
+# R-CVP = rituximab, cyclophosphamide, vincristine, prednisolone. NO PLATINUM.
+PD44579   # 174 tips, depth 1144, 174 hg38 WGS  # =PX002; CHEMO age63 F, follicular lymphoma, R-CVP x6 (cyclophosphamide 6, vincristine 6, oxaliplatin 0), 1.3y since -- AND filters were DEVELOPED here
 PD44887   # 32 tips, depth 7038, 32 hg38 WGS
 PD44890   # 49 tips, depth 22902, 49 hg38 WGS
 PD45517   # 379 tips, depth 47, 379 hg38 WGS  # =CB002
@@ -51,7 +69,7 @@ PD50307   # 41 tips, depth 1174, 41 hg38 WGS  # =PX003; CHEMO age40 carboplatin+
 
 # --- CHEMO cohort members not already listed above (Mitchell 2025) ---
 PD37580   # CHEMO age43 chlorambucil from childhood + AML induction
-PD47537   # CHEMO age61 cyclophosphamide+oxaliplatin
+PD47537   # CHEMO age61 F, metastatic colon ca; Ox/Cape, Irinotecan/5FU, Ox/5FU; 16 cy (oxaliplatin 11, cyclophosphamide 0); radiotherapy 3y  [CORRECTED 2026-07-17, was "cyclophosphamide+oxaliplatin"]
 PD47699   # CHEMO low-dose melphalan
 PD50308   # CHEMO age29 Hodgkin, procarbazine+chlorambucil
 PD60010   # CHEMO bendamustine
@@ -66,7 +84,9 @@ PD57332   # CML, 41 samples
 PD57333   # CML, 80 samples
 PD57334   # CML, 98 samples
 PD57335   # CML, 146 samples
-PD60243   # CML, blast phase (in paper, not in manifest)
+PD60243   # CML, blast phase. **BULK ONLY -- NO COLONIES.** Granulocytes/MNC/buccal, analysed
+          # by bulk DPClust. Absent from the paper's patients.txt and n=1023 manifest because
+          # it has no colonies to list. Do NOT feed it a colony-phylogeny pipeline.
 
 # --- have a tree, not yet scanned ---
 PD26988

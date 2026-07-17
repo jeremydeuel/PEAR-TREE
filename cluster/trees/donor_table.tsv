@@ -1,163 +1,149 @@
-donor	alias	build(@SQ)	reference(@PG bwa)	n_bam	tips	assay_DS	readlen	paired	depth_M_med	tissue	BAMs_located
-AX001	BMH1_TG	GRCh38	GRCh38_full+decoy_hla	210	361	WGS	151	PE	629	HSPC+lymphocyte (Machado AX001)	nst_links proj 2315
-PD34200	?	GRCh38	?,GRCh38_full+decoy_hla	60	5	WGS	151	PE	439	?	nst_links proj 2387,2390,3852
-PD34200	?	hs37d5	hs37d5.fa	337	5	TARGETED	75	PE	8	?	nst_links proj 1748
-PD37449	?	GRCh38	?,GRCh38_full+decoy_hla	53	10	WGS	151	PE	437	?	nst_links proj 2390,3852
-PD37449	?	hs37d5	hs37d5.fa	302	10	TARGETED	75	PE	7	?	nst_links proj 1743
-PD37580	?	hs37d5	hs37d5.fa	100	0	WGS	151	PE	253	blood/HSPC chemo	nst_links proj 1805,2919
-PD37590	?	GRCh38	?,GRCh38_full+decoy_hla	64	44	WGS	151	PE	835	?	nst_links proj 2390,3852
-PD40521	KX001	GRCh38	GRCh38_full+decoy_hla	615	407	WGS	151	PE	314	HSPC+lymphocyte (Machado KX001)	nst_links proj 2314,2320
-PD40521	KX001	hs37d5	genome.fa	6	407	WGS	151	PE	288	HSPC+lymphocyte (Machado KX001)	nst_links proj 3638
-PD40667	KX002	GRCh38	GRCh38_full+decoy_hla	493	380	WGS	151	PE	315	HSPC+lymphocyte (Machado KX002)	nst_links proj 2314,2328,2482
-PD40667	KX002	hs37d5	GRCh37d5/genome.fa,hs37d5.fa	4	380	TARGETED,WGS	151	PE	658	HSPC+lymphocyte (Machado KX002)	nst_links proj 2900,3191
-PD41048	SX001	GRCh38	GRCh38_full+decoy_hla	376	362	WGS	151	PE	285	?	nst_links proj 2152,2314,2441
-PD41048	SX001	GRCh37?no-decoy-in-header	GRCh37d5/genome.fa	1	362	WGS	151	PE	1580	?	nst_links proj 3191
-PD41048	SX001	hs37d5	hs37d5.fa	36	362	WGS	151	PE	435	?	nst_links proj 2073
-PD42473	?	GRCh38	GRCh38_full+decoy_hla	40	0	WGS	151	PE	531	?	nst_links proj 2314
-PD42874	?	GRCh38	GRCh38_full+decoy_hla	22	0	WGS	151	PE	542	?	nst_links proj 2314,2317
-PD42874	?	hs37d5	hs37d5.fa	6	0	WGS	151	PE	600	?	nst_links proj 2073
-PD43947	Tree_8pcw	GRCh38	?	298	277	WGS	151	PE	536	embryo 8pcw? INFERRED-from-filename	nst_links proj 2607,2621
-PD43947	Tree_8pcw	hs37d5	hs37d5.fa	362	277	TARGETED,WGS	150,151	PE	9	embryo 8pcw? INFERRED-from-filename	nst_links proj 2149,2243,2244,2447
-PD43947	Tree_8pcw	GRCh37?no-decoy-in-header	hs37d5.fa	253	277	WGS	151	PE	543	embryo 8pcw? INFERRED-from-filename	nst_links proj 2149
-PD43974	KX003	GRCh38	GRCh38_full+decoy_hla	361	328	WGS	151	PE	363	HSPC+lymphocyte (Machado KX003)	nst_links proj 2314,2317,2328,2483
-PD43974	KX003	hs37d5	GRCh37d5/genome.fa,hs37d5.fa	65	328	TARGETED,WGS	151	PE	302	HSPC+lymphocyte (Machado KX003)	nst_links proj 2073,2567,2901,3191
-PD43974	KX003	GRCh37?no-decoy-in-header	hs37d5.fa	3	328	TARGETED	151	PE	578	HSPC+lymphocyte (Machado KX003)	nst_links proj 2761
-PD43976	?	GRCh38	?,GRCh38_full+decoy_hla,genome.fa	256	0	RNA-Seq,WGS	151,90	PE	316	?	nst_links proj 2314,3231,3301,3369,3837
-PD43976	?	GRCh37?no-decoy-in-header	GRCh37d5/genome.fa,hs37d5.fa	194	0	TARGETED,WGS	151	PE	293	?	nst_links proj 2760,2898,3191
-PD43976	?	hs37d5	hs37d5.fa	10	0	WGS	151	PE	606	?	nst_links proj 2898
-PD44579	PX002	GRCh38	GRCh38_full+decoy_hla	192	174	WGS	151	PE	304	blood/HSPC chemo	nst_links proj 2446
-PD44579	PX002	hs37d5	hs37d5.fa	96	174	WGS	151	PE	274	blood/HSPC chemo	nst_links proj 2178
-PD44579	PX002	GRCh37?no-decoy-in-header	hs37d5.fa	94	174	WGS	151	PE	315	blood/HSPC chemo	nst_links proj 2178
-PD44887	?	GRCh38	GRCh38_full+decoy_hla	33	32	WGS	151	PE	808	colonic crypt? UNVERIFIED	nst_links proj 2460
-PD44890	?	GRCh38	GRCh38_full+decoy_hla	50	49	WGS	151	PE	753	colonic crypt? UNVERIFIED	nst_links proj 2460
-PD45517	CB002	GRCh38	GRCh38_full+decoy_hla,genome.fa	497	379	WGS	151	PE	347	cord blood? INFERRED-from-codename	nst_links proj 2449,3230
-PD45517	CB002	hs37d5	genome.fa	6	379	WGS	151	PE	567	cord blood? INFERRED-from-codename	nst_links proj 3638
-PD45534	KX004	GRCh38	GRCh38_full+decoy_hla,genome.fa	945	922	WGS	151	PE	338	?	nst_links proj 2450,3819,3838
-PD45534	KX004	hs37d5	GRCh37d5/genome.fa,hs37d5.fa	572	922	TARGETED,WGS	151	PE	317	?	nst_links proj 2515,2566,2902,3191
-PD45534	KX004	GRCh37?no-decoy-in-header	hs37d5.fa	1	922	WGS	151	PE	315	?	nst_links proj 2515
-PD47537	?	GRCh38	?	46	0	WGS	151	PE	322	blood/HSPC chemo	nst_links proj 2622
-PD47537	?	hs37d5	hs37d5.fa	46	0	WGS	151	PE	319	blood/HSPC chemo	nst_links proj 2278
-PD47540	?	GRCh38	GRCh38_full+decoy_hla	5	0	WGS	151	PE	571	?	nst_links proj 2446
-PD47540	?	hs37d5	hs37d5.fa	5	0	WGS	151	PE	566	?	nst_links proj 2178
-PD47541	?	GRCh38	GRCh38_full+decoy_hla	10	0	WGS	151	PE	509	?	nst_links proj 2446
-PD47541	?	hs37d5	hs37d5.fa	10	0	WGS	151	PE	504	?	nst_links proj 2178
-PD47699	?	GRCh38	?	10	0	WGS	151	PE	568	blood/HSPC chemo	nst_links proj 2622
-PD47699	?	hs37d5	hs37d5.fa	10	0	WGS	151	PE	564	blood/HSPC chemo	nst_links proj 2278
-PD47701	?	GRCh38	?	10	0	WGS	151	PE	552	?	nst_links proj 2622
-PD47701	?	hs37d5	hs37d5.fa	10	0	WGS	151	PE	549	?	nst_links proj 2278
-PD47703	PX001	GRCh38	GRCh38_full+decoy_hla	278	259	WGS	151	PE	344	blood/HSPC chemo	nst_links proj 2505
-PD47703	PX001	GRCh37?no-decoy-in-header	hs37d5.fa	96	259	WGS	151	PE	318	blood/HSPC chemo	nst_links proj 2275
-PD47703	PX001	hs37d5	hs37d5.fa	182	259	WGS	151	PE	365	blood/HSPC chemo	nst_links proj 2275
-PD4781	?	GRCh37?no-decoy-in-header	hs37d5.fa	14	62	TARGETED,WGS	101,151	PE	811	?	nst_links proj 2281,2529
-PD4781	?	hs37d5	GRCh37d5/genome.fa,hs37d5.fa	76	62	TARGETED,WGS,WXS	151,75	PE	341	?	nst_links proj 1805,1859,2108,3089
-PD48402	KX008	GRCh38	GRCh38_full+decoy_hla	371	367	WGS	151	PE	340	?	nst_links proj 2501
-PD49236	KX009	hs37d5	genome.fa,hs37d5.fa	423	422	WGS	151	PE	357	?	nst_links proj 2510,3191
-PD49237	KX010	hs37d5	genome.fa,hs37d5.fa	232	231	WGS	151	PE	373	?	nst_links proj 2523,3191
-PD49237	KX010	GRCh37?no-decoy-in-header	hs37d5.fa	136	231	WGS	151	PE	346	?	nst_links proj 2523
-PD50306	?	GRCh38	?	10	0	WGS	151	PE	642	?	nst_links proj 2622
-PD50306	?	hs37d5	hs37d5.fa	10	0	WGS	151	PE	637	?	nst_links proj 2278
-PD50307	PX003	GRCh38	?	61	41	WGS	151	PE	334	blood/HSPC chemo	nst_links proj 2622
-PD50307	PX003	hs37d5	hs37d5.fa	61	41	WGS	151	PE	331	blood/HSPC chemo	nst_links proj 2278
-PD50308	?	GRCh38	?	49	0	WGS	151	PE	384	blood/HSPC chemo	nst_links proj 2622
-PD50308	?	hs37d5	hs37d5.fa	49	0	WGS	151	PE	381	blood/HSPC chemo	nst_links proj 2278
-PD5147	?	GRCh37?no-decoy-in-header	hs37d5.fa	4	67	TARGETED	101	PE	846	?	nst_links proj 2281
-PD5147	?	hs37d5	hs37d5.fa	91	67	WGS	151	PE	395	?	nst_links proj 1805,2108
-PD5182	?	GRCh38	?,GRCh38_full+decoy_hla	7	161	WGS	151	PE	673	?	nst_links proj 2611,3535
-PD5182	?	GRCh37?no-decoy-in-header	hs37d5.fa	9	161	TARGETED	101	PE	737	?	nst_links proj 2281
-PD5182	?	hs37d5	GRCh37d5/genome.fa,hs37d5.fa	175	161	WGS,WXS	150,151,75	PE	417	?	nst_links proj 1500,1805,1859,2108,2743
-PD9478	?	GRCh37?no-decoy-in-header	hs37d5.fa	15	82	TARGETED	101	PE	733	?	nst_links proj 2281
-PD9478	?	hs37d5	GRCh37d5/genome.fa,hs37d5.fa	92	82	TARGETED,WGS	100,151	PE	428	?	nst_links proj 1661,1805,2108,2642
-PD26988	?	?	?	0	24	?	?	?	?	?	NO — not scanned; has tree
-PD30160	?	?	?	0	11	?	?	?	?	?	NO — not scanned; has tree
-PD34204	?	?	?	0	60	?	?	?	?	?	NO — not scanned; has tree
-PD34205	?	?	?	0	49	?	?	?	?	?	NO — not scanned; has tree
-PD34206	?	?	?	0	54	?	?	?	?	?	NO — not scanned; has tree
-PD34207	?	?	?	0	48	?	?	?	?	?	NO — not scanned; has tree
-PD34209	?	?	?	0	55	?	?	?	?	?	NO — not scanned; has tree
-PD34210	?	?	?	0	45	?	?	?	?	?	NO — not scanned; has tree
-PD34211	?	?	?	0	49	?	?	?	?	?	NO — not scanned; has tree
-PD34215	?	?	?	0	56	?	?	?	?	?	NO — not scanned; has tree
-PD34493	?	NCBI build37 (per paper)	?	0	93	?	?	?	?	blood/HSPC (Fabre SardiNIA)	NO — EGA EGAD00001007682/3/4
-PD36713	PD36713b	?	?	0	32	?	?	?	?	?	NO — not scanned; has tree
-PD36714	PD36714b	?	?	0	27	?	?	?	?	?	NO — not scanned; has tree
-PD36715	PD36715b	?	?	0	28	?	?	?	?	?	NO — not scanned; has tree
-PD36717	PD36717b	?	?	0	29	?	?	?	?	?	NO — not scanned; has tree
-PD36718	PD36718b	?	?	0	26	?	?	?	?	?	NO — not scanned; has tree
-PD37105	PD37105b	?	?	0	26	?	?	?	?	?	NO — not scanned; has tree
-PD37107	PD37107b	?	?	0	13	?	?	?	?	?	NO — not scanned; has tree
-PD37110	PD37110b	?	?	0	21	?	?	?	?	?	NO — not scanned; has tree
-PD37111	PD37111b	?	?	0	29	?	?	?	?	?	NO — not scanned; has tree
-PD37113	PD37113b	?	?	0	28	?	?	?	?	?	NO — not scanned; has tree
-PD37114	PD37114b	?	?	0	28	?	?	?	?	?	NO — not scanned; has tree
-PD37115	PD37115b	?	?	0	19	?	?	?	?	?	NO — not scanned; has tree
-PD37116	PD37116b	?	?	0	22	?	?	?	?	?	NO — not scanned; has tree
-PD37118	PD37118b	?	?	0	24	?	?	?	?	?	NO — not scanned; has tree
-PD37230	PD37230b	?	?	0	24	?	?	?	?	?	NO — not scanned; has tree
-PD37231	PD37231b	?	?	0	20	?	?	?	?	?	NO — not scanned; has tree
-PD37232	PD37232b	?	?	0	26	?	?	?	?	?	NO — not scanned; has tree
-PD37234	PD37234b	?	?	0	30	?	?	?	?	?	NO — not scanned; has tree
-PD37237	PD37237b	?	?	0	29	?	?	?	?	?	NO — not scanned; has tree
-PD37238	PD37238b	?	?	0	26	?	?	?	?	?	NO — not scanned; has tree
-PD37239	PD37239b	?	?	0	20	?	?	?	?	?	NO — not scanned; has tree
-PD37240	PD37240b	?	?	0	26	?	?	?	?	?	NO — not scanned; has tree
-PD37243	PD37243b	?	?	0	32	?	?	?	?	?	NO — not scanned; has tree
-PD37245	PD37245b	?	?	0	19	?	?	?	?	?	NO — not scanned; has tree
-PD37451	?	?	?	0	30	?	?	?	?	?	NO — not scanned; has tree
-PD37452	?	?	?	0	36	?	?	?	?	?	NO — not scanned; has tree
-PD37453	?	?	?	0	30	?	?	?	?	?	NO — not scanned; has tree
-PD37454	?	?	?	0	30	?	?	?	?	?	NO — not scanned; has tree
-PD37455	?	?	?	0	27	?	?	?	?	?	NO — not scanned; has tree
-PD37456	?	?	?	0	28	?	?	?	?	?	NO — not scanned; has tree
-PD37904	PD37904b	?	?	0	32	?	?	?	?	?	NO — not scanned; has tree
-PD37907	PD37907b	?	?	0	35	?	?	?	?	?	NO — not scanned; has tree
-PD37909	PD37909b	?	?	0	31	?	?	?	?	?	NO — not scanned; has tree
-PD37910	PD37910b	?	?	0	26	?	?	?	?	?	NO — not scanned; has tree
-PD37914	PD37914b	?	?	0	25	?	?	?	?	?	NO — not scanned; has tree
-PD37915	PD37915b	?	?	0	24	?	?	?	?	?	NO — not scanned; has tree
-PD37917	PD37917b	?	?	0	21	?	?	?	?	?	NO — not scanned; has tree
-PD37918	PD37918b	?	?	0	33	?	?	?	?	?	NO — not scanned; has tree
-PD40315	CB001	?	?	0	195	?	?	?	?	?	NO — not scanned; has tree
-PD41276	?	NCBI build37 (per paper)	?	0	85	?	?	?	?	blood/HSPC (Fabre SardiNIA)	NO — EGA EGAD00001007682/3/4
-PD41305	?	NCBI build37 (per paper)	?	0	92	?	?	?	?	blood/HSPC (Fabre SardiNIA)	NO — EGA EGAD00001007682/3/4
-PD41768	Tree_18pcw	?	?	0	234	?	?	?	?	?	NO — not scanned; has tree
-PD47738	KX007	?	?	0	315	?	?	?	?	?	NO — not scanned; has tree
-PD48367	PD48367i	?	?	0	24	?	?	?	?	?	NO — not scanned; has tree
-PD48367b	?	?	?	0	20	?	?	?	?	?	NO — not scanned; has tree
-PD48367c	?	?	?	0	17	?	?	?	?	?	NO — not scanned; has tree
-PD48367d	?	?	?	0	15	?	?	?	?	?	NO — not scanned; has tree
-PD48367e	?	?	?	0	22	?	?	?	?	?	NO — not scanned; has tree
-PD48367f	?	?	?	0	18	?	?	?	?	?	NO — not scanned; has tree
-PD48367g	?	?	?	0	21	?	?	?	?	?	NO — not scanned; has tree
-PD48367h	?	?	?	0	17	?	?	?	?	?	NO — not scanned; has tree
-PD48372	PD48372i	?	?	0	14	?	?	?	?	?	NO — not scanned; has tree
-PD48372b	?	?	?	0	18	?	?	?	?	?	NO — not scanned; has tree
-PD48372c	?	?	?	0	23	?	?	?	?	?	NO — not scanned; has tree
-PD48372d	?	?	?	0	19	?	?	?	?	?	NO — not scanned; has tree
-PD48372e	?	?	?	0	17	?	?	?	?	?	NO — not scanned; has tree
-PD48372f	?	?	?	0	19	?	?	?	?	?	NO — not scanned; has tree
-PD48372g	?	?	?	0	22	?	?	?	?	?	NO — not scanned; has tree
-PD48372h	?	?	?	0	22	?	?	?	?	?	NO — not scanned; has tree
-PD49226	BCL009	?	?	0	345	?	?	?	?	?	NO — not scanned; has tree
-PD49227	BCL008	?	?	0	424	?	?	?	?	?	NO — not scanned; has tree
-PD49228	BCL004	?	?	0	487	?	?	?	?	?	NO — not scanned; has tree
-PD49229	BCL002	?	?	0	723	?	?	?	?	?	NO — not scanned; has tree
-PD5117	?	?	?	0	89	?	?	?	?	?	NO — not scanned; has tree
-PD5163	?	?	?	0	71	?	?	?	?	?	NO — not scanned; has tree
-PD51632	?	GRCh38 (per paper)	?	0	0	?	?	?	?	CML blood (colony/bulk_blood/bulk_buccal)	NO — EGA EGAD00001015353
-PD51633	?	GRCh38 (per paper)	?	0	0	?	?	?	?	CML blood (colony/bulk_blood/bulk_buccal)	NO — EGA EGAD00001015353
-PD51634	?	GRCh38 (per paper)	?	0	0	?	?	?	?	CML blood (colony/bulk_blood/bulk_buccal)	NO — EGA EGAD00001015353
-PD51635	?	GRCh38 (per paper)	?	0	0	?	?	?	?	CML blood (colony/bulk_blood/bulk_buccal)	NO — EGA EGAD00001015353
-PD5179	?	?	?	0	93	?	?	?	?	?	NO — not scanned; has tree
-PD53373	BCL003	?	?	0	536	?	?	?	?	?	NO — not scanned; has tree
-PD53374	BCL006	?	?	0	298	?	?	?	?	?	NO — not scanned; has tree
-PD56961	?	GRCh38 (per paper)	?	0	0	?	?	?	?	CML blood (colony/bulk_blood/bulk_buccal)	NO — EGA EGAD00001015353
-PD57332	?	GRCh38 (per paper)	?	0	0	?	?	?	?	CML blood (colony/bulk_blood/bulk_buccal)	NO — EGA EGAD00001015353
-PD57333	?	GRCh38 (per paper)	?	0	0	?	?	?	?	CML blood (colony/bulk_blood/bulk_buccal)	NO — EGA EGAD00001015353
-PD57334	?	GRCh38 (per paper)	?	0	0	?	?	?	?	CML blood (colony/bulk_blood/bulk_buccal)	NO — EGA EGAD00001015353
-PD57335	?	GRCh38 (per paper)	?	0	0	?	?	?	?	CML blood (colony/bulk_blood/bulk_buccal)	NO — EGA EGAD00001015353
-PD5847	?	?	?	0	99	?	?	?	?	?	NO — not scanned; has tree
-PD60243	?	GRCh38 (per paper)	?	0	0	?	?	?	?	CML blast phase	NO — EGA EGAD00001015353
-PD6629	?	?	?	0	61	?	?	?	?	?	NO — not scanned; has tree
-PD6634	?	?	?	0	36	?	?	?	?	?	NO — not scanned; has tree
-PD6646	?	?	?	0	118	?	?	?	?	?	NO — not scanned; has tree
-PD7271	?	?	?	0	89	?	?	?	?	?	NO — not scanned; has tree
+donor	alias	tissue	unit	age	sex	diagnosis_exposure	paper	build(@SQ)	reference(@PG bwa)	n_bam	tips	assay_DS	readlen	paired	depth_M_med	BAMs_located
+AX001	AX001	peripheral blood	HSPC colony + lymphocyte	63	M	normal	Mitchell 2022 + Machado 2022 Nature 10.1038/s41586-022-05072-7	GRCh38	GRCh38_full+decoy_hla	210	361	WGS	151	PE	629	nst_links proj 2315
+PD26988	-	bronchial epithelium	colony	81	M	ex-smoker	Yoshida 2020 Nature 10.1038/s41586-020-1961-1	?	?	0	24	?	?	?	?	NO — not scanned; has tree
+PD30160	-	bronchial epithelium	colony	71	M	ex-smoker; COPD; carcinoma-in-situ	Yoshida 2020 Nature 10.1038/s41586-020-1961-1	?	?	0	11	?	?	?	?	NO — not scanned; has tree
+PD34200	-	colorectal crypt (44) + ileum (5)	LCM crypt	54	M	normal	Lee-Six 2019 Nature 10.1038/s41586-019-1672-7	GRCh38	?,GRCh38_full+decoy_hla	60	5	WGS	151	PE	439	nst_links proj 2387,2390,3852
+PD34200	-	colorectal crypt (44) + ileum (5)	LCM crypt	54	M	normal	Lee-Six 2019 Nature 10.1038/s41586-019-1672-7	hs37d5	hs37d5.fa	337	5	TARGETED	75	PE	8	nst_links proj 1748
+PD34204	-	bronchial epithelium	colony	61	M	current smoker	Yoshida 2020 Nature 10.1038/s41586-020-1961-1	?	?	0	60	?	?	?	?	NO — not scanned; has tree
+PD34205	-	bronchial epithelium	colony	54	M	ex-smoker	Yoshida 2020 Nature 10.1038/s41586-020-1961-1	?	?	0	49	?	?	?	?	NO — not scanned; has tree
+PD34206	-	bronchial epithelium	colony	76	M	ex-smoker	Yoshida 2020 Nature 10.1038/s41586-020-1961-1	?	?	0	54	?	?	?	?	NO — not scanned; has tree
+PD34207	-	bronchial epithelium	colony	65	F	current smoker	Yoshida 2020 Nature 10.1038/s41586-020-1961-1	?	?	0	48	?	?	?	?	NO — not scanned; has tree
+PD34209	-	bronchial epithelium	colony	75	F	never-smoker	Yoshida 2020 Nature 10.1038/s41586-020-1961-1	?	?	0	55	?	?	?	?	NO — not scanned; has tree
+PD34210	-	bronchial epithelium	colony	68	F	ex-smoker	Yoshida 2020 Nature 10.1038/s41586-020-1961-1	?	?	0	45	?	?	?	?	NO — not scanned; has tree
+PD34211	-	bronchial epithelium	colony	74	M	current smoker	Yoshida 2020 Nature 10.1038/s41586-020-1961-1	?	?	0	49	?	?	?	?	NO — not scanned; has tree
+PD34215	-	bronchial epithelium	colony	73	F	never-smoker	Yoshida 2020 Nature 10.1038/s41586-020-1961-1	?	?	0	56	?	?	?	?	NO — not scanned; has tree
+PD34493	-	peripheral blood	BULK targeted (no colonies)	66->82	M	CH: SF3B1 K666N, U2AF1	Fabre 2022 Nature PMC9177423	NCBI build37 (per paper)	?	0	93	?	?	?	?	NO — EGA EGAD00001007682/3/4
+PD36713	PD36713b	liver (normal)	LCM microdissection	67.2	M	normal; distal to CRC liver met	Brunner 2019 Nature 10.1038/s41586-019-1670-9	?	?	0	32	?	?	?	?	NO — not scanned; has tree
+PD36714	PD36714b	liver (normal)	LCM microdissection	77.1	M	normal; distal to CRC liver met	Brunner 2019 Nature 10.1038/s41586-019-1670-9	?	?	0	27	?	?	?	?	NO — not scanned; has tree
+PD36715	PD36715b	liver (normal)	LCM microdissection	64.1	M	normal; distal to CRC liver met	Brunner 2019 Nature 10.1038/s41586-019-1670-9	?	?	0	28	?	?	?	?	NO — not scanned; has tree
+PD36717	PD36717b	liver (normal)	LCM microdissection	72.9	M	normal; distal to CRC liver met	Brunner 2019 Nature 10.1038/s41586-019-1670-9	?	?	0	29	?	?	?	?	NO — not scanned; has tree
+PD36718	PD36718b	liver (normal)	LCM microdissection	49.1	M	normal; pre-op portal vein embolisation	Brunner 2019 Nature 10.1038/s41586-019-1670-9	?	?	0	26	?	?	?	?	NO — not scanned; has tree
+PD37105	PD37105b	liver (cirrhotic)	LCM microdissection	65.4	F	ARLD cirrhosis + HCC	Brunner 2019 Nature 10.1038/s41586-019-1670-9	?	?	0	26	?	?	?	?	NO — not scanned; has tree
+PD37107	PD37107b	liver (cirrhotic)	LCM microdissection	43.4	M	ARLD cirrhosis + HCC	Brunner 2019 Nature 10.1038/s41586-019-1670-9	?	?	0	13	?	?	?	?	NO — not scanned; has tree
+PD37110	PD37110b	liver (cirrhotic)	LCM microdissection	65.8	M	ARLD cirrhosis + HCC	Brunner 2019 Nature 10.1038/s41586-019-1670-9	?	?	0	21	?	?	?	?	NO — not scanned; has tree
+PD37111	PD37111b	liver (cirrhotic)	LCM microdissection	67.4	M	ARLD cirrhosis + HCC	Brunner 2019 Nature 10.1038/s41586-019-1670-9	?	?	0	29	?	?	?	?	NO — not scanned; has tree
+PD37113	PD37113b	liver (cirrhotic)	LCM microdissection	65.2	M	NAFLD cirrhosis + HCC	Brunner 2019 Nature 10.1038/s41586-019-1670-9	?	?	0	28	?	?	?	?	NO — not scanned; has tree
+PD37114	PD37114b	liver (cirrhotic)	LCM microdissection	61.5	M	NAFLD cirrhosis + HCC	Brunner 2019 Nature 10.1038/s41586-019-1670-9	?	?	0	28	?	?	?	?	NO — not scanned; has tree
+PD37115	PD37115b	liver (cirrhotic)	LCM microdissection	64.8	M	NAFLD cirrhosis + HCC	Brunner 2019 Nature 10.1038/s41586-019-1670-9	?	?	0	19	?	?	?	?	NO — not scanned; has tree
+PD37116	PD37116b	liver (cirrhotic)	LCM microdissection	66.6	M	NAFLD cirrhosis + HCC	Brunner 2019 Nature 10.1038/s41586-019-1670-9	?	?	0	22	?	?	?	?	NO — not scanned; has tree
+PD37118	PD37118b	liver (cirrhotic)	LCM microdissection	61.1	M	NAFLD cirrhosis + HCC	Brunner 2019 Nature 10.1038/s41586-019-1670-9	?	?	0	24	?	?	?	?	NO — not scanned; has tree
+PD37230	PD37230b	liver (cirrhotic explant)	LCM microdissection	58.3	M	ARLD, no cancer	Ng 2021 Nature 10.1038/s41586-021-03974-6	?	?	0	24	?	?	?	?	NO — not scanned; has tree
+PD37231	PD37231b	liver (cirrhotic explant)	LCM microdissection	45.3	M	ARLD, no cancer	Ng 2021 Nature 10.1038/s41586-021-03974-6	?	?	0	20	?	?	?	?	NO — not scanned; has tree
+PD37232	PD37232b	liver (cirrhotic explant)	LCM microdissection	40.7	F	ARLD, no cancer	Ng 2021 Nature 10.1038/s41586-021-03974-6	?	?	0	26	?	?	?	?	NO — not scanned; has tree
+PD37234	PD37234b	liver (cirrhotic explant)	LCM microdissection	37.9	F	ARLD, no cancer	Ng 2021 Nature 10.1038/s41586-021-03974-6	?	?	0	30	?	?	?	?	NO — not scanned; has tree
+PD37237	PD37237b	liver (cirrhotic explant)	LCM microdissection	50.8	M	ARLD, no cancer	Ng 2021 Nature 10.1038/s41586-021-03974-6	?	?	0	29	?	?	?	?	NO — not scanned; has tree
+PD37238	PD37238b	liver (cirrhotic explant)	LCM microdissection	46.0	M	NAFLD, no cancer	Ng 2021 Nature 10.1038/s41586-021-03974-6	?	?	0	26	?	?	?	?	NO — not scanned; has tree
+PD37239	PD37239b	liver (cirrhotic explant)	LCM microdissection	56.7	F	NAFLD, no cancer	Ng 2021 Nature 10.1038/s41586-021-03974-6	?	?	0	20	?	?	?	?	NO — not scanned; has tree
+PD37240	PD37240b	liver (cirrhotic explant)	LCM microdissection	61.2	M	NAFLD, no cancer	Ng 2021 Nature 10.1038/s41586-021-03974-6	?	?	0	26	?	?	?	?	NO — not scanned; has tree
+PD37243	PD37243b	liver (cirrhotic explant)	LCM microdissection	28.6	M	NAFLD, no cancer	Ng 2021 Nature 10.1038/s41586-021-03974-6	?	?	0	32	?	?	?	?	NO — not scanned; has tree
+PD37245	PD37245b	liver (cirrhotic explant)	LCM microdissection	42.4	M	NAFLD, no cancer	Ng 2021 Nature 10.1038/s41586-021-03974-6	?	?	0	19	?	?	?	?	NO — not scanned; has tree
+PD37449	ao	colorectal crypt (20) + ileum (10)	LCM crypt	36	F	normal (transplant donor cohort)	Lee-Six 2019 Nature 10.1038/s41586-019-1672-7	GRCh38	?,GRCh38_full+decoy_hla	53	10	WGS	151	PE	437	nst_links proj 2390,3852
+PD37449	ao	colorectal crypt (20) + ileum (10)	LCM crypt	36	F	normal (transplant donor cohort)	Lee-Six 2019 Nature 10.1038/s41586-019-1672-7	hs37d5	hs37d5.fa	302	10	TARGETED	75	PE	7	nst_links proj 1743
+PD37451	-	bronchial epithelium	colony	80	F	?	Yoshida 2020 Nature 10.1038/s41586-020-1961-1	?	?	0	30	?	?	?	?	NO — not scanned; has tree
+PD37452	-	bronchial epithelium	colony	75	F	?	Yoshida 2020 Nature 10.1038/s41586-020-1961-1	?	?	0	36	?	?	?	?	NO — not scanned; has tree
+PD37453	-	bronchial epithelium	colony	3y	F	never-smoker (child)	Yoshida 2020 Nature 10.1038/s41586-020-1961-1	?	?	0	30	?	?	?	?	NO — not scanned; has tree
+PD37454	-	bronchial epithelium	colony	59	M	?	Yoshida 2020 Nature 10.1038/s41586-020-1961-1	?	?	0	30	?	?	?	?	NO — not scanned; has tree
+PD37455	-	bronchial epithelium	colony	11mo	F	never-smoker (infant)	Yoshida 2020 Nature 10.1038/s41586-020-1961-1	?	?	0	27	?	?	?	?	NO — not scanned; has tree
+PD37456	-	bronchial epithelium	colony	1y	F	never-smoker (infant)	Yoshida 2020 Nature 10.1038/s41586-020-1961-1	?	?	0	28	?	?	?	?	NO — not scanned; has tree
+PD37580	-	peripheral blood	HSPC colony	43	F	AML + 30y Behcet's; DA x1, MEC x1, long-term chlorambucil + mycophenolate	Mitchell 2025 NatGenet 10.1038/s41588-025-02234-x	hs37d5	hs37d5.fa	100	0	WGS	151	PE	253	nst_links proj 1805,2919
+PD37590	-	colorectal crypt	LCM crypt	55	F	normal	Lee-Six 2019 Nature 10.1038/s41586-019-1672-7	GRCh38	?,GRCh38_full+decoy_hla	64	44	WGS	151	PE	835	nst_links proj 2390,3852
+PD37904	PD37904b	liver (background to HCC)	LCM microdissection	73.7	M	NAFLD; resected HCC	Ng 2021 Nature 10.1038/s41586-021-03974-6	?	?	0	32	?	?	?	?	NO — not scanned; has tree
+PD37907	PD37907b	liver (background to HCC)	LCM microdissection	76.1	M	NAFLD; resected HCC	Ng 2021 Nature 10.1038/s41586-021-03974-6	?	?	0	35	?	?	?	?	NO — not scanned; has tree
+PD37909	PD37909b	liver (background to HCC)	LCM microdissection	76.2	M	NAFLD; resected HCC	Ng 2021 Nature 10.1038/s41586-021-03974-6	?	?	0	31	?	?	?	?	NO — not scanned; has tree
+PD37910	PD37910b	liver (background to HCC)	LCM microdissection	71.3	M	NAFLD; resected HCC	Ng 2021 Nature 10.1038/s41586-021-03974-6	?	?	0	26	?	?	?	?	NO — not scanned; has tree
+PD37914	PD37914b	liver (background to HCC)	LCM microdissection	69.7	F	NAFLD; resected HCC	Ng 2021 Nature 10.1038/s41586-021-03974-6	?	?	0	25	?	?	?	?	NO — not scanned; has tree
+PD37915	PD37915b	liver (background to HCC)	LCM microdissection	69.2	M	NAFLD; resected HCC	Ng 2021 Nature 10.1038/s41586-021-03974-6	?	?	0	24	?	?	?	?	NO — not scanned; has tree
+PD37917	PD37917b	liver (background to HCC)	LCM microdissection	72.0	M	ARLD; resected HCC	Ng 2021 Nature 10.1038/s41586-021-03974-6	?	?	0	21	?	?	?	?	NO — not scanned; has tree
+PD37918	PD37918b	liver (background to HCC)	LCM microdissection	66.2	M	NAFLD; resected HCC	Ng 2021 Nature 10.1038/s41586-021-03974-6	?	?	0	33	?	?	?	?	NO — not scanned; has tree
+PD40315	CB001	cord blood	HSPC colony	0	F	normal	Mitchell 2022 Nature 10.1038/s41586-022-04786-y	?	?	0	195	?	?	?	?	NO — not scanned; has tree
+PD40521	KX001	bone marrow	HSPC colony	29	M	normal	Mitchell 2022 Nature 10.1038/s41586-022-04786-y	GRCh38	GRCh38_full+decoy_hla	615	407	WGS	151	PE	314	nst_links proj 2314,2320
+PD40521	KX001	bone marrow	HSPC colony	29	M	normal	Mitchell 2022 Nature 10.1038/s41586-022-04786-y	hs37d5	genome.fa	6	407	WGS	151	PE	288	nst_links proj 3638
+PD40667	KX002	bone marrow	HSPC colony	38	M	inflammatory bowel disease on azathioprine	Mitchell 2022 Nature 10.1038/s41586-022-04786-y	GRCh38	GRCh38_full+decoy_hla	493	380	WGS	151	PE	315	nst_links proj 2314,2328,2482
+PD40667	KX002	bone marrow	HSPC colony	38	M	inflammatory bowel disease on azathioprine	Mitchell 2022 Nature 10.1038/s41586-022-04786-y	hs37d5	GRCh37d5/genome.fa,hs37d5.fa	4	380	TARGETED,WGS	151	PE	658	nst_links proj 2900,3191
+PD41048	SX001	peripheral blood	HSPC colony	48	M	selenoprotein deficiency (not known to affect HSC dynamics)	Mitchell 2022 Nature 10.1038/s41586-022-04786-y	GRCh38	GRCh38_full+decoy_hla	376	362	WGS	151	PE	285	nst_links proj 2152,2314,2441
+PD41048	SX001	peripheral blood	HSPC colony	48	M	selenoprotein deficiency (not known to affect HSC dynamics)	Mitchell 2022 Nature 10.1038/s41586-022-04786-y	GRCh37?no-decoy-in-header	GRCh37d5/genome.fa	1	362	WGS	151	PE	1580	nst_links proj 3191
+PD41048	SX001	peripheral blood	HSPC colony	48	M	selenoprotein deficiency (not known to affect HSC dynamics)	Mitchell 2022 Nature 10.1038/s41586-022-04786-y	hs37d5	hs37d5.fa	36	362	WGS	151	PE	435	nst_links proj 2073
+PD41276	-	peripheral blood	BULK targeted (no colonies)	62->77	M	CH: SF3B1, CBL, ZRSR2	Fabre 2022 Nature PMC9177423	NCBI build37 (per paper)	?	0	85	?	?	?	?	NO — EGA EGAD00001007682/3/4
+PD41305	-	peripheral blood	BULK targeted (no colonies)	57->71	M	CH: SRSF2 P95H	Fabre 2022 Nature PMC9177423	NCBI build37 (per paper)	?	0	92	?	?	?	?	NO — EGA EGAD00001007682/3/4
+PD41768	Tree_18pcw	foetal liver + 2 femurs (18 pcw)	HSPC colony	18 pcw	?	foetal	Chapman 2021 Nature 10.1038/s41586-021-03548-6	?	?	0	234	?	?	?	?	NO — not scanned; has tree
+PD42473	-	?	?	?	?	?	NOT FOUND in literature (has BAMs, no tree)	GRCh38	GRCh38_full+decoy_hla	40	0	WGS	151	PE	531	nst_links proj 2314
+PD42874	-	?	?	?	?	?	NOT FOUND in literature (has BAMs, no tree)	GRCh38	GRCh38_full+decoy_hla	22	0	WGS	151	PE	542	nst_links proj 2314,2317
+PD42874	-	?	?	?	?	?	NOT FOUND in literature (has BAMs, no tree)	hs37d5	hs37d5.fa	6	0	WGS	151	PE	600	nst_links proj 2073
+PD43947	Tree_8pcw	foetal liver (8 pcw)	HSPC colony	8 pcw	?	foetal	Chapman 2021 Nature 10.1038/s41586-021-03548-6	GRCh38	?	298	277	WGS	151	PE	536	nst_links proj 2607,2621
+PD43947	Tree_8pcw	foetal liver (8 pcw)	HSPC colony	8 pcw	?	foetal	Chapman 2021 Nature 10.1038/s41586-021-03548-6	hs37d5	hs37d5.fa	362	277	TARGETED,WGS	150,151	PE	9	nst_links proj 2149,2243,2244,2447
+PD43947	Tree_8pcw	foetal liver (8 pcw)	HSPC colony	8 pcw	?	foetal	Chapman 2021 Nature 10.1038/s41586-021-03548-6	GRCh37?no-decoy-in-header	hs37d5.fa	253	277	WGS	151	PE	543	nst_links proj 2149
+PD43974	KX003	bone marrow	HSPC colony	?	?	normal	Mitchell 2022 Nature 10.1038/s41586-022-04786-y	GRCh38	GRCh38_full+decoy_hla	361	328	WGS	151	PE	363	nst_links proj 2314,2317,2328,2483
+PD43974	KX003	bone marrow	HSPC colony	?	?	normal	Mitchell 2022 Nature 10.1038/s41586-022-04786-y	hs37d5	GRCh37d5/genome.fa,hs37d5.fa	65	328	TARGETED,WGS	151	PE	302	nst_links proj 2073,2567,2901,3191
+PD43974	KX003	bone marrow	HSPC colony	?	?	normal	Mitchell 2022 Nature 10.1038/s41586-022-04786-y	GRCh37?no-decoy-in-header	hs37d5.fa	3	328	TARGETED	151	PE	578	nst_links proj 2761
+PD43976	AX001	peripheral blood	HSPC colony + lymphocyte	63	M	normal	Mitchell 2022 + Machado 2022 Nature 10.1038/s41586-022-05072-7	GRCh38	?,GRCh38_full+decoy_hla,genome.fa	256	0	RNA-Seq,WGS	151,90	PE	316	nst_links proj 2314,3231,3301,3369,3837
+PD43976	AX001	peripheral blood	HSPC colony + lymphocyte	63	M	normal	Mitchell 2022 + Machado 2022 Nature 10.1038/s41586-022-05072-7	GRCh37?no-decoy-in-header	GRCh37d5/genome.fa,hs37d5.fa	194	0	TARGETED,WGS	151	PE	293	nst_links proj 2760,2898,3191
+PD43976	AX001	peripheral blood	HSPC colony + lymphocyte	63	M	normal	Mitchell 2022 + Machado 2022 Nature 10.1038/s41586-022-05072-7	hs37d5	hs37d5.fa	10	0	WGS	151	PE	606	nst_links proj 2898
+PD44579	PX002	peripheral blood	HSPC colony	63	F	Follicular lymphoma; R-CVP x6 (cyclophosphamide 6, vincristine 6, OXALIPLATIN 0); 1.3y since	Mitchell 2025 NatGenet 10.1038/s41588-025-02234-x	GRCh38	GRCh38_full+decoy_hla	192	174	WGS	151	PE	304	nst_links proj 2446
+PD44579	PX002	peripheral blood	HSPC colony	63	F	Follicular lymphoma; R-CVP x6 (cyclophosphamide 6, vincristine 6, OXALIPLATIN 0); 1.3y since	Mitchell 2025 NatGenet 10.1038/s41588-025-02234-x	hs37d5	hs37d5.fa	96	174	WGS	151	PE	274	nst_links proj 2178
+PD44579	PX002	peripheral blood	HSPC colony	63	F	Follicular lymphoma; R-CVP x6 (cyclophosphamide 6, vincristine 6, OXALIPLATIN 0); 1.3y since	Mitchell 2025 NatGenet 10.1038/s41588-025-02234-x	GRCh37?no-decoy-in-header	hs37d5.fa	94	174	WGS	151	PE	315	nst_links proj 2178
+PD44887	-	colon (normal)	LCM microbiopsy	56	F	MUTYH-associated polyposis (Y179C/G396D)	Robinson 2022 NatCommun PMC9270427	GRCh38	GRCh38_full+decoy_hla	33	32	WGS	151	PE	808	nst_links proj 2460
+PD44890	-	colon (normal)	LCM microbiopsy	16	M	MUTYH-associated polyposis	Robinson 2022 NatCommun PMC9270427	GRCh38	GRCh38_full+decoy_hla	50	49	WGS	151	PE	753	nst_links proj 2460
+PD45517	CB002	cord blood	HSPC colony	0	?	normal	Mitchell 2022 Nature 10.1038/s41586-022-04786-y	GRCh38	GRCh38_full+decoy_hla,genome.fa	497	379	WGS	151	PE	347	nst_links proj 2449,3230
+PD45517	CB002	cord blood	HSPC colony	0	?	normal	Mitchell 2022 Nature 10.1038/s41586-022-04786-y	hs37d5	genome.fa	6	379	WGS	151	PE	567	nst_links proj 3638
+PD45534	KX004	bone marrow	HSPC colony	77-78	F	normal (organ donor, trauma)	Mitchell 2022 Nature 10.1038/s41586-022-04786-y	GRCh38	GRCh38_full+decoy_hla,genome.fa	945	922	WGS	151	PE	338	nst_links proj 2450,3819,3838
+PD45534	KX004	bone marrow	HSPC colony	77-78	F	normal (organ donor, trauma)	Mitchell 2022 Nature 10.1038/s41586-022-04786-y	hs37d5	GRCh37d5/genome.fa,hs37d5.fa	572	922	TARGETED,WGS	151	PE	317	nst_links proj 2515,2566,2902,3191
+PD45534	KX004	bone marrow	HSPC colony	77-78	F	normal (organ donor, trauma)	Mitchell 2022 Nature 10.1038/s41586-022-04786-y	GRCh37?no-decoy-in-header	hs37d5.fa	1	922	WGS	151	PE	315	nst_links proj 2515
+PD47537	-	peripheral blood	HSPC colony	61	F	Metastatic colon ca; Ox/Cape, Irinotecan/5FU, Ox/5FU; 16 cy (oxaliplatin 11, CYCLOPHOSPHAMIDE 0); radiotherapy 3y	Mitchell 2025 NatGenet 10.1038/s41588-025-02234-x	GRCh38	?	46	0	WGS	151	PE	322	nst_links proj 2622
+PD47537	-	peripheral blood	HSPC colony	61	F	Metastatic colon ca; Ox/Cape, Irinotecan/5FU, Ox/5FU; 16 cy (oxaliplatin 11, CYCLOPHOSPHAMIDE 0); radiotherapy 3y	Mitchell 2025 NatGenet 10.1038/s41588-025-02234-x	hs37d5	hs37d5.fa	46	0	WGS	151	PE	319	nst_links proj 2278
+PD47540	-	peripheral blood	HSPC colony	57	F	Follicular lymphoma; R-CHOP x6; 2.7y since	Mitchell 2025 NatGenet 10.1038/s41588-025-02234-x	GRCh38	GRCh38_full+decoy_hla	5	0	WGS	151	PE	571	nst_links proj 2446
+PD47540	-	peripheral blood	HSPC colony	57	F	Follicular lymphoma; R-CHOP x6; 2.7y since	Mitchell 2025 NatGenet 10.1038/s41588-025-02234-x	hs37d5	hs37d5.fa	5	0	WGS	151	PE	566	nst_links proj 2178
+PD47541	-	peripheral blood	HSPC colony	64	M	Follicular lymphoma; rituximab+bendamustine x5; 0.1y since	Mitchell 2025 NatGenet 10.1038/s41588-025-02234-x	GRCh38	GRCh38_full+decoy_hla	10	0	WGS	151	PE	509	nst_links proj 2446
+PD47541	-	peripheral blood	HSPC colony	64	M	Follicular lymphoma; rituximab+bendamustine x5; 0.1y since	Mitchell 2025 NatGenet 10.1038/s41588-025-02234-x	hs37d5	hs37d5.fa	10	0	WGS	151	PE	504	nst_links proj 2178
+PD47699	-	peripheral blood	HSPC colony	79	F	Myeloma + metastatic colon ca; VMP/lenalidomide + Ox/Cape (dose-reduced)	Mitchell 2025 NatGenet 10.1038/s41588-025-02234-x	GRCh38	?	10	0	WGS	151	PE	568	nst_links proj 2622
+PD47699	-	peripheral blood	HSPC colony	79	F	Myeloma + metastatic colon ca; VMP/lenalidomide + Ox/Cape (dose-reduced)	Mitchell 2025 NatGenet 10.1038/s41588-025-02234-x	hs37d5	hs37d5.fa	10	0	WGS	151	PE	564	nst_links proj 2278
+PD47701	-	peripheral blood	HSPC colony	68	F	Metastatic colon ca; capecitabine, XELOX, irinotecan/5FU; 16 cy; radiotherapy 2y	Mitchell 2025 NatGenet 10.1038/s41588-025-02234-x	GRCh38	?	10	0	WGS	151	PE	552	nst_links proj 2622
+PD47701	-	peripheral blood	HSPC colony	68	F	Metastatic colon ca; capecitabine, XELOX, irinotecan/5FU; 16 cy; radiotherapy 2y	Mitchell 2025 NatGenet 10.1038/s41588-025-02234-x	hs37d5	hs37d5.fa	10	0	WGS	151	PE	549	nst_links proj 2278
+PD47703	PX001	peripheral blood	HSPC colony	48 and 49	F	Hodgkins @10 (ChlVPP), relapse @47 (BGeV), DLBCL 2019 (R-CHOP @48); radiotherapy 39y; TWO TIMEPOINTS	Mitchell 2025 NatGenet 10.1038/s41588-025-02234-x	GRCh38	GRCh38_full+decoy_hla	278	259	WGS	151	PE	344	nst_links proj 2505
+PD47703	PX001	peripheral blood	HSPC colony	48 and 49	F	Hodgkins @10 (ChlVPP), relapse @47 (BGeV), DLBCL 2019 (R-CHOP @48); radiotherapy 39y; TWO TIMEPOINTS	Mitchell 2025 NatGenet 10.1038/s41588-025-02234-x	GRCh37?no-decoy-in-header	hs37d5.fa	96	259	WGS	151	PE	318	nst_links proj 2275
+PD47703	PX001	peripheral blood	HSPC colony	48 and 49	F	Hodgkins @10 (ChlVPP), relapse @47 (BGeV), DLBCL 2019 (R-CHOP @48); radiotherapy 39y; TWO TIMEPOINTS	Mitchell 2025 NatGenet 10.1038/s41588-025-02234-x	hs37d5	hs37d5.fa	182	259	WGS	151	PE	365	nst_links proj 2275
+PD47738	KX007	bone marrow	HSPC colony	75	M	normal (organ donor)	Mitchell 2022 Nature 10.1038/s41586-022-04786-y	?	?	0	315	?	?	?	?	NO — not scanned; has tree
+PD4781	-	peripheral blood	BFU-E colony	73(dx)	F	PV	Williams 2022 Nature 10.1038/s41586-021-04312-6	GRCh37?no-decoy-in-header	hs37d5.fa	14	62	TARGETED,WGS	101,151	PE	811	nst_links proj 2281,2529
+PD4781	-	peripheral blood	BFU-E colony	73(dx)	F	PV	Williams 2022 Nature 10.1038/s41586-021-04312-6	hs37d5	GRCh37d5/genome.fa,hs37d5.fa	76	62	TARGETED,WGS,WXS	151,75	PE	341	nst_links proj 1805,1859,2108,3089
+PD48367	PD48367i	liver (explant, multi-segment)	LCM microdissection	68.7	M	NAFLD; liver transplant	Ng 2021 Nature 10.1038/s41586-021-03974-6	?	?	0	154 (8 per-region trees: PD48367=24, PD48367b=20, PD48367c=17, PD48367d=15, PD48367e=22, PD48367f=18, PD48367g=21, PD48367h=17)	?	?	?	?	NO — not scanned; has tree
+PD48372	PD48372i	liver (explant, multi-segment)	LCM microdissection	68.2	M	NAFLD; liver transplant	Ng 2021 Nature 10.1038/s41586-021-03974-6	?	?	0	154 (8 per-region trees: PD48372=14, PD48372b=18, PD48372c=23, PD48372d=19, PD48372e=17, PD48372f=19, PD48372g=22, PD48372h=22)	?	?	?	?	NO — not scanned; has tree
+PD48402	KX008	bone marrow	HSPC colony	76	F	normal (organ donor, ICH); Lyme disease aged 22	Mitchell 2022 Nature 10.1038/s41586-022-04786-y	GRCh38	GRCh38_full+decoy_hla	371	367	WGS	151	PE	340	nst_links proj 2501
+PD49226	BCL009	?	?	?	?	?	NOT FOUND in literature (has tree, no BAM located)	?	?	0	345	?	?	?	?	NO — not scanned; has tree
+PD49227	BCL008	?	?	?	?	?	NOT FOUND in literature (has tree, no BAM located)	?	?	0	424	?	?	?	?	NO — not scanned; has tree
+PD49228	BCL004	?	?	?	?	?	NOT FOUND in literature (has tree, no BAM located)	?	?	0	487	?	?	?	?	NO — not scanned; has tree
+PD49229	BCL002	?	?	?	?	?	NOT FOUND in literature (has tree, no BAM located)	?	?	0	723	?	?	?	?	NO — not scanned; has tree
+PD49236	KX009?	bone marrow	HSPC colony	63	M	normal (organ donor); unpublished before 2025	Mitchell 2025 NatGenet 10.1038/s41588-025-02234-x	hs37d5	genome.fa,hs37d5.fa	423	422	WGS	151	PE	357	nst_links proj 2510,3191
+PD49237	KX010?	bone marrow	HSPC colony	60	F	normal (organ donor); unpublished before 2025	Mitchell 2025 NatGenet 10.1038/s41588-025-02234-x	hs37d5	genome.fa,hs37d5.fa	232	231	WGS	151	PE	373	nst_links proj 2523,3191
+PD49237	KX010?	bone marrow	HSPC colony	60	F	normal (organ donor); unpublished before 2025	Mitchell 2025 NatGenet 10.1038/s41588-025-02234-x	GRCh37?no-decoy-in-header	hs37d5.fa	136	231	WGS	151	PE	346	nst_links proj 2523
+PD50306	-	peripheral blood	HSPC colony	3	M	Neuroblastoma; Rapid COJEC, Bu/Mel autograft; 0.4y since	Mitchell 2025 NatGenet 10.1038/s41588-025-02234-x	GRCh38	?	10	0	WGS	151	PE	642	nst_links proj 2622
+PD50306	-	peripheral blood	HSPC colony	3	M	Neuroblastoma; Rapid COJEC, Bu/Mel autograft; 0.4y since	Mitchell 2025 NatGenet 10.1038/s41588-025-02234-x	hs37d5	hs37d5.fa	10	0	WGS	151	PE	637	nst_links proj 2278
+PD50307	PX003	peripheral blood	HSPC colony	40	F	NSCLC; carboplatin+etoposide x6; 0.9y since; radiotherapy <1y	Mitchell 2025 NatGenet 10.1038/s41588-025-02234-x	GRCh38	?	61	41	WGS	151	PE	334	nst_links proj 2622
+PD50307	PX003	peripheral blood	HSPC colony	40	F	NSCLC; carboplatin+etoposide x6; 0.9y since; radiotherapy <1y	Mitchell 2025 NatGenet 10.1038/s41588-025-02234-x	hs37d5	hs37d5.fa	61	41	WGS	151	PE	331	nst_links proj 2278
+PD50308	-	peripheral blood	HSPC colony	27	F	Hodgkins lymphoma; escalated BEACOPP x6; 2.2y since	Mitchell 2025 NatGenet 10.1038/s41588-025-02234-x	GRCh38	?	49	0	WGS	151	PE	384	nst_links proj 2622
+PD50308	-	peripheral blood	HSPC colony	27	F	Hodgkins lymphoma; escalated BEACOPP x6; 2.2y since	Mitchell 2025 NatGenet 10.1038/s41588-025-02234-x	hs37d5	hs37d5.fa	49	0	WGS	151	PE	381	nst_links proj 2278
+PD5117	-	peripheral blood	BFU-E colony	64(dx)	F	PV	Williams 2022 Nature 10.1038/s41586-021-04312-6	?	?	0	89	?	?	?	?	NO — not scanned; has tree
+PD5147	-	peripheral blood	BFU-E colony	81(dx)	F	PV	Williams 2022 Nature 10.1038/s41586-021-04312-6	GRCh37?no-decoy-in-header	hs37d5.fa	4	67	TARGETED	101	PE	846	nst_links proj 2281
+PD5147	-	peripheral blood	BFU-E colony	81(dx)	F	PV	Williams 2022 Nature 10.1038/s41586-021-04312-6	hs37d5	hs37d5.fa	91	67	WGS	151	PE	395	nst_links proj 1805,2108
+PD5163	-	peripheral blood	BFU-E colony	31(dx)	F	PV; portal/splenic vein thrombosis	Williams 2022 Nature 10.1038/s41586-021-04312-6	?	?	0	71	?	?	?	?	NO — not scanned; has tree
+PD51632	-	blood/bone marrow	HSPC colony	55(dx), 55+59(sampled)	M	CML, e13a2	Kamizela 2025 Nature 10.1038/s41586-025-08817-2	GRCh38 (per paper)	?	0	0	?	?	?	?	NO — EGA EGAD00001015353
+PD51633	-	blood/bone marrow	HSPC colony	52	M	CML, e14a2	Kamizela 2025 Nature 10.1038/s41586-025-08817-2	GRCh38 (per paper)	?	0	0	?	?	?	?	NO — EGA EGAD00001015353
+PD51634	-	blood/bone marrow	HSPC colony	50(dx), 50+55	F	CML, e14a2	Kamizela 2025 Nature 10.1038/s41586-025-08817-2	GRCh38 (per paper)	?	0	0	?	?	?	?	NO — EGA EGAD00001015353
+PD51635	-	blood/bone marrow	HSPC colony	61(dx), 61+70	F	CML, e14a2	Kamizela 2025 Nature 10.1038/s41586-025-08817-2	GRCh38 (per paper)	?	0	0	?	?	?	?	NO — EGA EGAD00001015353
+PD5179	-	peripheral blood	BFU-E colony	34(dx)	M	PV; Budd-Chiari at dx; PPV-MF at 48	Williams 2022 Nature 10.1038/s41586-021-04312-6	?	?	0	93	?	?	?	?	NO — not scanned; has tree
+PD5182	-	bone marrow	BFU-E colony	32(dx)	M	PV	Williams 2022 Nature 10.1038/s41586-021-04312-6	GRCh38	?,GRCh38_full+decoy_hla	7	161	WGS	151	PE	673	nst_links proj 2611,3535
+PD5182	-	bone marrow	BFU-E colony	32(dx)	M	PV	Williams 2022 Nature 10.1038/s41586-021-04312-6	GRCh37?no-decoy-in-header	hs37d5.fa	9	161	TARGETED	101	PE	737	nst_links proj 2281
+PD5182	-	bone marrow	BFU-E colony	32(dx)	M	PV	Williams 2022 Nature 10.1038/s41586-021-04312-6	hs37d5	GRCh37d5/genome.fa,hs37d5.fa	175	161	WGS,WXS	150,151,75	PE	417	nst_links proj 1500,1805,1859,2108,2743
+PD53373	BCL003	?	?	?	?	?	NOT FOUND in literature (has tree, no BAM located)	?	?	0	536	?	?	?	?	NO — not scanned; has tree
+PD53374	BCL006	?	?	?	?	?	NOT FOUND in literature (has tree, no BAM located)	?	?	0	298	?	?	?	?	NO — not scanned; has tree
+PD56961	-	blood/bone marrow	HSPC colony	36(dx), 36+48	F	CML, e13a2	Kamizela 2025 Nature 10.1038/s41586-025-08817-2	GRCh38 (per paper)	?	0	0	?	?	?	?	NO — EGA EGAD00001015353
+PD57332	-	blood/bone marrow	HSPC colony	81	M	CML, e14a2	Kamizela 2025 Nature 10.1038/s41586-025-08817-2	GRCh38 (per paper)	?	0	0	?	?	?	?	NO — EGA EGAD00001015353
+PD57333	-	blood/bone marrow	HSPC colony	63(dx), 65	M	CML, e13a2	Kamizela 2025 Nature 10.1038/s41586-025-08817-2	GRCh38 (per paper)	?	0	0	?	?	?	?	NO — EGA EGAD00001015353
+PD57334	-	blood/bone marrow	HSPC colony	22(dx), 23	M	CML, e13a2	Kamizela 2025 Nature 10.1038/s41586-025-08817-2	GRCh38 (per paper)	?	0	0	?	?	?	?	NO — EGA EGAD00001015353
+PD57335	-	blood/bone marrow	HSPC colony	45(dx), 46+47	M	CML, e14a2	Kamizela 2025 Nature 10.1038/s41586-025-08817-2	GRCh38 (per paper)	?	0	0	?	?	?	?	NO — EGA EGAD00001015353
+PD5847	-	bone marrow	BFU-E colony	44(dx)	F	PV; portal vein thrombosis	Williams 2022 Nature 10.1038/s41586-021-04312-6	?	?	0	99	?	?	?	?	NO — not scanned; has tree
+PD60243	-	granulocytes / MNC / buccal	BULK -- NO COLONIES	81	?	CML, blast phase	Kamizela 2025 Nature 10.1038/s41586-025-08817-2	GRCh38 (per paper)	?	0	0	?	?	?	?	NO — EGA EGAD00001015353
+PD6629	-	peripheral blood	BFU-E colony	54(dx)	M	ET	Williams 2022 Nature 10.1038/s41586-021-04312-6	?	?	0	61	?	?	?	?	NO — not scanned; has tree
+PD6634	-	peripheral blood	BFU-E colony	26(dx),59.6(sampled)	?	ET; PPM1D Q462* acquired by age ~5.8	Williams 2022 Nature 10.1038/s41586-021-04312-6	?	?	0	36	?	?	?	?	NO — not scanned; has tree
+PD6646	-	peripheral blood	BFU-E colony	76(dx)	F	ET	Williams 2022 Nature 10.1038/s41586-021-04312-6	?	?	0	118	?	?	?	?	NO — not scanned; has tree
+PD7271	-	peripheral blood	BFU-E colony	20(dx)	F	ET	Williams 2022 Nature 10.1038/s41586-021-04312-6	?	?	0	89	?	?	?	?	NO — not scanned; has tree
+PD9478	-	peripheral blood	BFU-E colony	53(dx)	F	PV; PPV-MF at 71	Williams 2022 Nature 10.1038/s41586-021-04312-6	GRCh37?no-decoy-in-header	hs37d5.fa	15	82	TARGETED	101	PE	733	nst_links proj 2281
+PD9478	-	peripheral blood	BFU-E colony	53(dx)	F	PV; PPV-MF at 71	Williams 2022 Nature 10.1038/s41586-021-04312-6	hs37d5	GRCh37d5/genome.fa,hs37d5.fa	92	82	TARGETED,WGS	100,151	PE	428	nst_links proj 1661,1805,2108,2642
