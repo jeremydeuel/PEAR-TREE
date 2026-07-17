@@ -50,10 +50,32 @@ got=$(cut -f1,2 "$TMP/found.tsv" | sort -u | wc -l | tr -d ' ')
 echo
 echo "manifest samples: $tot   resolved in nst_links: $got   unresolved: $((tot-got))"
 echo "(unresolved != absent — nst_links is an incomplete view of iRODS; check with iquest)"
+
+# The per-sample map is the ACTUAL artefact. Counts are a summary of it and summaries lie:
+# on NF1 the glob count for PD51122 in proj 2571 was 413, exactly equal to the manifest's
+# 413, which looked like proof the release was complete. It was not — the manifest-restricted
+# count is 410, and 3 samples live only in proj 2789. Two aggregates agreed while disagreeing
+# member-by-member. Always select on this map, never on "the project whose total looks right".
+MAP="${MAP:-$HOME/$(basename "$MAN" .tsv).sample_project.tsv}"
+{ echo -e "donor\tsample\tproject"; sort -u "$TMP/found.tsv"; } > "$MAP"
+echo "per-sample map written: $MAP"
+
 echo
-echo "### manifest samples per (donor x project) — THIS is how you pick the project"
+echo "### manifest samples per (donor x project) — a SUMMARY of the map above, not a selector"
 awk -F'\t' '{print $1"\t"$3}' "$TMP/found.tsv" | sort | uniq -c \
     | awk '{printf "  %-9s proj %-6s %s manifest samples\n", $2, $3, $1}'
+
+# Samples reachable from exactly ONE project: these are the ones a "pin to project X"
+# selection silently drops.
+echo
+echo "### samples that exist in ONLY ONE project (a single-project selection would drop these)"
+cut -f2,3 "$TMP/found.tsv" | sort -u | cut -f1 | sort | uniq -c | awk '$1==1{print $2}' > "$TMP/single.txt"
+if [ -s "$TMP/single.txt" ]; then
+    join -1 1 -2 2 <(sort "$TMP/single.txt") <(sort -k2,2 "$TMP/found.tsv" | awk '{print $1"\t"$2"\t"$3}' | sort -k2,2) 2>/dev/null \
+        | awk '{print $3}' | sort | uniq -c | awk '{printf "  proj %-6s is the ONLY home of %s manifest sample(s)\n", $2, $1}'
+else
+    echo "  (none — every manifest sample is reachable from more than one project)"
+fi
 
 echo
 echo "### header probe: $PROBE BAM(s) per (donor x project)"
