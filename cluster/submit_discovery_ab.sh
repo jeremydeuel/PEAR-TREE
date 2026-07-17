@@ -74,6 +74,38 @@ fi
 echo "arms differ by exactly one setting (slippage_filter) — OK"
 grep -H '^slippage_filter' "$CFG_A" "$CFG_B" | sed 's/^/  /'
 
+# DOES THE BINARY ACTUALLY HAVE THE GATE? Verifying the configs differ is necessary and NOT
+# sufficient, which this A/B learned the expensive way: the slippage gate was never committed,
+# the farm built a binary without it, config.rs's unknown-key arm ignored `slippage_filter`
+# with a warning nobody read, and both arms of a 180-BAM-scan experiment ran IDENTICAL code
+# and reported "the gate cuts 0.0%" across all 90 colonies. The assertion above passed the
+# whole time. A config asking for a feature is not evidence the binary implements it.
+#
+# main.rs prints "slippage filter: ON/OFF" in its banner, so the literal is in the binary iff
+# the feature is compiled in. That makes this a free, exact check.
+BIN="${DISCOVER_BIN:-rust/peartree-discovery/target/release/peartree-discovery}"
+if [ ! -x "$BIN" ]; then
+    echo >&2 "no discovery binary at $BIN — build it: bash cluster/build.sh"
+    exit 1
+fi
+# grep the binary DIRECTLY (-a = treat as text). Do NOT write `strings "$BIN" | grep -q ...`:
+# under `set -o pipefail` that returns FAILURE on a SUCCESSFUL match — grep -q exits at the
+# first hit, strings is still writing, takes SIGPIPE, and pipefail reports the pipeline as
+# failed. That is the identical bug that made catalogue_headers.sh label every GRCh38 BAM
+# "chr1" (commit 24e0a9b), and it silently inverted this check when first written: the probe
+# refused a binary that DID have the gate.
+if ! LC_ALL=C grep -qaF 'slippage filter:' "$BIN" 2>/dev/null; then
+    echo >&2
+    echo >&2 "REFUSING TO SUBMIT: $BIN does not implement the slippage gate."
+    echo >&2 "  It would IGNORE slippage_filter (config.rs tolerates unknown keys by design,"
+    echo >&2 "  warning to stderr), both arms would run identical code, and the A/B would"
+    echo >&2 "  report a 0.0% effect that means 'not tested', not 'no effect'."
+    echo >&2 "  Rebuild from current source:  bash cluster/build.sh"
+    echo >&2 "  Then confirm:  $BIN --step discover --bam <bam> --out /tmp/x.gz --config $CFG_A 2>&1 | grep 'slippage filter'"
+    exit 1
+fi
+echo "binary implements the slippage gate — OK ($BIN)"
+
 echo
 echo "=============== arm A: slippage_filter = true  -> $OUT_A"
 FOFN="$FOFN" OUTDIR="$OUT_A" DISCOVER_CFG="$CFG_A" bash cluster/submit_discovery.sh

@@ -130,6 +130,18 @@ fn main() -> io::Result<()> {
         Some(set) => eprintln!("contig allowlist: {} contigs", set.len()),
         None => eprintln!("contig allowlist: none (legacy len<=5 + not-MT filter)"),
     }
+    // Report the slippage gate's EFFECTIVE state. Every setting that changes what is emitted
+    // should be visible in this banner: an A/B of this gate once returned "cuts 0.0%" because
+    // the binary predated the feature and ignored the key, and nothing in the output said so.
+    // A filter you cannot see is a filter you cannot trust you ran.
+    if config.slippage_filter {
+        eprintln!(
+            "slippage filter: ON (min_ref_run {}, min_clip_frac {}, max_period {})",
+            config.slippage_min_ref_run, config.slippage_min_clip_frac, config.slippage_max_period
+        );
+    } else {
+        eprintln!("slippage filter: OFF");
+    }
     if config.exclude_bed.is_some() {
         eprintln!("exclude-bed: {}", config.exclude_bed.as_deref().unwrap());
     }
