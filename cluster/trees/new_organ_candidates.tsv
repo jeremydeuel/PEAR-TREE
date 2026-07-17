@@ -1,8 +1,16 @@
 # CANDIDATE DONORS IN ORGANS WE DO NOT YET COVER — built 2026-07-17
 #
+# INVENTORY ONLY. Nothing here is staged and no cohort has been selected. This is a list of
+# what EXISTS. See cluster/trees/INVENTORY.md for the farm survey result and the open
+# questions (assay type, read length) that must be answered before anything is progressed.
+#
 # Source: PD ids extracted from the SUPPLEMENTARY TABLES of papers by Martincorena /
 # Stratton / Cagan / Nangalia (2024-2026), diffed against cluster/trees/donor_table.tsv.
 # Every id below is literally present in a paper's supplement. None are inferred.
+#
+# FARM STATUS (2026-07-17): all 40 are on the farm; manifest coverage 238/238 stomach and
+# 909/909 NF1 in nst_links; none needs an EGA request. NF1 WGS release = project 2571.
+# The `ega` column below is therefore a provenance record, NOT a to-download list.
 #
 # ONLY WGS DONORS ARE LISTED. Targeted/duplex/exome-only cohorts are excluded because they
 # cannot support insertion discovery — see the EXCLUDED block at the bottom.

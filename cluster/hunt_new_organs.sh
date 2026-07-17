@@ -86,24 +86,26 @@ done
 
 cat <<'EOF'
 
-############ WHAT TO DO WITH THE ANSWER
+############ WHAT THIS ANSWERED — AND WHAT IT DOES NOT DECIDE
 
-If the donors ARE on the farm:
-  - STAGE them, never compute off nst_links (Sanger policy; nst_links symlinks into the
-    iRODS resource servers and streaming whole BAMs hammers shared archive infrastructure):
-      module load dataImportExport
-      stageBam.pl --lustre 126 --types m --sample <file-of-sample-names> \
-                  --project <PROJECT> -o /lustre/scratch126/casm/staging/team273/jd43 -fo
-  - Build the sample file from cluster/manifests/*.tsv, NOT from a glob.
+THIS IS AN INVENTORY. It records what EXISTS and where. It does NOT select a cohort and it
+does NOT stage anything. Which samples get progressed is a separate, later decision —
+see cluster/trees/INVENTORY.md for the standing result.
 
-PRIORITY: the 305 NORMAL BRAIN LCM whole genomes in oliver2025nf1.wgs.tsv:
-    awk -F'\t' 'NR>1 && $3=="WGS_LCM" && $6=="BRAIN" && $7=="NORMAL" {print $2}' \
-        cluster/manifests/oliver2025nf1.wgs.tsv > ~/nf1_brain.samples
-Brain is the tissue where somatic L1 retrotransposition is actually reported. 193 of the 838
-NF1 LCM samples are TUMOUR (glioma) and 34 have an unknown site — both are excluded by the
-filter above. Do not let them into a "normal tissue" cohort.
+Answered: is it here (yes/no), under which project, at what assembly, and how much of the
+paper's manifest we can account for.
+
+NOT answered — run cluster/probe_new_organs.sh for these:
+  - assay type (@RG DS:). A donor GLOB sweeps in targeted-panel BAMs that are named exactly
+    like the WGS ones. Presence in nst_links says nothing about whether a sample is usable.
+  - read length. 75bp vs 151bp decides whether clip-based MEI discovery works at all, and
+    remapping cannot fix short reads.
 
 If a donor is NOWHERE: it is EGA-only (EGAD00001015398 NF1 / EGAD00001015351 stomach /
 EGAD00001009812 Wilms) and needs a data-access request. Tissue and library_type CANNOT be
 resolved on the farm — the NPG `seq` zone is not visible from farm22, only `cgp`.
+
+WHEN a cohort is eventually chosen: build the sample file from cluster/manifests/*.tsv, never
+from a glob, and STAGE it — never compute off nst_links (Sanger policy: those are symlinks
+into the iRODS resource servers).
 EOF

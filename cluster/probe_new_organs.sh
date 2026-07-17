@@ -85,11 +85,14 @@ done
 
 cat <<'EOF'
 
-### READING THIS
+### READING THIS — this is INVENTORY, it does not select a cohort
   DS must say WGS. A TARGETED_ILLUMINA / panel DS means the sample is NOT usable for
   insertion discovery, no matter how good the depth looks.
   READLEN 151bp = good. 75bp = clip-based MEI discovery is badly compromised and remapping
-  cannot fix it — decide before spending a stage+remap on it.
+  cannot fix it. A donor can be on the farm, correctly assembled, and still worthless.
   ASSEMBLY is triage only (we remap to hs1); but note it, and re-check the @SQ of every BAM
   you actually use — assembly is a property of the BAM, not the project.
+
+  Record the answer in cluster/trees/INVENTORY.md. Choosing what to progress is a SEPARATE
+  decision, made after the inventory is complete — not implied by anything printed above.
 EOF
