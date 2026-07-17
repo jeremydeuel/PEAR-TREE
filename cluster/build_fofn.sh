@@ -3,6 +3,19 @@
 #
 #   bash build_fofn.sh PD41048:2073 PD34200:1748 PD37449:1743 PD43947:2244 PD43974:2567
 #
+# *** SUPERSEDED for the GRCh38 9x10 benchmark -- use cluster/stage_picked.sh instead. ***
+#
+# *** THIS SCRIPT VIOLATES SANGER POLICY AS WRITTEN. *** It emits nst_links paths into a
+# fofn that discovery then reads END-TO-END. Policy: BAM records are ALWAYS read from a
+# STAGED Lustre copy, NEVER from nst_links -- those are symlinks into the iRODS resource
+# servers, and streaming terabytes off them hammers shared archive infrastructure. Only
+# HEADER reads (view -H / idxstats, as used by the gates below) are allowed there.
+#
+# It survives because its per-BAM gates (assay, assembly, depth, .bai, truncation) are sound
+# and worth keeping. If you resurrect it for a new cohort, make it emit STAGED paths --
+# resolve via nst_links/the catalogue, stage with stageBam.pl, then write the fofn from
+# $STAGE/$PROJ/$SAMPLE/... See cluster/stage_picked.sh for the shape that does this right.
+#
 # Takes explicit <patient>:<project> pairs, NOT a bare patient. This is deliberate:
 # nst_links re-releases the same colonies under several project ids and the assembly
 # differs between (and even within) those releases -- project 1903 holds PD41048 on
