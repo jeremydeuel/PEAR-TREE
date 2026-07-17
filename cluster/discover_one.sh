@@ -20,8 +20,15 @@ CFG="${DISCOVER_CFG:-cluster/config.discovery.grch37}"
 
 BAM="$(sed -n "${IDX}p" "$FOFN")"
 [ -n "$BAM" ] || { echo "no BAM at line $IDX of $FOFN" >&2; exit 1; }
-# <id>/mapped_sample/<id>.sample.dupmarked.bam  ->  <id>
-ID="$(basename "$(dirname "$(dirname "$BAM")")")"
+# Derive the colony id from the FILENAME, not the directory. Both layouts we read from
+# end in <id>.sample.dupmarked.bam, but their parent dirs differ:
+#   staging  : <id>/mapped_sample/<id>.sample.dupmarked.bam       -> dir(dir()) = <id>
+#   nst_links: <project>/<id>/<id>.sample.dupmarked.bam           -> dir(dir()) = <project>  !!
+# The old dir-based rule silently collapsed every nst_links colony of a patient onto the
+# PROJECT number, so all but the first "skipped, output exists" and you got 1 file per
+# project instead of 1 per colony. Filename-based is correct for both.
+ID="$(basename "$BAM")"; ID="${ID%.bam}"; ID="${ID%.cram}"; ID="${ID%.sample.dupmarked}"
+[ -n "$ID" ] || { echo "could not derive id from $BAM" >&2; exit 1; }
 OUT="$OUTDIR/${ID}.txt.gz"
 
 mkdir -p "$OUTDIR"

@@ -1,4 +1,22 @@
-# PEAR-TREE - paired ends of aberrant retrotransposons in phylogenetic trees
+# LOCAL (off-cluster) twin of cluster/config.py.grch37 — same thresholds, Mac paths.
+#
+# Purpose: re-run step 2 (combine_insertions) for donor PD44579 on a laptop, against the
+# discovery/*.txt.gz pulled off the farm, so the union/aggregation can be debugged without
+# an LSF round-trip. Every threshold below is byte-identical to the farm config; ONLY the
+# tool and resource paths differ, so a local combine reproduces the farm's 30,025-locus
+# contract exactly.
+#
+# Local resources (verified present):
+#   bowtie2 2.5.5   /opt/homebrew/bin/bowtie2
+#   samtools 1.23   /opt/homebrew/bin/samtools
+#   hs1 bt2 index   /Users/jeremy/Downloads/hs1.{1,2,3,4,rev.1,rev.2}.bt2
+#   hs1->hg19 chain /Users/jeremy/.pyliftover/hs1ToHg19.over.chain.gz  (pyliftover.LiftOver
+#                   takes a path, so the farm's hs1.hg19.all.chain.gz is not needed)
+#   hg19.2bit       /Users/jeremy/Documents/genomes/hg19.2bit  (UCSC goldenPath, ~800 MB)
+#
+# Usage: copy to a scratch dir as `config.py` and put that dir FIRST on sys.path, so it
+# shadows the repo's src/config.py without overwriting it.
+#
 #
 # Copyright (C) 2025 Jeremy Deuel <jeremy.deuel@usz.ch>
 #
@@ -94,21 +112,23 @@ CONFIG = {
     'combine_insertions': {
         # GRCh37: reference flanks come from hg19 (same coordinates as hs37d5 for
         # 1..22,X,Y; get_sequence maps 1 -> chr1).
-        'genome_2bit': '/lustre/scratch126/casm/teams/team273/users/jd43/hg19.2bit',
+        'genome_2bit': '/Users/jeremy/Documents/genomes/hg19.2bit',
         'exclude_files_with_many_insertions': 1_000_000, #exclude files with more than this number of insertions
-        'samtools_executable': '/software/spack_environments/default/00/opt/spack/linux-ubuntu22.04-x86_64_v3/gcc-13.1.0/samtools-1.19-ufgcnbyuj24ufumlyimozp6habconpvy/bin/samtools', #module load samtools-1.19
-        'bowtie2_executable': '/nfs/users/nfs_j/jd43/software/bowtie2-2.5.4-linux-x86_64/bowtie2', #self-installed 2.5.4 (no module needed; the spack bowtie2-2.5.2 module does not even report --version)
-        'bowtie2_index': '/lustre/scratch126/casm/teams/team273/users/jd43/pt_hu_trees/hs1/hs1', #T2T: clean-remap check (assembly-independent)
-        'bowtie2_index2': '/lustre/scratch126/casm/teams/team273/users/jd43/pt_hu_trees/hs1/hs1', #T2T: clip re-map for position identification
-        'bowtie2_index2_lo': '/lustre/scratch126/casm/teams/team273/users/jd43/hs1.hg19.all.chain.gz', #hs1 -> hg19 chain: reconciles clip hits with the GRCh37 breakpoints
+        'samtools_executable': '/opt/homebrew/bin/samtools', #brew install samtools (1.23)
+        'bowtie2_executable': '/opt/homebrew/bin/bowtie2', #brew install bowtie2 (2.5.5)
+        'bowtie2_index': '/Users/jeremy/Downloads/hs1', #T2T: clean-remap check (assembly-independent). Prebuilt local index.
+        'bowtie2_index2': '/Users/jeremy/Downloads/hs1', #T2T: clip re-map for position identification
+        'bowtie2_index2_lo': '/Users/jeremy/.pyliftover/hs1ToHg19.over.chain.gz', #hs1 -> hg19 chain: reconciles clip hits with the GRCh37 breakpoints. UCSC chain direct from pyliftover's cache; equivalent to the farm's hs1.hg19.all.chain.gz.
         'clean_remap_max_insertion': 12, #a consensus is "maps to reference" (dropped) only if its end-to-end remap opens no insertion this long or longer
         'clean_remap_min_as': -15, #...and only if the end-to-end alignment score (bowtie2 AS) is at least this
     },
+    # NOTE: the 'annotate' paths below are still FARM paths — step 3 has not been
+    # localised. rmsk is repointed at the in-repo copy; hmm/dfamscan/hmmer/tmp are not.
     'annotate': { #necessary for annotate_v2.py (step 3, optional element classification)
         # NOTE: annotate works in bowtie2_index2 (hs1) space, NOT GRCh37 — so rmsk and
         # exon_annotation here must be hs1-based. The GRCh37 exon file built for the
         # discovery splice feature (grch37.exons.bed.gz) is NOT valid here.
-        'rmsk': '/lustre/scratch126/casm/teams/team273/users/jd43/pt_hu_trees/hs1.repeatMasker.out.gz', # RepeatMasker annotation of the bowtie2_index2 (hs1) genome
+        'rmsk': '/Users/jeremy/Documents/PEAR-TREE/hs1.repeatMasker.out.gz', # RepeatMasker annotation of the bowtie2_index2 (hs1) genome
         'exon_annotation': None, # hs1-based exon BED for processed-pseudogene annotation; None = off
         'tmp': lambda extension: lambda sample: f'/lustre/scratch126/casm/teams/team273/users/jd43/tmp/{sample}.{extension}',
         'hmm': '/lustre/scratch126/casm/teams/team273/users/jd43/Dfam-curated_only-hs.hmm', #hmmpress'd (h3f/h3i/h3m/h3p present)
