@@ -4,8 +4,10 @@
 //! spanning reads, apply the same read gates and per-fragment dedup as the Python
 //! genotyper, score each read on both junctions, and summarise to a call. Loci are
 //! independent, so the work is split across threads (each with its own indexed
-//! reader) and the rows are re-assembled in contract order — the output is
-//! byte-identical to the single-threaded Python run.
+//! reader) and the rows are re-assembled in contract order — the output matches
+//! the single-threaded Python run byte-for-byte, with ONE deliberate exception:
+//! at high-coverage loci the depth count early-exits (see `genotype_one`), so the
+//! reported `coverage` is capped at the threshold rather than the full pileup total.
 
 use crate::config::*;
 use crate::evidence::{qleft, qright};
@@ -107,6 +109,17 @@ fn genotype_one(
             // qcfail/duplicate records). No flag filtering — just precise overlap.
             if overlaps(r.reference_start, r.reference_end, cov_start, cov_end) {
                 coverage += 1;
+                // Early-exit once the high-coverage call is already decided. A pileup locus
+                // (satellite / rDNA / mismapping stack with millions of reads) is flagged
+                // GT_HIGH_COVERAGE no matter its exact depth, so draining the whole pileup
+                // just to finish counting is pure I/O with zero effect on the output — and
+                // it is what wedges genotyping on such loci. This DIVERGES from pysam's full
+                // count on purpose: for high-coverage loci `coverage` is now capped at
+                // reads_for_high_coverage + 1 (a ">threshold" sentinel), not the true total.
+                // Loci at or below the threshold are still counted in full and unchanged.
+                if coverage > cfg.reads_for_high_coverage {
+                    break;
+                }
             }
         }
     }
