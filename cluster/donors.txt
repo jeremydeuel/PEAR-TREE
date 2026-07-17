@@ -9,15 +9,22 @@
 # CODENAME = PD ID (verified by identical tip sets; treating a codename as a separate donor
 # double-counts): KX004=PD45534 KX001=PD40521 KX002=PD40667 CB002=PD45517 KX008=PD48402
 # SX001=PD41048 KX003=PD43974 PX001=PD47703 PX002=PD44579 PX003=PD50307 Tree_8pcw=PD43947
-# AX001=BMH1_TG (361 tips, all named BMH1_TG001_*) = **PD43976**
-#   Established 2026-07-17: Mitchell 2025 Supp T1 lists PD43976 as "Peripheral blood | 63 | M |
-#   Normal - previously published", and its colonies are named PD43976_BMH1_TG001_*. Mitchell
-#   2022 Supp T3 has AX001 -> BMH1_TG001_* and Supp T1 has AX001 = 63/Male. Same colony naming
-#   + same age/sex => same person. Machado 2022 says outright that AX001 "was the same person
-#   as that enrolled in our earlier study of HSC dynamics".
+# KX009=PD49236 KX010=PD49237 PX004=PD50308 PX005=PD47537 PX007=PD37580 AX001=PD43976
+#   The second line was established 2026-07-17 from the Mitchell 2025 trees on **Mendeley
+#   10.17632/2fczcd49yj.1** -- each codename tree has a tip set IDENTICAL to the PD-named one.
+#   NB the Zenodo DOI in our notes (10.5281/zenodo.15235476) is the CODE repo: it holds exactly
+#   one donor's tree (PD37580). Mendeley is where the cohort's 44 trees are.
+#   See cluster/trees/mitchell2025/README.md.
+# AX001=BMH1_TG (361 tips, all named BMH1_TG001_*) = **PD43976 -- PROVEN 2026-07-17**
+#   The Mitchell 2025 tree file named `PD43976.tree` (Mendeley 10.17632/2fczcd49yj.1) has tips
+#   named `BMH1_TG001_P31_A11` etc. The tree named for the PD id CONTAINS the codename's
+#   colonies. That is direct evidence, not inference; no BAM check needed.
+#   Corroborating: Mitchell 2025 Supp T1 has PD43976 = "Peripheral blood | 63 | M | Normal -
+#   previously published"; Mitchell 2022 Supp T1 has AX001 = 63/Male; Machado 2022 states
+#   AX001 "was the same person as that enrolled in our earlier study of HSC dynamics".
 #   CONSEQUENCE: AX001 and PD43976 are ONE donor under two naming schemes, in DIFFERENT
 #   projects (BMH1_TG001_* in 2315/2445/2318; PD43976* in 2314/3231/3301/3369/3837). Do not
-#   count them as two donors. NOT yet confirmed against the BAMs -- verify before merging.
+#   count them as two donors. ~/ax001.samples should hold the BMH1_TG001_* samples.
 #
 # A TREE IS THE ONLY RELIABLE EVIDENCE OF CLONALITY. The `_lo` naming convention is not:
 # PD45534's colonies are letter-coded (aoj, ww, my2) and have a 922-tip tree.
@@ -38,8 +45,13 @@
 #                                  colony-phylogeny pipeline. Supp Table 2 holds VAF
 #                                  trajectories, not colonies. NCBI build37.
 #  Mitchell 2025 Nat Genet         CHEMOTHERAPY, 23 exposed + 9 controls; build37;
-#                                  EGAD00001015339 (WGS) / EGAD00001015340 (NanoSeq);
-#                                  zenodo 10.5281/zenodo.15235476.
+#                                  EGAD00001015339 (WGS) / EGAD00001015340 (NanoSeq).
+#                                  **TREES: Mendeley 10.17632/2fczcd49yj.1** -- all 44 of them.
+#                                  NOT zenodo 10.5281/zenodo.15235476, which is the CODE repo
+#                                  and holds exactly ONE donor's tree (PD37580). The paper's
+#                                  own wording draws the line: Zenodo/github = "smaller derived
+#                                  datasets"; Mendeley = "the main data needed to reanalyze and
+#                                  reproduce the results". See cluster/trees/mitchell2025/.
 #  Spencer Chapman 2024 Nature 635 transplant, 10 donor-recipient PAIRS = Pair* trees;
 #                                  PD45792-PD45813. Each Pair is TWO people.
 #  Kamizela 2025 Nature 640:982    BCR::ABL1 CML; GRCh38; EGAD00001015353;
@@ -68,10 +80,23 @@ PD48402   # 367 tips, depth 1213, 367 hg38 WGS  # =KX008
 PD50307   # 41 tips, depth 1174, 41 hg38 WGS  # =PX003; CHEMO age40 carboplatin+etoposide (=PX003)
 
 # --- CHEMO cohort members not already listed above (Mitchell 2025) ---
-PD37580   # CHEMO age43 chlorambucil from childhood + AML induction
+PD37580   # 84 tips (Mendeley). =PX007; CHEMO age43 F, AML + 30y Behcet's; AML induction DA x1
+          # + MEC x1 (daunorubicin 1, cytarabine 2, etoposide 1, mitoxantrone 1) and long-term
+          # chlorambucil (cycles recorded as "NK-Long-term") + mycophenolate FOR BEHCET'S.
+          # [CORRECTED 2026-07-17: was "chlorambucil from childhood" -- the table says the
+          #  chlorambucil is for Behcet's, duration not quantified.]
 PD47537   # CHEMO age61 F, metastatic colon ca; Ox/Cape, Irinotecan/5FU, Ox/5FU; 16 cy (oxaliplatin 11, cyclophosphamide 0); radiotherapy 3y  [CORRECTED 2026-07-17, was "cyclophosphamide+oxaliplatin"]
-PD47699   # CHEMO low-dose melphalan
-PD50308   # CHEMO age29 Hodgkin, procarbazine+chlorambucil
+PD47699   # 10 tips (Mendeley). CHEMO age79 F, myeloma + metastatic colon ca.
+          # Per-drug cycles: 5FU/capecitabine 3, oxaliplatin 3. **MELPHALAN = 0.**
+          # [CORRECTED 2026-07-17: was "low-dose melphalan" -- the melphalan column is 0.
+          #  CAVEAT, an inconsistency INSIDE the paper: the regimen text reads "Myeloma:VMP",
+          #  and VMP is bortezomib+melphalan+prednisone, yet the melphalan cycle count is 0.
+          #  Do not assume melphalan exposure either way without asking the authors.]
+PD50308   # 41 tips (Mendeley). =PX004; CHEMO age27 F, Hodgkins lymphoma, escalated BEACOPP x6,
+          # 2.2y since. Per-drug: cyclophosphamide 6, procarbazine 6, etoposide 6, bleomycin 6.
+          # **CHLORAMBUCIL = 0.**
+          # [CORRECTED 2026-07-17: was "age29 ... procarbazine+chlorambucil". Age is 27 and the
+          #  chlorambucil column is 0 -- that drug belongs to PD47703's ChlVPP, not this donor.]
 PD60010   # CHEMO bendamustine
 
 # --- BCR::ABL1 CML cohort (Kamizela 2025), GRCh38, colonies per manifest ---
@@ -145,3 +170,21 @@ PD6629
 PD6634
 PD6646
 PD7271
+
+# ---- Mitchell 2025 chemo cohort: 12 donors added 2026-07-17 ----
+# Found via the Mendeley trees (10.17632/2fczcd49yj.1). All were in the paper's Supp Table 1
+# but had no tree in our catalogue, so they never reached donor_table.tsv. All peripheral-blood
+# HSPC colonies. NB the tip counts are 4-10: real chemo-exposed donors, but too few colonies to
+# act as phylogenetic truth for MEI calling. Regimens in cluster/trees/donor_clinical.tsv.
+PD47536   # 5 tips;  67F metastatic colon ca; Ox/FU+Irino/FU+capecitabine, 53 cy (oxaliplatin 22)
+PD47538   # 10 tips; 61F metastatic colon ca; Irinotecan/5FU, 12 cy (oxaliplatin 0)
+PD47539   # 5 tips;  64F follicular lymphoma; R-CVP x6; 5.8y since
+PD47695   # 5 tips;  72F follicular lymphoma -> DLBCL; R-CHOP x6; 5.4y since
+PD47696   # 5 tips;  74M DLBCL; R-CHOP x5
+PD47697   # 10 tips; 72F colon ca; XELOX + adjuvant capecitabine, 5 cy; radiotherapy <1y
+PD47698   # 10 tips; 68M colon ca; XELOX + adjuvant capecitabine, 7 cy; radiotherapy <1y
+PD47700   # 4 tips;  80M metastatic colon ca; FOLFIRI + irino/cape + ox/cape, 28 cy
+PD47702   # 10 tips; 63F metastatic colon ca; Ox/5FU, 11 cy (oxaliplatin 11)
+PD60009   # 9 tips;  58M marginal zone lymphoma; rituximab+bendamustine x6; 1.7y since
+PD60010   # 10 tips; 77M follicular lymphoma; rituximab+bendamustine x6; 0.3y since
+PD60011   # 9 tips;  76M lymphoplasmacytic lymphoma; rituximab+bendamustine x6; 4.1y since

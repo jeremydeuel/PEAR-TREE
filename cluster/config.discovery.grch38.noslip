@@ -1,0 +1,75 @@
+# A/B ARM B: PEAR-TREE Rust discovery for GRCh38 BAMs, homopolymer-slippage gate OFF.
+#
+# Identical to config.discovery.grch38 in EVERY other respect -- diff the two and the only
+# line that differs must be `slippage_filter`. If anything else drifts, the A/B stops
+# measuring the gate and starts measuring the drift. Regenerate rather than hand-edit:
+#     sed 's/^slippage_filter = true/slippage_filter = false/' \
+#         cluster/config.discovery.grch38 > cluster/config.discovery.grch38.noslip
+#
+# ARM B IS THE SUPERSET. The gate only ever drops clip clusters, so arm B's breakpoints are a
+# superset of arm A's. That is what makes the comparison cheap downstream: genotype the union
+# once and subset, rather than genotyping both arms (see cluster/submit_discovery_ab.sh).
+#
+# WHAT THE A/B IS FOR. The gate's shipped settings were measured on ONE donor (PD44579), on
+# hs37d5, against 1kG MEIs called on hs37d5: 41% of the artefact band, 30% of the contract,
+# for 0.6% of germline MEIs (7/1144). None of that has been shown to hold for a 9-donor
+# GRCh38 cohort. Arm B is the honest baseline that lets us re-measure it here instead of
+# inheriting the claim.
+#
+# NB the recall half of this A/B is UNINTERPRETABLE until the 1kG truth set is lifted to
+# GRCh38 -- without it we can compare contract size and cross-donor consistency, but we
+# cannot say what recall the gate costs, which is the number that actually decides it.
+#
+# ---- original header follows ----
+# PEAR-TREE Rust discovery config for GRCh38 BAMs (Sanger canpipe output).
+#
+# For the 9x10 blood/HSPC benchmark cohort: bwa-mem mapped to
+# GRCh38_full_analysis_set_plus_decoy_hla (AS reads "NCBI38", NOT "GRCh38"), 3,366 contigs,
+# total reference length 3,217,346,917, chr1 LN 248,956,422.
+#
+# Discovery itself is assembly-agnostic. Only two things matter here:
+#   - min_mapq 60: bwa-mem caps MAPQ at 60; 60 keeps uniquely-placed reads only.
+#   - contig_allowlist: process the primary assembly and nothing else.
+#
+# *** THE ALLOWLIST IS THE WHOLE POINT OF THIS FILE. *** GRCh38 names contigs chr1..chrY;
+# GRCh37/hs37d5 names them 1..Y. Running config.discovery.grch37 against these BAMs matches
+# ZERO contigs and yields an EMPTY discovery file per colony -- with no error, because "no
+# reads on the allowlisted contigs" is indistinguishable from "no evidence found". 90 empty
+# files that look like a clean run is exactly the failure mode this cohort exists to avoid.
+# Check the allowlist against the BAM's @SQ names before every new cohort.
+#
+# The allowlist also drops, by omission: chrM (circular, high coverage), the ~2,800 alt/HLA
+# contigs, chrUn_*/random decoys, and chrEBV. Alts matter more on GRCh38 than the hs37d5
+# decoys did -- a read pair spanning an alt and its primary looks like a structural junction.
+#
+# key = value, '#' starts a comment.
+
+min_mapq = 60
+contig_allowlist = chr1,chr2,chr3,chr4,chr5,chr6,chr7,chr8,chr9,chr10,chr11,chr12,chr13,chr14,chr15,chr16,chr17,chr18,chr19,chr20,chr21,chr22,chrX,chrY
+
+# Feature B -- processed-pseudogene (splice) annotation. OFF for this cohort.
+# It is non-gating (it only writes a per-colony <out>.splice.tsv; the breakpoint output is
+# unchanged), and exon_annotation MUST match the BAM assembly AND contig naming. The existing
+# grch37.exons.bed.gz is Ensembl GRCh37.75 with numeric contigs -- wrong coordinates AND wrong
+# names for these BAMs. A GRCh38 exon model (Ensembl GRCh38, chr-prefixed, per-gene merged
+# exons, contig/begin/end/gene_id, 0-based half-open) has not been built yet. Turning this on
+# with the GRCh37 file would silently annotate nothing (names never match), which is a
+# harmless-looking way to be wrong. Build the file first, then flip this.
+splice_hallmark = false
+# exon_annotation = <unbuilt: GRCh38, chr-prefixed>
+splice_min_exons = 2
+
+# SPEC-8 -- homopolymer-slippage gate. See config.discovery.grch37 for the full rationale and
+# the measured recall table; the mechanism is reference-sequence-local and carries over
+# unchanged to GRCh38. It needs no reference file -- the aligned part of the read IS the
+# reference -- so nothing here is assembly-specific.
+#
+# CAVEAT, and it is a real one: every number in the grch37 file's recall table was measured on
+# PD44579 hs37d5 against 1kG MEIs called on hs37d5. Those measurements do NOT transfer to this
+# cohort. They were taken on a different donor, a different reference, and a different cohort
+# size, and the 1kG truth set itself has to be lifted to GRCh38 before it can score anything
+# here. Treat these settings as the inherited default, not as validated-for-GRCh38.
+slippage_filter = false
+slippage_min_ref_run = 8      # >= 8 stays clear of the 4 bp TTTT/AA L1-endonuclease motif
+slippage_min_clip_frac = 0.6  # the only real lever: 0.6 -> 41% of band, 0.9 -> 9% (on hs37d5)
+slippage_max_period = 6       # 1 = poly-A only; <=6 also allows (CA)n/(TG)n/(TAAAA)n

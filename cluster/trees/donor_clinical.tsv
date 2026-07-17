@@ -115,7 +115,7 @@ PD48372	-	liver (explant, multi-segment)	LCM microdissection	68.2	M	NAFLD; liver
 # (verified locally 2026-07-17), NOT from the main text, which is ambiguous. See the note on
 # PD44579/PD47537 below -- the main-text sentence naming both is DISTRIBUTIVE, not conjunctive.
 PD44579	PX002	peripheral blood	HSPC colony	63	F	Follicular lymphoma; R-CVP x6 (cyclophosphamide 6, vincristine 6, OXALIPLATIN 0); 1.3y since	173	EGAD00001015339	Mitchell 2025 NatGenet 10.1038/s41588-025-02234-x
-PD47537	-	peripheral blood	HSPC colony	61	F	Metastatic colon ca; Ox/Cape, Irinotecan/5FU, Ox/5FU; 16 cy (oxaliplatin 11, CYCLOPHOSPHAMIDE 0); radiotherapy 3y	44	EGAD00001015339	Mitchell 2025 NatGenet 10.1038/s41588-025-02234-x
+PD47537	PX005	peripheral blood	HSPC colony	61	F	Metastatic colon ca; Ox/Cape, Irinotecan/5FU, Ox/5FU; 16 cy (oxaliplatin 11, CYCLOPHOSPHAMIDE 0); radiotherapy 3y	44	EGAD00001015339	Mitchell 2025 NatGenet 10.1038/s41588-025-02234-x
 PD47540	-	peripheral blood	HSPC colony	57	F	Follicular lymphoma; R-CHOP x6; 2.7y since	5	EGAD00001015339	Mitchell 2025 NatGenet 10.1038/s41588-025-02234-x
 PD47541	-	peripheral blood	HSPC colony	64	M	Follicular lymphoma; rituximab+bendamustine x5; 0.1y since	10	EGAD00001015339	Mitchell 2025 NatGenet 10.1038/s41588-025-02234-x
 PD47699	-	peripheral blood	HSPC colony	79	F	Myeloma + metastatic colon ca; VMP/lenalidomide + Ox/Cape (dose-reduced)	10	EGAD00001015339	Mitchell 2025 NatGenet 10.1038/s41588-025-02234-x
@@ -123,8 +123,8 @@ PD47701	-	peripheral blood	HSPC colony	68	F	Metastatic colon ca; capecitabine, X
 PD47703	PX001	peripheral blood	HSPC colony	48 and 49	F	Hodgkins @10 (ChlVPP), relapse @47 (BGeV), DLBCL 2019 (R-CHOP @48); radiotherapy 39y; TWO TIMEPOINTS	200 (t1) + 59 (t2)	EGAD00001015339	Mitchell 2025 NatGenet 10.1038/s41588-025-02234-x
 PD50306	-	peripheral blood	HSPC colony	3	M	Neuroblastoma; Rapid COJEC, Bu/Mel autograft; 0.4y since	9	EGAD00001015339	Mitchell 2025 NatGenet 10.1038/s41588-025-02234-x
 PD50307	PX003	peripheral blood	HSPC colony	40	F	NSCLC; carboplatin+etoposide x6; 0.9y since; radiotherapy <1y	41	EGAD00001015339	Mitchell 2025 NatGenet 10.1038/s41588-025-02234-x
-PD50308	-	peripheral blood	HSPC colony	27	F	Hodgkins lymphoma; escalated BEACOPP x6; 2.2y since	41	EGAD00001015339	Mitchell 2025 NatGenet 10.1038/s41588-025-02234-x
-PD37580	-	peripheral blood	HSPC colony	43	F	AML + 30y Behcet's; DA x1, MEC x1, long-term chlorambucil + mycophenolate	84	EGAD00001015339	Mitchell 2025 NatGenet 10.1038/s41588-025-02234-x
+PD50308	PX004	peripheral blood	HSPC colony	27	F	Hodgkins lymphoma; escalated BEACOPP x6; 2.2y since	41	EGAD00001015339	Mitchell 2025 NatGenet 10.1038/s41588-025-02234-x
+PD37580	PX007	peripheral blood	HSPC colony	43	F	AML + 30y Behcet's; DA x1, MEC x1, long-term chlorambucil + mycophenolate	84	EGAD00001015339	Mitchell 2025 NatGenet 10.1038/s41588-025-02234-x
 #
 # ---- Mitchell et al., Nature 606:343-350 (2022), doi 10.1038/s41586-022-04786-y -- NORMALS ----
 # HSPC colonies. Codename<->PD map is DIRECT, from the Supp Table 3 (SV) `donor`+`sample`
@@ -140,8 +140,8 @@ PD48402	KX008	bone marrow	HSPC colony	76	F	normal (organ donor, ICH); Lyme disea
 PD41048	SX001	peripheral blood	HSPC colony	48	M	selenoprotein deficiency (not known to affect HSC dynamics)	200	EGAD00001007851	Mitchell 2022 Nature 10.1038/s41586-022-04786-y
 PD43976	AX001	peripheral blood	HSPC colony + lymphocyte	63	M	normal	10 (2025) / tree in 2022	EGAD00001007851	Mitchell 2022 + Machado 2022 Nature 10.1038/s41586-022-05072-7
 # NEW ORGAN DONORS, first published in the 2025 chemo paper as controls:
-PD49236	KX009?	bone marrow	HSPC colony	63	M	normal (organ donor); unpublished before 2025	173	EGAD00001015339	Mitchell 2025 NatGenet 10.1038/s41588-025-02234-x
-PD49237	KX010?	bone marrow	HSPC colony	60	F	normal (organ donor); unpublished before 2025	44	EGAD00001015339	Mitchell 2025 NatGenet 10.1038/s41588-025-02234-x
+PD49236	KX009	bone marrow	HSPC colony	63	M	normal (organ donor); unpublished before 2025	173	EGAD00001015339	Mitchell 2025 NatGenet 10.1038/s41588-025-02234-x
+PD49237	KX010	bone marrow	HSPC colony	60	F	normal (organ donor); unpublished before 2025	44	EGAD00001015339	Mitchell 2025 NatGenet 10.1038/s41588-025-02234-x
 #
 # ---- Spencer Chapman et al., Nature 595:85-90 (2021), doi 10.1038/s41586-021-03548-6 ----
 PD41768	-	foetal liver + 2 femurs (18 pcw)	HSPC colony	18 pcw	?	foetal	234 analysed / 268 seq	EGAD00001006162	Chapman 2021 Nature 10.1038/s41586-021-03548-6
@@ -187,3 +187,20 @@ PD49228	-	?	?	?	?	?	?	?	NOT FOUND in literature (has tree, no BAM located)
 PD49229	-	?	?	?	?	?	?	?	NOT FOUND in literature (has tree, no BAM located)
 PD53373	-	?	?	?	?	?	?	?	NOT FOUND in literature (has tree, no BAM located)
 PD53374	-	?	?	?	?	?	?	?	NOT FOUND in literature (has tree, no BAM located)
+#
+# ---- Mitchell 2025 chemo cohort: donors added 2026-07-17 from the Mendeley trees ----
+# These 12 were in the paper's Supp Table 1 all along but had no tree in our catalogue, so
+# they never entered donor_table.tsv. Tip counts are 4-10 -- real chemo-exposed donors, but
+# too few colonies to serve as phylogenetic truth. Per-drug cycles read from Supp Table 1.
+PD47536	-	peripheral blood	HSPC colony	67	F	Metastatic colon ca; Ox/FU, Irino/FU, Ox/FU, capecitabine; 53 cy (oxaliplatin 22)	5	EGAD00001015339	Mitchell 2025 NatGenet 10.1038/s41588-025-02234-x
+PD47538	-	peripheral blood	HSPC colony	61	F	Metastatic colon ca; Irinotecan/5FU; 12 cy (oxaliplatin 0)	10	EGAD00001015339	Mitchell 2025 NatGenet 10.1038/s41588-025-02234-x
+PD47539	-	peripheral blood	HSPC colony	64	F	Follicular lymphoma; R-CVP x6 (cyclophosphamide 6); 5.8y since	5	EGAD00001015339	Mitchell 2025 NatGenet 10.1038/s41588-025-02234-x
+PD47695	-	peripheral blood	HSPC colony	72	F	Follicular lymphoma transformed to DLBCL; R-CHOP x6; 5.4y since	5	EGAD00001015339	Mitchell 2025 NatGenet 10.1038/s41588-025-02234-x
+PD47696	-	peripheral blood	HSPC colony	74	M	DLBCL; R-CHOP x5	5	EGAD00001015339	Mitchell 2025 NatGenet 10.1038/s41588-025-02234-x
+PD47697	-	peripheral blood	HSPC colony	72	F	Colon ca; XELOX then surgery, adjuvant capecitabine; 5 cy; radiotherapy <1y	10	EGAD00001015339	Mitchell 2025 NatGenet 10.1038/s41588-025-02234-x
+PD47698	-	peripheral blood	HSPC colony	68	M	Colon ca; XELOX then surgery, adjuvant capecitabine; 7 cy; radiotherapy <1y	10	EGAD00001015339	Mitchell 2025 NatGenet 10.1038/s41588-025-02234-x
+PD47700	-	peripheral blood	HSPC colony	80	M	Metastatic colon ca; FOLFIRI, irinotecan/capecitabine, oxaliplatin/capecitabine; 28 cy	4	EGAD00001015339	Mitchell 2025 NatGenet 10.1038/s41588-025-02234-x
+PD47702	-	peripheral blood	HSPC colony	63	F	Metastatic colon ca; Ox/5FU; 11 cy (oxaliplatin 11)	10	EGAD00001015339	Mitchell 2025 NatGenet 10.1038/s41588-025-02234-x
+PD60009	-	peripheral blood	HSPC colony	58	M	Marginal zone lymphoma; rituximab+bendamustine x6; 1.7y since	9	EGAD00001015339	Mitchell 2025 NatGenet 10.1038/s41588-025-02234-x
+PD60010	-	peripheral blood	HSPC colony	77	M	Follicular lymphoma; rituximab+bendamustine x6; 0.3y since	10	EGAD00001015339	Mitchell 2025 NatGenet 10.1038/s41588-025-02234-x
+PD60011	-	peripheral blood	HSPC colony	76	M	Lymphoplasmacytic lymphoma; rituximab+bendamustine x6; 4.1y since	9	EGAD00001015339	Mitchell 2025 NatGenet 10.1038/s41588-025-02234-x
