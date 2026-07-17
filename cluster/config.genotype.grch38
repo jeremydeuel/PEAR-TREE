@@ -1,0 +1,10 @@
+# PEAR-TREE Rust genotype config for GRCh38 BAMs (9x10 blood/HSPC benchmark cohort).
+#
+# Genotyping visits loci the contract already names and counts reads there, so it is
+# assembly-agnostic: there is no contig allowlist to get wrong. This file exists as a separate
+# grch38 copy only so the run scripts can pass a matching pair of configs rather than silently
+# reusing the grch37 one and leaving the reader to wonder whether that was deliberate.
+#
+# min_mapq 60: bwa-mem caps MAPQ at 60; 60 keeps uniquely-placed spanning reads only.
+# Must match 'genotyping'/'min_mapq' in config.py.grch38.
+min_mapq = 60

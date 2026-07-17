@@ -1,0 +1,154 @@
+# PEAR-TREE - paired ends of aberrant retrotransposons in phylogenetic trees
+#
+# Copyright (C) 2025 Jeremy Deuel <jeremy.deuel@usz.ch>
+#
+#    This program is free software: you can redistribute it and/or modify
+#    it under the terms of the GNU General Public License as published by
+#    the Free Software Foundation, either version 3 of the License, or
+#    (at your option) any later version.
+#
+#    This program is distributed in the hope that it will be useful,
+#    but WITHOUT ANY WARRANTY; without even the implied warranty of
+#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#    GNU General Public License for more details.
+#
+#    You should have received a copy of the GNU General Public License
+#    along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+
+# Configuration for the farm22 run of the 9x10 blood/HSPC benchmark cohort: human colony WGS
+# BAMs mapped to GRCh38_full_analysis_set_plus_decoy_hla (bwa-mem, chr-prefixed contigs).
+# The header's AS: tag reads "NCBI38", never the literal "GRCh38" — do not match on it. The
+# reliable fingerprint is chr1 LN 248,956,422 / 3,366 contigs / total length 3,217,346,917,
+# which is also how cluster/install.sh identifies the assembly.
+#
+# Copy to src/config.py on the farm:  cp cluster/config.py.grch38 src/config.py
+# (src/config.py is gitignored — it is environment-specific.)
+#
+# ASSEMBLY NOTE: combine_insertions always remaps clipped consensuses to hs1 (T2T, the
+# most complete reference) and reconciles the hits back to the BAM's coordinates with a
+# pyliftover chain. The GRCh38-specific pieces are therefore only:
+#   - genome_2bit        = hg38.2bit  (reference flanks, in the BAM's own coordinates; hg38
+#                          and GRCh38 agree on chr1..chrY, and both are chr-prefixed, so
+#                          get_sequence needs no name mapping here — unlike GRCh37, where it
+#                          had to map 1 -> chr1)
+#   - bowtie2_index2_lo  = hs1 -> hg38 chain
+# The bowtie2 indices stay hs1, and 'annotate'/rmsk stays hs1: those work in hs1 space and
+# are assembly-independent. No GRCh38 bowtie2 index is needed.
+#
+# DO NOT hand-edit the two paths below. Run instead:
+#     bash cluster/install.sh check-config --bam <one staged GRCh38 BAM> --fix
+# It identifies the assembly from chr1's LENGTH (not a label), downloads hg38.2bit and the
+# hs1->hg38 chain if absent, and prints the exact block with the paths this site actually
+# uses. It also accepts the chain under either the UCSC name (hs1ToHg38.over.chain.gz) or the
+# local one (hs1.hg38.all.chain.gz), so the values here are a plausible default, not a
+# promise. A wrong 2bit/chain does not crash — it yields plausible, silently WRONG
+# coordinates, which is why the gate exists.
+#
+# The Rust discovery/genotype steps do NOT read this file; they use
+# cluster/config.discovery.grch38 and cluster/config.genotype.grch38. The allowlist in the
+# discovery config is the one setting that MUST be chr-prefixed for this cohort.
+
+CONFIG = {
+
+    # settings for step 1: discovery phase:
+    # (this run used the Rust discovery with cluster/config.discovery.grch38; these
+    #  values are kept consistent with it for any Python-side use)
+    'discovery': {
+        'min_mapq': 60, #bwa-mem caps MAPQ at 60; 60 keeps uniquely-placed reads only
+        'min_clip_len': 12, #minimal length of clipped bases to be considered
+        'min_evidence_reads_per_breakpoint': 2, #minimal number of independent evidence reads for each breakpoint
+        'max_bp_window': 40, #max number of allowed bases deleted or duplicated between two breakpoints
+        'max_homopolymer_len': 6, #maximal length of homopolymer in mapped part immediately adjacent to the breakpoint
+        'min_adapterlen_for_clip': 4, #minimal adapter length to be clipped from an already clipped part.
+        'min_good_bases': 10, #minimal number of bases of a clipped read to have a good quality*
+        'min_consensus_score_for_good_base': 2, #minimal score for a good base (delta best hit vs. second best hit)
+        'min_breakpoints_aggregated_during_first_step': 2, #minimal number of breakpoints aggregated during first step in order to even start filtering
+        'max_read_count': 120, #maximum numbers of reads in the span of a breakpoint allowed (exclude high-coverage artefact-rich regions)
+        'exclude_same_contig_supplementary': 1000, #minimum distance between a supplementary read to not be excluded (not interested in micro indels)
+        'reject_fully_mapping_reads': True, #drop clipped reads whose XA/SA shows the whole read maps contiguously elsewhere (not a real junction)
+        'mate_anchor_rescue': False, #see src/config.py; off by default until it clears a real-WGS check
+    },
+
+    #define adapter sequences
+    'adapters': ['AGATCGGAAGAGCACACGTCTGAACTCCAGTCA',  # fwd NebNext Adapter
+                'AGATCGGAAGAGCGTCGTGTAGGGAAAGAGTGT',  # rev NebNext Adapter
+                'AGATCGGAAAGCACACGTCTGAACTCCAGTCA',  # common sequencing error of fwd adapter
+                'AGATCGGAAAGCGTCGTGTAGGGAAAGAGTGT',  # common sequencing error of rev adapter
+                ],
+    'genotyping': {
+        'max_bases': 12, #max bases (per side) used for genotyping (applied in combine_insertions)
+        'min_mapq': 60, #bwa-mem data: uniquely-placed spanning reads only (matches cluster/config.genotype.grch38)
+        'min_score_for_call': 6, #minimal aggregate quality-margin for a confident (non-uncertain) call
+        'min_supporting_reads': 2, #minimal number of allele-supporting reads for a confident het/hom/wt call
+        'min_reads_for_zygosity': 6, #min informative reads before an alt-dominant locus is called homozygous rather than 'insertion' (zygosity unclear)
+        'recover_low_coverage_presence': True, #promote a single strong alt read at a known locus to 'insertion' when the reference allele is not confidently present
+        'reads_for_high_coverage': 180, #read count above which a locus is flagged high-coverage (counted as NA)
+        'art_min_score': 60, #per-side quality above which a read side counts as artefact (matches neither ref nor alt)
+        'vaf_wildtype_max': 0.10, #VAF at or below which a locus is called wild-type
+        'vaf_het_min': 0.30, #minimal VAF for a heterozygous call
+        'vaf_hom_min': 0.85, #minimal VAF for a homozygous call
+        'artefact_read_fraction': 0.5, #fraction of artefact reads (of all evidence) needed to call the locus an artefact
+        'min_artefact_reads': 2, #minimal number of artefact reads to call the locus an artefact
+        'double_alt_is_artefact': True, #a single read matching the inserted element on BOTH junctions is a chimeric artefact
+    },
+    'combine_genotypes': {
+        # *** THESE ARE INHERITED FROM THE 174-COLONY PD44579 RUN AND ARE NOT VALIDATED
+        # *** FOR THIS COHORT. 90 colonies, 9 donors, pooled into ONE contract.
+        # The pooling changes what these gates MEAN. In a single-donor run a germline MEI is
+        # present in ~all colonies; here it is present in ~10 of 90 (one donor's worth) and
+        # WILD-TYPE in the other 80 — that is the benchmark's whole signal. So:
+        #   min_wild-types 20  — of 90. A donor-private germline MEI leaves ~80 wild-types,
+        #                        so it passes comfortably; a locus real in MOST donors would
+        #                        not. Fine for now, but it is now a cross-donor filter, not
+        #                        an allele-fraction one. Revisit after the first call table.
+        #   max_na 10 / max_artefact 10 — of 90 rather than of 174, i.e. ~2x stricter in
+        #                        relative terms than the run they were chosen on.
+        # min_dispersion is the one gate measured to do real work (30,025 -> 17 on PD44579),
+        # but that was one donor on hs37d5. Do not report any of these as validated here.
+        'min_wild-types': 20, #minimal number of wild-type colonies
+        'min_insertions': 1, #minimal number of colonies with insertion
+        'max_artefact': 10, #maximal number of colonies with artefacts
+        'max_na': 10, #maximal number of colonies with NA genotype (high coverage, no coverage or error)
+        'min_best_score': 800, #minimal best het/hom support score across samples for a locus to pass
+        # CLONALITY gate: a real clonal event's per-colony alt counts must be over-dispersed
+        # relative to a single binomial (~4-5 at 10 informative reads); a constant-rate
+        # artefact sits at ~1. Without it `min_wild-types` band-passes on the allele
+        # fraction and keeps exactly the un-callable loci (see src/config_hs.py).
+        # 0/None disables; needs n_alt/n_ref in the genotype files.
+        'min_dispersion': 3.0,
+    },
+    'combine_insertions': {
+        # GRCh38: reference flanks come from hg38, which shares both coordinates and
+        # chr-prefixed naming with these BAMs -- no name mapping needed.
+        'genome_2bit': '/lustre/scratch126/casm/teams/team273/users/jd43/hg38.2bit',
+        'exclude_files_with_many_insertions': 1_000_000, #exclude files with more than this number of insertions
+        'samtools_executable': '/software/spack_environments/default/00/opt/spack/linux-ubuntu22.04-x86_64_v3/gcc-13.1.0/samtools-1.19-ufgcnbyuj24ufumlyimozp6habconpvy/bin/samtools', #module load samtools-1.19
+        'bowtie2_executable': '/nfs/users/nfs_j/jd43/software/bowtie2-2.5.4-linux-x86_64/bowtie2', #self-installed 2.5.4 (no module needed; the spack bowtie2-2.5.2 module does not even report --version)
+        'bowtie2_index': '/lustre/scratch126/casm/teams/team273/users/jd43/pt_hu_trees/hs1/hs1', #T2T: clean-remap check (assembly-independent)
+        'bowtie2_index2': '/lustre/scratch126/casm/teams/team273/users/jd43/pt_hu_trees/hs1/hs1', #T2T: clip re-map for position identification
+        'bowtie2_index2_lo': '/lustre/scratch126/casm/teams/team273/users/jd43/hs1.hg38.all.chain.gz', #hs1 -> hg38 chain: reconciles clip hits with the GRCh38 breakpoints
+        'clean_remap_max_insertion': 12, #a consensus is "maps to reference" (dropped) only if its end-to-end remap opens no insertion this long or longer
+        'clean_remap_min_as': -15, #...and only if the end-to-end alignment score (bowtie2 AS) is at least this
+    },
+    'annotate': { #necessary for annotate_v2.py (step 3, optional element classification)
+        # NOTE: annotate works in bowtie2_index2 (hs1) space, NOT GRCh38 — so rmsk and
+        # exon_annotation here must be hs1-based. Neither grch37.exons.bed.gz nor a future
+        # GRCh38 exon file is valid here; this needs an hs1-based one.
+        'rmsk': '/lustre/scratch126/casm/teams/team273/users/jd43/pt_hu_trees/hs1.repeatMasker.out.gz', # RepeatMasker annotation of the bowtie2_index2 (hs1) genome
+        'exon_annotation': None, # hs1-based exon BED for processed-pseudogene annotation; None = off
+        'tmp': lambda extension: lambda sample: f'/lustre/scratch126/casm/teams/team273/users/jd43/tmp/{sample}.{extension}',
+        'hmm': '/lustre/scratch126/casm/teams/team273/users/jd43/Dfam-curated_only-hs.hmm', #hmmpress'd (h3f/h3i/h3m/h3p present)
+        'dfamscan': '/lustre/scratch126/casm/teams/team273/users/jd43/dfamscan.pl',
+        'hmmer': '/lustre/scratch126/casm/teams/team273/users/jd43/hmmer-3.3.2/bin', #folder containing the HMMER executables
+        # annotate_v2.py is called as `annotate_v2.py <PATIENT_ID>` from the run dir
+        # (cluster/pipeline.sh phase 6), so these resolve relative to $WORKROOT/<PATIENT_ID>:
+        #   <PATIENT_ID>.genotypes.csv.gz          <- combine_genotypes output (all colonies)
+        #   insertions/<PATIENT_ID>.combined.txt.gz <- combine_insertions output
+        'genotyping_file': lambda sample: f'{sample}.genotypes.csv.gz',
+        'insertions_file': lambda sample: f'insertions/{sample}.combined.txt.gz',
+        'polya_min_len': 12, #minimum homopolymer run at the clip junction to count as a poly-A/T tail
+        'require_polya_hallmark': False, #True = require the poly-A hallmark for an RTE family call
+    },
+    'version': '1.1'
+}
