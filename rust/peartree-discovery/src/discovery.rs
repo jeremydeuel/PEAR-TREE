@@ -16,7 +16,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use crate::config::*;
 use crate::coverage::Coverage;
 use crate::exons::GeneModel;
-use crate::filters::{clean_clipped_seq, is_adapter, is_low_complexity, mean_kmer_diversity};
+use crate::filters::{clean_clipped_seq, is_adapter, is_low_complexity, is_slippage_clip, mean_kmer_diversity};
 use crate::intervals::IntervalIndex;
 use crate::model::{join, Breakpoint};
 use crate::polya::PolyABreakpoint;
@@ -1171,6 +1171,24 @@ impl Discovery {
                 p.retain(|b| !rm.contains(rn, b.breakpoint.unwrap()));
             }
 
+            // SPEC-8: drop clip clusters that are homopolymer slippage against a reference
+            // tract rather than an insertion junction. Poly-A-mate breakpoints (`p`) carry no
+            // aligned side to judge, so they are untouched.
+            if self.config.slippage_filter {
+                let keep = |b: &&Breakpoint| {
+                    !is_slippage_clip(
+                        b.side,
+                        &b.clipped.seq,
+                        &b.unclipped.seq,
+                        self.config.slippage_min_ref_run,
+                        self.config.slippage_min_clip_frac,
+                        self.config.slippage_max_period,
+                    )
+                };
+                l.retain(keep);
+                r.retain(keep);
+            }
+
             let (mut il, mut ir, mut ip) = (0usize, 0usize, 0usize);
             while il < l.len() && ir < r.len() {
                 let tsd = r[ir].breakpoint - l[il].breakpoint;
@@ -1306,9 +1324,9 @@ impl Discovery {
         Ok(())
     }
 
-    /// Apply the SPEC-5 (exclude-BED), SPEC-3 (coverage) and SPEC-7 (RM) retains to a
-    /// breakpoint list, matching `output`'s masking so a rescue never resurrects a
-    /// masked locus.
+    /// Apply the SPEC-5 (exclude-BED), SPEC-3 (coverage), SPEC-7 (RM) and SPEC-8 (slippage)
+    /// retains to a breakpoint list, matching `output`'s masking so a rescue never
+    /// resurrects a masked locus.
     fn retain_visible(&self, rn: &str, v: &mut Vec<&Breakpoint>) {
         if self.exclude.is_some() {
             v.retain(|b| !self.excluded(rn, b.breakpoint));
@@ -1319,6 +1337,18 @@ impl Discovery {
         }
         if let Some(rm) = &self.rm_mask {
             v.retain(|b| !rm.contains(rn, b.breakpoint));
+        }
+        if self.config.slippage_filter {
+            v.retain(|b| {
+                !is_slippage_clip(
+                    b.side,
+                    &b.clipped.seq,
+                    &b.unclipped.seq,
+                    self.config.slippage_min_ref_run,
+                    self.config.slippage_min_clip_frac,
+                    self.config.slippage_max_period,
+                )
+            });
         }
     }
 }

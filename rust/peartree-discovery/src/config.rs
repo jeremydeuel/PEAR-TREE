@@ -117,6 +117,38 @@ pub struct DiscoveryConfig {
     pub rm_self_mask: bool,
     pub rm_track: Option<String>,
     pub rm_divergence_max: f64,
+    /// SPEC-8: drop breakpoints minted by homopolymer slippage — the aligned side of the
+    /// junction ends in a run of base X >= `slippage_min_ref_run`, and the clip is
+    /// >= `slippage_min_clip_frac` base X. That is *more of a tract already in the
+    /// reference*, not an insertion. Paired by design: a real MEI's 3' poly-A clip is
+    /// spared because the reference at its junction is ordinary sequence. Needs no
+    /// reference file — the aligned part of the read is the reference. Off by default.
+    ///
+    /// Measured 2026-07-16 on real PD44579 discovery output: drops 41% of the known-artefact
+    /// 3-5 carrier band and 30% of the contract, costing **0.6% of real germline MEIs**
+    /// (7/1144, all rare, max AF 0.316; 0/40 common MEIs touched). `min_ref_run` is nearly
+    /// inert (6 vs 12 -> 42% vs 39%); `min_clip_frac` is the whole lever (0.6 -> 41%,
+    /// 0.9 -> 9%). Enrichment is only ~1.3-1.4x in every mode: contract-wide attrition at
+    /// small recall cost, NOT an FP-specific classifier. It cannot replace min_dispersion.
+    ///
+    /// ⚠ `min_clip_frac = 0` degrades this to a reference-only "junction is in a tandem
+    /// tract" test. Tempting (band 80% vs 41%) but it costs **5x the real recall**: 3.0%
+    /// of germline MEIs (34/1144), rising to 4.5% at max_period<=6. The pairing is what
+    /// makes the gate safe — keep min_clip_frac > 0.
+    ///
+    /// ⚠ Recall MUST be scored against `testdata/mei/1kg.sv.vcf.gz` (1000G phase-3 MEIs on
+    /// hs37d5 — 1,144 contract loci are known ALU/LINE1/SVA sites), NOT against fp10k, whose
+    /// simulated implants understate A/T-context recall cost ~10x (it scored the
+    /// reference-only variant at 0.30% vs the truth set's 3.0%), and NOT against the
+    /// min_dispersion survivors, which are unverified. Use fp10k for mechanism + regression.
+    pub slippage_filter: bool,
+    pub slippage_min_ref_run: usize,
+    pub slippage_min_clip_frac: f64,
+    /// Longest tandem period the gate will recognise at the junction. 1 = poly-A/poly-T
+    /// homopolymers only; ~6 also catches (CA)n / (TG)n / (TAAAA)n microsatellites, which
+    /// slip by the same mechanism. Periods above ~6 (SVA VNTRs, 19-48bp GC-rich VNTRs) are
+    /// deliberately out of scope — see the sweep in the SPEC-8 notes.
+    pub slippage_max_period: usize,
     /// SPD-3: process contigs in parallel across this many worker threads for the extract
     /// pass (BAM only, requires a `.bai`/`.csi` index). 1 = the validated single-threaded
     /// path. The mate pass stays a single linear scan (N-way BGZF decode for BAM).
@@ -209,6 +241,10 @@ impl Default for DiscoveryConfig {
             rm_self_mask: false,
             rm_track: None,
             rm_divergence_max: 5.0,
+            slippage_filter: false,
+            slippage_min_ref_run: 8,
+            slippage_min_clip_frac: 0.6,
+            slippage_max_period: 1,
             contig_threads: 1,
             discordant_anchor: false,
             discordant_max_tlen: 1000,
@@ -308,6 +344,10 @@ impl DiscoveryConfig {
             "rm_self_mask" => self.rm_self_mask = parse_bool(val)?,
             "rm_track" => self.rm_track = Some(val.to_string()),
             "rm_divergence_max" => self.rm_divergence_max = parse_num(val)?,
+            "slippage_filter" => self.slippage_filter = parse_bool(val)?,
+            "slippage_min_ref_run" => self.slippage_min_ref_run = parse_num(val)?,
+            "slippage_min_clip_frac" => self.slippage_min_clip_frac = parse_num(val)?,
+            "slippage_max_period" => self.slippage_max_period = parse_num(val)?,
             "contig_threads" => self.contig_threads = parse_num(val)?,
             "discordant_anchor" => self.discordant_anchor = parse_bool(val)?,
             "discordant_max_tlen" => self.discordant_max_tlen = parse_num(val)?,

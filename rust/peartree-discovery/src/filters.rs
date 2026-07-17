@@ -1,7 +1,7 @@
 //! Ports of src/adapter.py (is_adapter), src/sequence_checks.py
 //! (clean_clipped_seq) and src/consensus.py (find_consensus).
 
-use crate::config::{ADAPTERS, MIN_ADAPTERLEN_FOR_CLIP, MIN_CLIP_LEN};
+use crate::config::{ADAPTERS, CLIP_LEFT, MIN_ADAPTERLEN_FOR_CLIP, MIN_CLIP_LEN};
 use crate::qseq::{revcomp_bytes, QualitySeq};
 
 fn contains(haystack: &[u8], needle: &[u8]) -> bool {
@@ -92,6 +92,101 @@ pub fn mean_kmer_diversity(seqs: &[QualitySeq], k: usize) -> Option<f64> {
     } else {
         Some(acc / n as f64)
     }
+}
+
+/// How far to read into the aligned side when looking for the tandem tract at the junction.
+const SLIPPAGE_MAX_LOOK: usize = 64;
+
+/// Bases of `seq` read *outward from the junction*, uppercased, capped at `n`.
+/// `from_start` reads forwards from index 0, otherwise backwards from the end.
+fn junction_outward(seq: &[u8], from_start: bool, n: usize) -> Vec<u8> {
+    let m = seq.len().min(n);
+    (0..m)
+        .map(|i| {
+            let b = if from_start { seq[i] } else { seq[seq.len() - 1 - i] };
+            b.to_ascii_uppercase()
+        })
+        .collect()
+}
+
+/// The tandem repeat terminating at the junction, given the reference bases read outward
+/// from it. Returns `(period, run_len)` for the period yielding the longest terminal run;
+/// the smallest period wins ties, so a homopolymer reports period 1 rather than 2. A period
+/// > 1 must show at least two full copies. `None` if no periodic tract reaches the junction.
+fn terminal_tandem(ref_out: &[u8], max_period: usize) -> Option<(usize, usize)> {
+    let mut best: Option<(usize, usize)> = None;
+    for p in 1..=max_period.min(ref_out.len()) {
+        let mut t = p;
+        while t < ref_out.len() && ref_out[t] == ref_out[t - p] {
+            t += 1;
+        }
+        if p > 1 && t < p * 2 {
+            continue; // fewer than two copies — not a tandem
+        }
+        if best.is_none_or(|(_, bl)| t > bl) {
+            best = Some((p, t));
+        }
+    }
+    best
+}
+
+/// SPEC-8: true if this breakpoint looks like **replication slippage against a tandem tract
+/// already in the reference**, rather than an insertion junction.
+///
+/// A tandem tract in the reference — canonically the poly-A tail of a reference Alu, but
+/// equally a (CA)n / (TG)n / (TAAAA)n microsatellite — varies in copy number between sample
+/// and reference, because polymerase slips in short repeats. The aligner cannot place the
+/// surplus copies and soft-clips them, so discovery sees a clip cluster indistinguishable
+/// from a real junction. The clip is simply *more of the tract that is already there*.
+///
+/// The test is deliberately **paired**: the reference (aligned) side of the junction must end
+/// in a tandem tract of period <= `max_period` and length >= `min_ref_run`, AND the clip must
+/// continue that same tract, in phase, for >= `min_clip_frac` of its bases. A clip-only
+/// complexity test would wrongly kill genuine MEIs, whose 3' clip is a real poly-A tail — the
+/// difference is that a real tail's poly-A is *not* also in the reference at the junction.
+/// Requiring both sides is what spares them. A real MEI landing *in* an STR is spared too:
+/// its clip is element body, which does not continue the tract's phase.
+///
+/// `max_period = 1` is the homopolymer-only behaviour; raising it to ~6 also catches STRs.
+///
+/// Orientation follows `src/discovery.py::add_breakpoint`:
+///   `CLIP_LEFT : [clipped][unclipped]` -> tract at the **start** of `unclipped`, clip runs
+///                                        leftward from the junction
+///   `CLIP_RIGHT: [unclipped][clipped]` -> tract at the **end** of `unclipped`, clip runs
+///                                        rightward from the junction
+pub fn is_slippage_clip(
+    side: i32,
+    clipped: &[u8],
+    unclipped: &[u8],
+    min_ref_run: usize,
+    min_clip_frac: f64,
+    max_period: usize,
+) -> bool {
+    if clipped.is_empty() || unclipped.is_empty() || max_period == 0 {
+        return false;
+    }
+    let ref_out = junction_outward(unclipped, side == CLIP_LEFT, SLIPPAGE_MAX_LOOK);
+    let clip_out = junction_outward(clipped, side != CLIP_LEFT, clipped.len());
+    let (period, run) = match terminal_tandem(&ref_out, max_period) {
+        Some(x) => x,
+        None => return false,
+    };
+    if run < min_ref_run.max(period * 2) {
+        return false;
+    }
+    let unit = &ref_out[..period];
+    if !unit.iter().all(|b| matches!(b, b'A' | b'C' | b'G' | b'T')) {
+        return false;
+    }
+    // Continue the tract's phase across the junction: `ref_out[k]` sits k bases into the
+    // reference, so the clip base k bases out sits at reference offset -(k+1), i.e. at
+    // unit index (period - (k+1) % period) % period.
+    let same = clip_out
+        .iter()
+        .enumerate()
+        .filter(|(k, &c)| c == unit[(period - ((k + 1) % period)) % period])
+        .count();
+    (same as f64) / (clip_out.len() as f64) >= min_clip_frac
 }
 
 /// Port of sequence_checks.clean_clipped_seq (the QualitySeq version).
@@ -189,6 +284,87 @@ pub fn find_consensus(seqs: &[QualitySeq], tolerant: bool) -> QualitySeq {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::CLIP_RIGHT;
+
+    #[test]
+    fn slippage_flags_extra_copies_of_a_reference_tract() {
+        // CLIP_RIGHT: [unclipped][clipped]. Reference (aligned) side ends in the poly-A tail
+        // of an Alu; the clip is simply more A. This is the PD44579 artefact, e.g. hg19
+        // 13:21462314 where the raw clip was AAAAAAAAAAAAAAAA.
+        assert!(is_slippage_clip(
+            CLIP_RIGHT,
+            b"AAAAAAAAAAAAAAAA",
+            b"GGCGACAGAGCGAGACTCCGTCTCAAAAAAAAAAAAAAAAAA",
+            8,
+            0.7,
+            1
+        ));
+        // CLIP_LEFT: [clipped][unclipped] — reference run at the START of unclipped.
+        assert!(is_slippage_clip(CLIP_LEFT, b"TTTTTTTTTTTT", b"TTTTTTTTTTTTTTTTTTGGGTCTCGCT", 8, 0.7, 1));
+    }
+
+    #[test]
+    fn slippage_spares_a_real_mei_polya_clip() {
+        // A genuine MEI 3' poly-A clip: the clip is poly-A, but the reference at the junction
+        // is ordinary sequence. Pairing the two sides is what keeps this call.
+        assert!(!is_slippage_clip(
+            CLIP_RIGHT,
+            b"AAAAAAAAAAAAAAAA",
+            b"GCTAGCTTACGGATCCATTGCACTGGATCA",
+            8,
+            0.7,
+            6
+        ));
+        // A complex element-body clip against a reference poly-A tract is also spared:
+        // the clip is not the same base as the tract.
+        assert!(!is_slippage_clip(
+            CLIP_RIGHT,
+            b"GGCCGGGCGCGGTGGCTCACGCCTGTAATCCCAGCA",
+            b"GGCGACAGAGCGAGACTCCGTCTCAAAAAAAAAAAAAAAAAA",
+            8,
+            0.7,
+            6
+        ));
+    }
+
+    #[test]
+    fn slippage_needs_a_long_enough_reference_run() {
+        // The L1 endonuclease target motif is TTTT/AA — only 4 bp. It must not trip the
+        // gate, or real MEIs inserting at their canonical EN site would be lost.
+        assert!(!is_slippage_clip(CLIP_RIGHT, b"AAAAAAAAAAAA", b"GCTAGCTTACGGATCCATTGCACTTTTAA", 8, 0.7, 1));
+        assert!(!is_slippage_clip(CLIP_RIGHT, b"AAAA", b"", 8, 0.7, 1));
+        assert!(!is_slippage_clip(CLIP_RIGHT, b"", b"AAAAAAAAAAAA", 8, 0.7, 1));
+    }
+
+    #[test]
+    fn slippage_catches_strs_only_when_max_period_allows() {
+        // (TG)n microsatellite, e.g. the band locus 7:63797580. Reference ends ...TGTGTGTG,
+        // the clip continues the same tract in phase. Invisible at max_period 1.
+        let clip = b"GTGTGTGTGTGTGT";
+        let aligned = b"GACATTGGGATCCGTCATTGTGTGTGTGTGTGTGTGTGT";
+        assert!(!is_slippage_clip(CLIP_RIGHT, clip, aligned, 8, 0.7, 1));
+        assert!(is_slippage_clip(CLIP_RIGHT, clip, aligned, 8, 0.7, 6));
+        // (TAAAA)n — period 5, the 7:96412400 pattern.
+        let clip5 = b"TAAAATAAAATAAAA";
+        let al5 = b"CTCCAGCCTGGGCAACTAAAATAAAATAAAATAAAATAAAA";
+        assert!(is_slippage_clip(CLIP_RIGHT, clip5, al5, 8, 0.7, 6));
+    }
+
+    #[test]
+    fn slippage_str_gate_is_phase_aware_not_just_composition() {
+        // Same base composition as a (TG)n tract, but the clip does not continue the tract's
+        // phase — it is real inserted sequence. A composition-only test would kill this.
+        let aligned = b"GACATTGGGATCCGTCATTGTGTGTGTGTGTGTGTGTGT";
+        assert!(!is_slippage_clip(CLIP_RIGHT, b"TTGGTTGGTTGGTTGG", aligned, 8, 0.7, 6));
+        // A homopolymer is reported as period 1, never as period 2, so raising max_period
+        // must not change the poly-A verdict.
+        let pa_clip = b"AAAAAAAAAAAAAAAA";
+        let pa_al = b"GGCGACAGAGCGAGACTCCGTCTCAAAAAAAAAAAAAAAAAA";
+        assert_eq!(
+            is_slippage_clip(CLIP_RIGHT, pa_clip, pa_al, 8, 0.7, 1),
+            is_slippage_clip(CLIP_RIGHT, pa_clip, pa_al, 8, 0.7, 6)
+        );
+    }
 
     #[test]
     fn low_complexity_flags_satellites_not_elements() {
