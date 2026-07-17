@@ -40,11 +40,20 @@ echo "== reference builds seen (asm_name / ref_len / chr1 M5) =="
 # ref_len and M5 fingerprint the build; AS: is the header's CLAIM and can disagree.
 awk -F'\t' 'NR>1 && $8!="-"{c[$8"\t"$9"\t"$10"\t"substr($11,1,8)]++}
      END{for(k in c) printf "  %-40s %6d\n", k, c[k]}' "$DEST" | sort -k5 -rn | head
+# Select on ref_len ($10), the summed @SQ LN — a fingerprint of the actual reference, not a
+# label we derived. An earlier version keyed on $8=="chr-style" and reported ZERO GRCh38
+# donors while 9,925 GRCh38 BAMs sat in the file: a pipefail/SIGPIPE bug had mislabelled them
+# "chr1". Fingerprint > label; the label is a convenience, this is the query that decides runs.
+#   GRCh38_full_analysis_set_plus_decoy_hla = 3217346917   (AS: reads NCBI38 *or* GRCh38)
+#   hs37d5                                  = 3137454505
 echo "== WGS + GRCh38 donors with >=10 colonies (the benchmark target) =="
-awk -F'\t' 'NR>1 && $7 ~ /^WGS/ && $8=="chr-style" && $3!="-" && $15>=50000000 {c[$3"\t"$1]++}
-     END{for(k in c) if(c[k]>=10) printf "  %-24s %4d\n", k, c[k]}' "$DEST" | sort -k2 -rn | head -40
+awk -F'\t' 'NR>1 && $7 ~ /^WGS/ && $10==3217346917 && $3!="-" && $15>=50000000 {c[$3"\t"$1]++; rl[$3"\t"$1]=$14}
+     END{for(k in c) if(c[k]>=10) printf "  %-24s %4d  read_len=%s\n", k, c[k], rl[k]}' "$DEST" | sort -k2 -rn | head -40
 echo "== WGS + hs37d5 donors with >=10 colonies (remap candidates; check read_len first) =="
-awk -F'\t' 'NR>1 && $7 ~ /^WGS/ && $8=="hs37d5" && $3!="-" && $15>=50000000 {c[$3"\t"$1]++; rl[$3"\t"$1]=$14}
+awk -F'\t' 'NR>1 && $7 ~ /^WGS/ && $10==3137454505 && $3!="-" && $15>=50000000 {c[$3"\t"$1]++; rl[$3"\t"$1]=$14}
      END{for(k in c) if(c[k]>=10) printf "  %-24s %4d  read_len=%s\n", k, c[k], rl[k]}' "$DEST" | sort -k2 -rn | head -20
+echo "== any WGS BAM whose ref_len matches NEITHER known build (investigate before use) =="
+awk -F'\t' 'NR>1 && $7 ~ /^WGS/ && $10!=3217346917 && $10!=3137454505 && $10>0 {c[$8"\t"$9"\t"$10]++}
+     END{for(k in c) printf "  %-44s %6d\n", k, c[k]}' "$DEST" | sort -k4 -rn | head
 echo
 echo "copy back:  tsh scp -l jd43 farm22-head1:$DEST ."

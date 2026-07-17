@@ -83,9 +83,15 @@ while IFS=$'\t' read -r proj sample donor bam bytes bai stale; do
     nlb=$(rgu LB); npu=$(rgu PU); nrg=$(printf '%s\n' "$rg" | grep -c '^@RG')
     pu1=$(printf '%s\n' "$rg" | tr '\t' '\n' | grep -m1 '^PU:' | sed 's/^PU://')
 
-    if   printf '%s\n' "$sq" | grep -qm1 'SN:hs37d5'; then asm=hs37d5
-    elif printf '%s\n' "$sq" | grep -qEm1 'SN:chr1[[:space:]]'; then asm=chr-style
-    else asm=$(printf '%s\n' "$sq" | grep -m1 '^@SQ' | tr '\t' '\n' | grep -m1 '^SN:' | sed 's/^SN://'); fi
+    # Match against the variable, NOT through a pipe into `grep -q`. Under `set -o pipefail`,
+    # grep -q exits on first match and SIGPIPEs the upstream printf, so the pipeline reports
+    # FAILURE on a successful match. It bit exactly the branch that mattered: chr1 is the
+    # FIRST @SQ line (grep quits early -> printf killed -> "no match" -> fell through to the
+    # fallback and labelled 9,925 GRCh38 BAMs "chr1"), while hs37d5 is the LAST contig
+    # (printf finishes first -> no SIGPIPE -> worked). A silent miss on one build only.
+    if   [[ "$sq" == *"SN:hs37d5"* ]]; then asm=hs37d5
+    elif [[ "$sq" == *$'SN:chr1\t'* ]]; then asm=chr-style   # \t so chr10/chr11 don't match
+    else asm=$(printf '%s\n' "$sq" | head -1 | tr '\t' '\n' | grep -m1 '^SN:' | sed 's/^SN://'); fi
     nsq=$(printf '%s\n' "$sq" | grep -c '^@SQ')
     asname=$(printf '%s\n' "$sq" | tr '\t' '\n' | grep -m1 '^AS:' | sed 's/^AS://')
     reflen=$(printf '%s\n' "$sq" | tr '\t' '\n' | grep '^LN:' | sed 's/^LN://' | awk '{s+=$1} END{print s+0}')
