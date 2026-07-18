@@ -1,2 +1,7 @@
 donor	proj	ds	readlen	mapped	assembly	sample
-# PENDING — populated from the farm per-tip header probe (see patients/PLAN.md); placeholder only
+# populated 2026-07-18 by cluster/populate_colonies_tsv.sh (nst_links, header/index reads; readlen_mode=header). ds/assembly are per-BAM (WGS selected by @RG DS); mapped=idxstats mapped reads.
+PD41757	1911	WGS_ILLUMINA_short	NA	723331755	hs37d5_GRCh37	PD41757b_lo0008
+PD41757	1911	WGS_ILLUMINA_short	NA	744392014	hs37d5_GRCh37	PD41757b_lo0007
+PD41757	1911	WGS_ILLUMINA_short	NA	754086958	hs37d5_GRCh37	PD41757b_lo0006
+PD41757	1911	WGS_ILLUMINA_short	NA	799334276	hs37d5_GRCh37	PD41757b_lo0002
+PD41757	1911	WGS_ILLUMINA_short	NA	814234578	hs37d5_GRCh37	PD41757b_lo0003
