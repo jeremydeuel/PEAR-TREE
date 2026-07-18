@@ -23,24 +23,33 @@ Every `colonies.tsv` currently holds only the header:
 
     donor  proj  ds  readlen  mapped  assembly  sample
 
-**These will be filled from the per-tip header probe running on the farm now.** Status by cohort:
+Status by cohort (as of 2026-07-18):
 
-| cohort / organ | probe status | source to populate from |
+| cohort / organ | status | how |
 |---|---|---|
-| **Peripheral blood — Chapman HSCT** | **DONE — 2,882/2,882 tips WGS, 0 gaps.** TSVs populated (10 pair folders). | `~/Downloads/chapman_hsct.tips.bam_coverage.tsv` (`check_tree_bams.sh`) |
-| Gastric (stomach) | spot-check done (2/donor×proj) | `~/coorens2025stomach.wgs.*` + full per-tip run |
-| Liver (Brunner) | spot-check done | `~/probe_liver.txt` + full per-tip run |
-| all other blood / bronchial / cord / foetal / BM / colon | **not probed** | needs `probe_donors.sh` per cohort |
+| **118 / 155 patients — DONE** | tree-tip → BAM, per colony (13,508/13,510 rows WGS, 0 MISSING) | `cluster/populate_colonies_tsv.sh` (commit 2f7375d) + the 10 Chapman pairs |
+| **Liver (34) + AX001/PD43976 (2)** | **donor-level inventory** — tree tips anonymised, see below | `cluster/populate_donor_level.sh` + `cluster/donor_level.manifest.tsv` |
+| tonsil/PD42775 | left blank (no tree) | — |
 
-**Chapman is filled** (`donor·proj·ds·readlen·assembly·sample`), with two caveats recorded in
-each TSV's comment line: `ds=WGS` and `readlen=151` are cohort-confirmed (probe was unanimous)
-not per-tip measured; `assembly` is per-project (hs37d5 vs hg19 varies per-BAM — see
-`chapman2024-hsct-grch37-only`); **`mapped` is still blank** — it needs a per-tip `idxstats`
-run (`check_tree_bams.sh` used the fast project-classification path and didn't read depth).
+**The two populate scripts (both header/index-only nst_links reads; WGS picked by @RG DS;
+assembly per-BAM from @SQ; `mapped` = idxstats mapped reads; `readlen`=NA in default header
+mode, real via `READLEN_MODE=record`):**
 
-For the remaining cohorts, run `probe_donors.sh` / a per-tip pass and fill the same 7 columns.
+1. `populate_colonies_tsv.sh` — maps each **tree tip → its BAM**. Works for the 108 cohorts
+   whose tips are real sample ids (`PDxxxxx[_lo]`, `_hum` stripped). Run: `mkdir -p logs &&
+   bsub < cluster/populate_colonies_tsv.sh`. Skips patients with no PD-style tips.
+2. `populate_donor_level.sh` — **donor-level colony inventory** for the 36 patients whose tree
+   tips are anonymised and have NO public/local clone→sample map: liver `Cl.NN` (Chapman
+   "Prolonged persistence" ships only donor-level `SN_samples.txt`) and AX001/PD43976 `BMH…`
+   plate-well codenames (Mitchell/your own JAK2 data work in BMH space; no `BMH→PD` map exists).
+   It lists **all of the donor's WGS colonies** from nst_links — real sample metadata, but NOT
+   1:1 with the `Cl.NN`/`BMH` tree tips (the tree file is unchanged; a comment records this).
+   Run: `mkdir -p logs && bsub < cluster/populate_donor_level.sh`.
+
 **Populate the WGS BAM by DS, not by basename** — the same colony can have a WGS and a targeted
-release under different projects (see `chapman2024-hsct-grch37-only` memory).
+release under different projects (see `chapman2024-hsct-grch37-only` memory). True per-tip
+population of liver/AX001 would need the raw-data holders' private manifests (Chapman for liver
+`Cl→sample`; Mitchell/EGA for `BMH→PD`).
 
 **Populate is a separate step from build.** `build_patients.py` writes placeholder TSVs but now
 **preserves any populated `colonies.tsv` across rebuilds** (snapshots non-placeholder ones before
