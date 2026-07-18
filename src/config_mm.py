@@ -66,6 +66,12 @@ CONFIG = {
         'max_artefact': 200, #maximal number of colonies with artefacts
         'max_na': 18, #maximal number of colonies with NA genotype (high coverage, no coverage or error)
         'min_best_score': 800, #minimal best het/hom support score across samples for a locus to pass
+        # CLONALITY gate: a real clonal event's per-colony alt counts must be over-dispersed
+        # relative to a single binomial (~4-5 at 10 informative reads); a constant-rate
+        # artefact sits at ~1. Without it `min_wild-types` band-passes on the allele
+        # fraction and keeps exactly the un-callable loci (see src/config_hs.py).
+        # 0/None disables; needs n_alt/n_ref in the genotype files.
+        'min_dispersion': 3.0,
     },
     'combine_insertions': {
         'genome_2bit': '../genomes/mm39.2bit', #path to genome, has to be 2bit file

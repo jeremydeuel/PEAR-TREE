@@ -82,6 +82,25 @@ CONFIG = {
         'max_artefact': 24, #maximal number of colonies with artefacts
         'max_na': 24, #maximal number of colonies with NA genotype (high coverage, no coverage or error)
         'min_best_score': 800, #minimal best het/hom support score across samples for a locus to pass
+        # CLONALITY gate — recommended ON for any multi-colony tree study. Every other
+        # gate here counts CALLS, and a call is a thresholded allele fraction, so none of
+        # them can separate a locus that is genuinely present in some colonies from one
+        # whose alt reads are a constant per-locus error rate that the VAF bands slice at
+        # random. This tests the read counts directly: a real clonal event must be
+        # over-dispersed relative to a single binomial (~4-5 at 10 informative reads),
+        # whereas a constant-rate artefact sits at ~1.
+        # NB `min_wild-types` alone is a BAND-PASS on the allele fraction, not a germline
+        # filter: on PD44579 (174 colonies) loci with p_hat >= 0.4 passed at 0.0-0.1%
+        # while p_hat 0.05-0.30 passed at 36-45% — i.e. it removed clean germline and
+        # kept exactly the loci too ambiguous to call. It reported 3,792 loci of which
+        # 3,641 were statistically indistinguishable from random colony sets; with this
+        # gate the same data yields 17.
+        # COST (simulated at PD44579 depths, 174 colonies): at 10 informative reads it
+        # keeps 86% of true private events and ~100% of k>=2; at 7 reads only 62% of
+        # private. It also drops sub-clonal events (carrier VAF ~0.2 -> <30% kept), so
+        # raise/lower with depth and lower it for impure colonies. Set to 0/None to
+        # disable. Needs n_alt/n_ref in the genotype files.
+        'min_dispersion': 3.0,
     },
     'combine_insertions': {
         'genome_2bit': '/Users/jeremy/Documents/genomes/hg38.2bit', #path to genome, has to be 2bit file
