@@ -23,7 +23,7 @@ DEBUG = True
 import gzip
 import os
 import pysam
-from math import floor
+from math import floor, log2
 import re
 import sys
 from src.config import CONFIG
@@ -73,7 +73,217 @@ class Dfam_Annotation:
         return f"{self.model} {self.strand} ({self.hmm_start}-{self.hmm_end}|{self.model_length})"
 
 
+class GeneModel:
+    """Insertion-SITE annotator: given the reference locus where an insertion LANDED (the title
+    "contig:start-end"), report whether it sits inside a gene and, if so, which gene and which
+    genic feature -- exon, splice donor / acceptor / polypyrimidine tract / branch point (lariat),
+    or deep intron -- and whether it disrupts or lies near a gene's promoter (its TSS).
+
+    This is ORTHOGONAL to every existing annotation. The Dfam/rmsk/pseudogene/SV logic answers
+    "what was inserted" (element identity) using the clip sequence and where the clip REMAPS (in
+    bowtie2_index2); the site annotation answers "where did it land" using the junction's own
+    reference locus (the title), which lives on the SAMPLE's discovery/BAM genome. So the gene
+    model must be built for that genome (GRCh38 or GRCh37), and its contigs must match the title
+    contigs -- lookup is chr-prefix tolerant (chr8 <-> 8) so one track serves both conventions.
+
+    Track format (build_gene_model.py): a (optionally gzipped) TSV `contig<TAB>start<TAB>end<TAB>
+    gene<TAB>strand`, 0-based half-open, ONE ROW PER (merged) EXON, sorted. Everything -- the gene
+    span, the TSS, and every intron/exon boundary -- is reconstructed from the per-gene exon rows,
+    so a single file drives all features (an unstranded exon-only track, e.g. the pseudogene track,
+    is NOT enough: promoter needs the TSS = strand + gene 5' end, and donor vs acceptor needs the
+    strand). None in config = site annotation off; no other behaviour changes.
+    """
+
+    def __init__(self, path, cfg=None):
+        cfg = cfg or {}
+        # Splice windows, measured in nt INTO the intron from the exon boundary (sense-aware).
+        #   donor    : the 5' splice site (GT..) -- intron positions +1..+donor_window from an
+        #              exon's 3' end.
+        #   acceptor : the 3' splice site (..AG) -- intron positions -1..-acceptor_window before
+        #              an exon's 5' end.
+        #   ppt      : the polypyrimidine tract, just upstream of the acceptor.
+        #   branch   : the branch-point A / lariat, further upstream still.
+        # The three 3' bins are nested distance thresholds (acceptor < ppt < branch), so the
+        # tightest matching one wins. Defaults follow standard splicing anatomy; override per
+        # deployment via CONFIG['annotate'][...].
+        self.donor_window    = cfg.get('splice_donor_window', 6)
+        self.acceptor_window = cfg.get('splice_acceptor_window', 3)
+        self.ppt_window      = cfg.get('splice_ppt_window', 17)
+        self.branch_window   = cfg.get('splice_branch_window', 45)
+        # Promoter windows around the TSS (sense-aware: *_up is 5' of the TSS, *_down is 3').
+        # core = "disrupts promoter"; the wider proximal window = "near promoter".
+        self.prom_core_up    = cfg.get('promoter_core_up', 250)
+        self.prom_core_down  = cfg.get('promoter_core_down', 250)
+        self.prom_up         = cfg.get('promoter_up', 2000)
+        self.prom_down       = cfg.get('promoter_down', 500)
+        self.genes = {}        # contig -> [(start, end, name, strand, exons), ...] sorted by start
+        self._maxspan = {}     # contig -> longest gene on it (bounds the overlap back-scan)
+        if path is not None:
+            self._load(path)
+
+    # -- contig-name tolerance (title "chr8" vs a numeric-contig GRCh37 track, or vice versa) --
+    def _resolve(self, contig):
+        if contig in self.genes:
+            return contig
+        alt = contig[3:] if contig.startswith("chr") else "chr" + contig
+        return alt if alt in self.genes else None
+
+    def _load(self, path):
+        print(f"reading gene model {path}")
+        acc = {}   # (contig, gene) -> [strand, [(s, e), ...]]
+        opener = gzip.open if str(path).endswith(".gz") else open
+        n = 0
+        with opener(path, 'rt') as fh:
+            for line in fh:
+                line = line.rstrip("\n")
+                if not line or line[0] == '#':
+                    continue
+                f = line.split("\t")
+                if len(f) < 5:
+                    continue
+                contig, start, end, gene, strand = f[0], int(f[1]), int(f[2]), f[3], f[4]
+                a = acc.setdefault((contig, gene), [strand, []])
+                a[1].append((start, end))
+                n += 1
+        for (contig, gene), (strand, ivs) in acc.items():
+            ivs.sort()
+            merged = [list(ivs[0])]
+            for s, e in ivs[1:]:                 # defensively merge (builder already merges)
+                if s <= merged[-1][1]:
+                    merged[-1][1] = max(merged[-1][1], e)
+                else:
+                    merged.append([s, e])
+            exons = tuple((s, e) for s, e in merged)
+            gs, ge = exons[0][0], exons[-1][1]
+            self.genes.setdefault(contig, []).append((gs, ge, gene, strand, exons))
+        for contig in self.genes:
+            self.genes[contig].sort()
+            self._maxspan[contig] = max(ge - gs for gs, ge, *_ in self.genes[contig])
+        print(f"imported {n} exon rows for {sum(len(v) for v in self.genes.values())} genes "
+              f"on {len(self.genes)} contigs from {path}")
+
+    def _candidates(self, contig, p):
+        """Genes on `contig` whose body comes within prom_up of p (so both body overlaps and
+        promoter-proximity are covered). Returns [] for a locus far from any gene, None if the
+        contig is absent from the model (can't judge -> caller treats as intergenic)."""
+        key = self._resolve(contig)
+        if key is None:
+            return None
+        genes = self.genes[key]
+        reach = self.prom_up                      # widest window either side of p we care about
+        hi = p + reach
+        # binary search: rightmost gene whose start <= hi
+        lo_i, hi_i = 0, len(genes)
+        while lo_i < hi_i:
+            mid = (lo_i + hi_i) // 2
+            if genes[mid][0] <= hi:
+                lo_i = mid + 1
+            else:
+                hi_i = mid
+        # scan left over the window, bounded by the longest gene (a long gene can start far left
+        # and still reach p); collect those whose body/promoter window actually reaches p.
+        floor = p - reach - self._maxspan.get(key, 0)
+        out = []
+        for i in range(lo_i - 1, -1, -1):
+            gs, ge, name, strand, exons = genes[i]
+            if gs < floor:
+                break
+            if ge + reach >= p:
+                out.append((gs, ge, name, strand, exons))
+        return out
+
+    def _splice_class(self, dd, da):
+        """Classify an intronic point from its distance (nt) to the DONOR boundary (dd) and the
+        ACCEPTOR boundary (da). Tightest match wins."""
+        if dd <= self.donor_window and dd <= da:
+            return (1, 'splice_donor', 'splice donor')
+        if da <= self.acceptor_window:
+            return (2, 'splice_acceptor', 'splice acceptor')
+        if da <= self.ppt_window:
+            return (3, 'polypyrimidine_tract', 'polypyrimidine tract')
+        if da <= self.branch_window:
+            return (4, 'branch_point', 'branch point (lariat)')
+        if dd <= self.donor_window:
+            return (1, 'splice_donor', 'splice donor')
+        return (5, 'intron', 'intron')
+
+    def _genic_feature(self, exons, strand, p):
+        """(rank, keyword, label) for point p inside a gene body. rank orders disruptiveness so
+        the most salient feature wins when genes overlap (exon < donor < acceptor < ppt < branch
+        < intron)."""
+        for s, e in exons:
+            if s <= p < e:
+                return (0, 'exon', 'exonic')
+        for i in range(len(exons) - 1):
+            le = exons[i][1]                       # first intron base is le (0-based)
+            rs = exons[i + 1][0]                   # last intron base is rs-1
+            if le <= p < rs:
+                d_left = p - le + 1                # nt into the intron from the left boundary
+                d_right = rs - p                   # nt into the intron from the right boundary
+                # + strand: exon 3' end is the genomic-left boundary -> donor on the left.
+                # - strand: everything is reversed.
+                if strand == '+':
+                    dd, da = d_left, d_right
+                else:
+                    dd, da = d_right, d_left
+                return self._splice_class(dd, da)
+        return (5, 'intron', 'intron')             # single-exon genes never reach here
+
+    def _promoter(self, gs, ge, strand, p):
+        """(abs_dist, keyword, label) if p is within a promoter window of this gene's TSS, else
+        None. TSS = gene 5' end (start for +, end for -). Windows are sense-aware."""
+        tss = gs if strand == '+' else ge
+        off = (p - tss) if strand == '+' else (tss - p)   # <0 = upstream (5') of the TSS
+        if -self.prom_core_up <= off <= self.prom_core_down:
+            return (abs(off), 'promoter_core', 'disrupts promoter')
+        if -self.prom_up <= off <= self.prom_down:
+            return (abs(off), 'promoter_proximal', 'near promoter')
+        return None
+
+    def annotate(self, contig, lo, hi):
+        """Classify the insertion site spanning [lo, hi] on `contig`. Returns
+        (region_keyword, gene, strand, human_text). Uses the locus midpoint as the representative
+        point (the target-site window is a few bp; every feature window is much wider)."""
+        p = (lo + hi) // 2
+        cands = self._candidates(contig, p)
+        if cands is None or not cands:
+            return ('intergenic', '.', '.', 'intergenic')
+        best_genic = None   # (rank, kw, label, gene, strand)
+        best_prom = None    # (dist, kw, label, gene, strand)
+        for gs, ge, name, strand, exons in cands:
+            if gs <= p < ge:
+                rank, kw, label = self._genic_feature(exons, strand, p)
+                if best_genic is None or rank < best_genic[0]:
+                    best_genic = (rank, kw, label, name, strand)
+            prom = self._promoter(gs, ge, strand, p)
+            if prom is not None and (best_prom is None or prom[0] < best_prom[0]):
+                best_prom = (prom[0], prom[1], prom[2], name, strand)
+        parts = []
+        region_kw, gene_out, strand_out = 'intergenic', '.', '.'
+        if best_genic is not None:
+            _, region_kw, label, gene_out, strand_out = best_genic
+            parts.append(f"{label} of {gene_out} ({strand_out})")
+        if best_prom is not None:
+            _, pkw, plabel, pgene, pstrand = best_prom
+            # Suppress a redundant promoter note for the gene we already reported as genic --
+            # unless it is a *core* disruption, which is a distinct functional statement worth
+            # keeping even when we already know the locus is in that gene (e.g. landed in exon 1).
+            same_gene = best_genic is not None and pgene == gene_out
+            if not same_gene or pkw == 'promoter_core':
+                parts.append(f"{plabel} of {pgene} ({pstrand})")
+            if best_genic is None:
+                region_kw, gene_out, strand_out = pkw, pgene, pstrand
+        if not parts:
+            return ('intergenic', '.', '.', 'intergenic')
+        return (region_kw, gene_out, strand_out, '; '.join(parts))
+
+
 class Insertion:
+    # Shared insertion-SITE annotator (GeneModel), set once by the container from
+    # CONFIG['annotate']['gene_model']. None => no site annotation (default), so conclusion()
+    # appends nothing and every existing test that asserts an exact conclusion string is
+    # unaffected. See GeneModel and _site_annotation().
+    gene_model = None
     def __init__(self, title, left_seq, right_seq):
         self.title = title
         self.left_seq = left_seq
@@ -85,6 +295,11 @@ class Insertion:
         self.left_dfams = []
         self.right_maps = []
         self.left_maps = []
+        # (E) partial placements from the bowtie2 --local pass, populated by read_sam_local()
+        # only. Each is (contig, ref_pos, strand, query_coverage_bp, mapq). Empty unless the
+        # local-remap channel ran, so every consumer is a no-op on --end-to-end-only data.
+        self.right_local_maps = []
+        self.left_local_maps = []
         # exon hits of the mapped clips, for processed-pseudogene detection:
         # each is (gene_id, exon_start, exon_end). Empty unless an exon track is configured.
         self.right_exons = []
@@ -92,6 +307,10 @@ class Insertion:
         # discovery splice-hallmark evidence (Feature B), aggregated by combine_insertions:
         # each is (gene_id, side, n_exons) — mates span >= n_exons exons of one gene.
         self.splice_hits = []
+        # reciprocal translocation partner locus ("contig:pos"), set by the container's
+        # link_reciprocal_translocations() pass when this junction and another point back at
+        # each other (a balanced/reciprocal translocation). None until/unless that pass runs.
+        self.reciprocal_partner = None
         # extract inserted sequences
     # Sequence case encodes the junction: UPPER = aligned to the reference, lower = clipped.
     # A tail is therefore a homopolymer run in the *clipped* part, flush against the aligned
@@ -121,6 +340,82 @@ class Insertion:
         return re.search(r"[ACGT]t{%d}" % self._polya_min_len(), self.right_seq)
     def has_left_polyA(self):
         return re.search(r"a{%d}[ACGT]" % self._polya_min_len(), self.left_seq)
+
+    # SVA is a composite element (CCCTCT hexamer + Alu-like region + VNTR + SINE-R + poly-A).
+    # Its diagnostic 5' motif is the (CCCTCT)n hexamer (revcomp (AGAGGG)n), which Alu and L1
+    # lack entirely -- so a hexamer tandem in a clip is an SVA-specific fingerprint. A single
+    # 6-mer occurs by chance in ~5% of clips, so it is only ever corroborating, never a sole
+    # trigger; the tandem (>= 2 copies, 12 bp) is specific enough to act as a hallmark.
+    _SVA_HEX_TANDEM = re.compile(r"(?:CCCTCT){2,}|(?:AGAGGG){2,}", re.I)
+    _SVA_HEX_ANY = re.compile(r"CCCTCT|AGAGGG", re.I)
+
+    # Minimum SVA-model bit score for a clip's SVA hit to count as the *dominant* element
+    # identity (over a competing Alu on the same clip). The Alu-like body of an SVA scores an
+    # Alu model, so a trace SVA hit (< a few bits) on a clip that is really Alu must not win;
+    # a genuine SVA VNTR/SINE-R clip scores the SVA models in the tens of bits. Override with
+    # CONFIG['annotate']['sva_min_bits'].
+    @staticmethod
+    def _sva_min_bits():
+        return CONFIG['annotate'].get('sva_min_bits', 5)
+
+    @staticmethod
+    def _best_bits(dfams, prefix):
+        b = [m.bits for m in dfams if m.model.startswith(prefix)]
+        return max(b) if b else None
+
+    def _sva_conclusion(self):
+        """SVA-specific classifier, run before the Alu/L1 logic. SVA's Alu-like region makes a
+        real SVA score an Alu model (so it was mislabelled ALU), and its poly-A tail can sit on
+        either junction regardless of which strand the SVA HMM hits (so the strand-gated Alu
+        acceptance rejected it) -- and when the SVA hit is on the LEFT clip with a bare poly-A
+        on the right, the Alu/L1 block (nested under `len(right_dfams)>0`) never even ran. This
+        method resolves the composite structure directly.
+
+        A call needs an SVA *identity* signal and a TPRT/composite *hallmark*:
+          identity: an SVA Dfam hit that dominates any Alu on its clip (sva_bits >= sva_min_bits
+                    and >= that clip's best Alu), OR a CCCTCT/AGAGGG hexamer tandem (Alu/L1 lack it).
+          hallmark: a poly-A tail on either clip, OR an SVA hit on BOTH clips (the element spans
+                    both breakpoints), OR -- corroborating a dominant SVA hit -- a lone hexamer.
+        Returns the conclusion string, or None to fall through to the generic logic. The
+        homology-only paths are gated by _strict_hallmark() exactly like the Alu/L1 branches."""
+        sva_L = self._best_bits(self.left_dfams, 'SVA')
+        sva_R = self._best_bits(self.right_dfams, 'SVA')
+        alu_L = self._best_bits(self.left_dfams, 'Alu')
+        alu_R = self._best_bits(self.right_dfams, 'Alu')
+        floor = self._sva_min_bits()
+        dom_side = None
+        for sv, al, side in ((sva_L, alu_L, 'left'), (sva_R, alu_R, 'right')):
+            if sv is not None and sv >= floor and (al is None or sv >= al):
+                dom_side = side
+                break
+        sva_dominant = dom_side is not None
+        sva_both = sva_L is not None and sva_L > 0 and sva_R is not None and sva_R > 0
+        hex_tandem = bool(self._SVA_HEX_TANDEM.search(self.left_seq)
+                          or self._SVA_HEX_TANDEM.search(self.right_seq))
+        hex_any = bool(self._SVA_HEX_ANY.search(self.left_seq)
+                       or self._SVA_HEX_ANY.search(self.right_seq))
+        polyA = bool(self.has_left_polyA() or self.has_right_polyA())
+        hallmark = polyA or sva_both
+        if self._strict_hallmark():
+            # strict: the poly-A tail itself must be present; homology (dominance/hexamer) alone
+            # is not accepted, mirroring the Alu/L1 strict paths.
+            fire = polyA and (hex_tandem or sva_dominant)
+        else:
+            fire = (hallmark and (hex_tandem or sva_dominant)) or (sva_dominant and hex_any)
+        if not fire:
+            return None
+        best = max([b for b in (sva_L, sva_R) if b is not None], default=0.0)
+        ev = []
+        if sva_dominant:
+            ev.append(f"{dom_side} SVA {best:.0f}b")
+        if hex_tandem:
+            ev.append("hexamer")
+        if polyA:
+            ev.append("polyA")
+        elif sva_both:
+            ev.append("both junctions")
+        DEBUG and print(f"    - SVA composite call ({', '.join(ev)}) -> accepted")
+        return f"SVA (composite: {', '.join(ev)})"
 
     @staticmethod
     def _strict_hallmark():
@@ -184,6 +479,97 @@ class Insertion:
                 return True
         return False
 
+    # ------------------------------------------------------------------ structural variants
+    # A rearrangement (inversion, translocation, large deletion/duplication) presents to
+    # PEAR-TREE as a "junction" whose clipped side, instead of being an inserted mobile
+    # element, is *reference sequence from the partner breakpoint*. It is therefore an
+    # annotation ORTHOGONAL to the element identity: the junction may fall inside a
+    # retrotransposon, or the rearrangement may itself be MEI-caused, so an SV note is
+    # *added to* (never substituted for) the Alu/L1/SVA call. See conclusion().
+    #
+    # The locus itself is encoded in the title as "contig:start-end". Comparing it to where
+    # a clip uniquely remaps gives the subtype:
+    #   * other contig                       -> translocation junction
+    #   * same contig, distal, reverse clip  -> inversion (the inverted segment reads
+    #                                           reverse-complemented, so its clip aligns '-';
+    #                                           a co-linear deletion partner would align '+')
+    #   * same contig, distal, forward clip  -> intrachromosomal SV (deletion/duplication)
+    _LOCUS_RE = re.compile(r'^(.+):(\d+)-(\d+)$')
+    _MAP_RE = re.compile(r'^(.+):(\d+)[+-]?$')
+
+    @staticmethod
+    def _fmt_dist(d):
+        if d >= 1_000_000:
+            return f"{d/1e6:.1f} Mb"
+        return f"{d/1000:.0f} kb" if d >= 1000 else f"{d} bp"
+
+    def _parse_locus(self):
+        m = self._LOCUS_RE.match(self.title)
+        return (m.group(1), int(m.group(2)), int(m.group(3))) if m else None
+
+    def _sv_partner_maps(self, allow_rte):
+        """Clip remaps that can be trusted as a rearrangement partner: MAPQ >= sv_min_mapq
+        (unique — a dispersed-repeat clip multi-maps at MAPQ 0 and is excluded, which is what
+        keeps the whole Alu family from reading as translocations). allow_rte=False also drops
+        partners carrying any RTE annotation (the conservative pure-SV gate, unchanged from the
+        legacy flag); allow_rte=True keeps them, so a repeat-mediated / MEI-caused SV whose
+        partner happens to sit in a young uniquely-mapping element is still seen.
+        Yields (side, partner_contig, partner_pos, strand, partner_is_rte)."""
+        floor = CONFIG['annotate'].get('sv_min_mapq', 30)
+        out = []
+        for side, maps in (('left', self.left_maps), ('right', self.right_maps)):
+            for pos, qual, rmsks, strand in maps:
+                if qual is None or qual < floor:
+                    continue
+                is_rte = any(getattr(r, 'repClass', None) in self._RTE_REPCLASSES
+                             for r in (rmsks or []))
+                if not allow_rte and is_rte:
+                    continue
+                m = self._MAP_RE.match(pos)
+                if not m:
+                    continue
+                out.append((side, m.group(1), int(m.group(2)), strand, is_rte))
+        return out
+
+    def _sv_subtype(self, allow_rte, inversion_only=False):
+        """Best SV descriptor for this junction, or None. Returns a tuple
+        (rank, description, partner_contig, partner_pos); lower rank wins (inversion 0 <
+        translocation 1 < deletion/duplication 2). `inversion_only` keeps only the inversion
+        signature (used as the transduction guard on poly-A-bearing RTE calls)."""
+        loc = self._parse_locus()
+        if loc is None:
+            return None
+        contig, s, e = loc
+        mind = CONFIG['annotate'].get('sv_min_distance', 1000)
+        best = None
+        for side, pc, pp, ps, is_rte in self._sv_partner_maps(allow_rte):
+            if pc == contig:
+                dist = min(abs(pp - s), abs(pp - e))
+                if dist < mind:
+                    continue                       # local micro-context, not a rearrangement
+                if ps == '-':
+                    rank = 0
+                    desc = f"inversion junction -> {pc}:{pp} ({self._fmt_dist(dist)})"
+                elif inversion_only:
+                    continue
+                else:
+                    rank = 2
+                    desc = (f"intrachromosomal SV (deletion/duplication) -> {pc}:{pp} "
+                            f"({self._fmt_dist(dist)})")
+            elif inversion_only:
+                continue
+            else:
+                rank = 1
+                if self.reciprocal_partner is not None:
+                    desc = f"balanced translocation (reciprocal {self.reciprocal_partner})"
+                else:
+                    desc = f"translocation junction -> {pc}:{pp}"
+            if is_rte:
+                desc += " (repeat-mediated)"
+            if best is None or rank < best[0]:
+                best = (rank, desc, pc, pp)
+        return best
+
     def get_fasta(self) -> str:
         """
         This function returns a FASTA chunk with the inserted sequences for the insertion.
@@ -192,7 +578,261 @@ class Insertion:
         self.left_ins_seq = self.left_seq[:min([self.left_seq.find(b) for b in 'ACGT' if b in self.left_seq])].upper()
         return f'>{self.title}:R\n{self.right_ins_seq}\n>{self.title}:L\n{self.left_ins_seq}\n'
 
+    # ------------------------------------------------------ uncharacterised complex insertion
+    # A junction with no Dfam hit, no clip remap and no poly-A used to collapse -- whatever its
+    # clips contained -- into 'artefact', the same bin as genotyping noise and poly-A slippage.
+    # But a junction whose two breakpoints carry SUBSTANTIAL, HIGH-COMPLEXITY inserted sequence
+    # that simply matched nothing is not noise: it is a real but uncharacterised insertion -- a
+    # non-MEI / complex / templated insertion whose inserted sequence is novel or chimeric, so
+    # bowtie2's --end-to-end remap (which must align the WHOLE clip to one reference block)
+    # drops it and no retrotransposon model scores it. Separate the two so these do not
+    # masquerade as artefacts. Thresholds are deployment-local (defaulted in code).
+    @staticmethod
+    def _shannon(seq):
+        """Per-base Shannon entropy (bits) of a sequence; 0 for empty/homopolymer, ~2 for a
+        balanced 4-letter mix. Distinguishes complex inserted sequence from low-complexity
+        homopolymer/STR slippage."""
+        seq = seq.upper()
+        if not seq:
+            return 0.0
+        counts = {}
+        for b in seq:
+            counts[b] = counts.get(b, 0) + 1
+        n = len(seq)
+        return -sum((c / n) * log2(c / n) for c in counts.values())
+
+    def _insert_clips(self):
+        """The inserted (clipped, lower-case) sequence on each junction -- the left junction's
+        leading run before the first reference (upper-case) base and the right junction's
+        trailing run from the first inserted (lower-case) base. These are exactly the
+        substrings get_fasta() submits to Dfam / bowtie2. Returns (left_insert, right_insert)."""
+        ls, rs = self.left_seq, self.right_seq
+        li_end = next((i for i, ch in enumerate(ls) if ch.isupper()), len(ls))
+        ri_start = next((i for i, ch in enumerate(rs) if ch.islower()), len(rs))
+        return ls[:li_end], rs[ri_start:]
+
+    def _is_complex_insertion(self):
+        """True when BOTH breakpoints carry substantial (>= complex_ins_min_len bp),
+        high-complexity (>= complex_ins_min_entropy bits on at least one side) inserted
+        sequence -- the signature of a real but uncharacterised insertion rather than noise."""
+        min_len = CONFIG['annotate'].get('complex_ins_min_len', 20)
+        min_ent = CONFIG['annotate'].get('complex_ins_min_entropy', 1.6)
+        left_ins, right_ins = self._insert_clips()
+        if len(left_ins) < min_len or len(right_ins) < min_len:
+            return False
+        return max(self._shannon(left_ins), self._shannon(right_ins)) >= min_ent
+
+    # ------------------------------------------------ reference-free local-rearrangement subtypes
+    # Ten worker analyses of TP "unknown" loci (2026-07-18) found they are overwhelmingly REAL,
+    # non-MEI local events whose clips are NOT novel sequence but *copies of this locus's own
+    # reference flanks*, joined across the breakpoint. Because such a clip is chimeric (part = one
+    # flank, part = the other / a novel seam) it fails bowtie2 --end-to-end by construction, and it
+    # carries no Dfam/poly-A signal -- so it fell into "unknown". They are cheaply nameable from
+    # the two junction strings ALONE (no reference lookup): the inserted (lower-case) clip of one
+    # junction reappears as the aligned (upper-case) flank of the other. Forward -> tandem /
+    # segmental duplication; reverse-complement -> inverted duplication; a short-period tandem
+    # repeat flush to both breakpoints -> microsatellite length change.
+    _STR_RUN = re.compile(r'((?:[ACGT]{1,3})\1{4,})')
+
+    @staticmethod
+    def _rc(seq):
+        return seq.upper().translate(str.maketrans('ACGT', 'TGCA'))[::-1]
+
+    @staticmethod
+    def _longest_submatch(a, b):
+        """Length of the longest exact substring of `a` that occurs in `b` (both upper-cased).
+        O(len(a)*best); fine for the short (<300 bp) clips/flanks here."""
+        a = a.upper(); b = b.upper()
+        best = 0
+        la = len(a)
+        for i in range(la):
+            k = best + 1
+            while i + k <= la and a[i:i + k] in b:
+                k += 1
+            if k - 1 > best:
+                best = k - 1
+        return best
+
+    def _flank_uppers(self):
+        """The reference-aligned (upper-case) genomic flank of each junction."""
+        lf = ''.join(c for c in self.left_seq if c.isupper())
+        rf = ''.join(c for c in self.right_seq if c.isupper())
+        return lf, rf
+
+    def _microsatellite_subtype(self, li, ri, lf, rf):
+        """A short-period tandem repeat flush to BOTH breakpoints, with each clip's core also
+        present in the opposite junction's flank (same-locus): a polymorphic microsatellite / STR
+        length change, not an insertion. Returns a label or None. Runs before the (entropy-gated)
+        duplication test so a low-complexity (CA)n tract is called STR, not a segmental dup."""
+        ls, rs = self.left_seq.upper(), self.right_seq.upper()
+        lb = len(li)                 # left  breakpoint = insert|flank boundary
+        rb = len(rs) - len(ri)       # right breakpoint = flank|insert boundary
+        def crossing_period(seq, bnd):
+            for m in self._STR_RUN.finditer(seq):
+                if m.start() < bnd < m.end() and (m.end() - m.start()) >= 10:
+                    unit = m.group(1)
+                    for p in (1, 2, 3):
+                        if len(unit) >= p and unit == (unit[:p] * (len(unit) // p + 1))[:len(unit)]:
+                            return p
+                    return len(m.group(2)) if m.lastindex and m.lastindex >= 2 else 2
+            return None
+        pL = crossing_period(ls, lb)
+        pR = crossing_period(rs, rb)
+        if pL is None or pR is None:
+            return None
+        # same-locus corroboration: each insert shares a >=10 bp exact stretch with a flank.
+        share = (max(self._longest_submatch(li, rf), self._longest_submatch(li, lf)) >= 10
+                 and max(self._longest_submatch(ri, lf), self._longest_submatch(ri, rf)) >= 10)
+        if not share:
+            return None
+        return f"microsatellite (period {min(pL, pR)}) length change"
+
+    def _reciprocal_dup_subtype(self):
+        """Reference-free local-duplication / STR subtype for a junction the element and SV logic
+        could not explain, or None. Fires only on the *same-locus* signature (clip = copy of the
+        opposite flank), so it is safe to consult only in the unknown/artefact fallbacks -- an
+        accepted Alu/L1/SVA call never reaches here, so its (TSD-driven) flank match is moot."""
+        li, ri = (s.upper() for s in self._insert_clips())
+        if not li or not ri:
+            return None
+        lf, rf = (s.upper() for s in self._flank_uppers())
+        mind = CONFIG['annotate'].get('dup_min_match', 18)
+        ment = CONFIG['annotate'].get('dup_min_entropy', 1.7)
+        # microsatellite first (low-entropy, own detector)
+        micro = self._microsatellite_subtype(li, ri, lf, rf)
+        if micro is not None:
+            return micro
+        # tandem / segmental duplication: BOTH inserts carry a >= mind exact copy of a flank,
+        # forward orientation, and both inserts are complex (entropy gate excludes STR/homopolymer).
+        if min(self._shannon(li), self._shannon(ri)) >= ment:
+            mL = max(self._longest_submatch(li, rf), self._longest_submatch(li, lf))
+            mR = max(self._longest_submatch(ri, lf), self._longest_submatch(ri, rf))
+            if mL >= mind and mR >= mind:
+                return f"tandem/segmental duplication (dup unit >= {min(mL, mR)} bp)"
+            mLrc = max(self._longest_submatch(li, self._rc(rf)), self._longest_submatch(li, self._rc(lf)))
+            mRrc = max(self._longest_submatch(ri, self._rc(lf)), self._longest_submatch(ri, self._rc(rf)))
+            if mLrc >= mind and mRrc >= mind:
+                return f"inverted duplication (>= {min(mLrc, mRrc)} bp)"
+        return None
+
+    # ------------------------------------------------------------------- flank-leak Dfam demotion
+    def _dfam_is_flank_leak(self, dfam, side):
+        """True when a Dfam hit sits on clip sequence that is actually genomic FLANK that leaked
+        into the soft-clip (a short insert forces the aligner to clip contiguous reference past
+        the breakpoint, and that reference tail can carry an old-repeat HMM hit describing the
+        SITE, not the inserted element). Detected by: the clip sub-sequence under the hit is a
+        long exact copy of one of this locus's reference flanks. Purely local; no reference lookup."""
+        need = CONFIG['annotate'].get('flankleak_min', 25)
+        li, ri = (s.upper() for s in self._insert_clips())
+        clip = li if side == 'left' else ri
+        s = max(0, dfam.ali_start - 1)
+        e = min(len(clip), dfam.ali_end)
+        sub = clip[s:e]
+        if len(sub) < need:
+            return False
+        lf, rf = (s.upper() for s in self._flank_uppers())
+        want = min(len(sub), need)
+        return self._longest_submatch(sub, lf) >= want or self._longest_submatch(sub, rf) >= want
+
+    # --------------------------------------------------------------- clip-map trust guard (for SV)
+    def _clip_trustworthy_for_sv(self, side):
+        """A clip remap is only a credible rearrangement partner if the clip that produced it is
+        long enough and complex enough to map uniquely on merit. A short, AT-rich / low-entropy
+        clip yields chance / paralogous 'unique' hits that masquerade as translocation partners
+        (seen repeatedly in the worker analyses). Gate them out of the SV partner set."""
+        li, ri = (s.upper() for s in self._insert_clips())
+        clip = li if side == 'left' else ri
+        if len(clip) < CONFIG['annotate'].get('sv_clip_min_len', 25):
+            return False
+        if self._shannon(clip) < CONFIG['annotate'].get('sv_clip_min_entropy', 1.9):
+            return False
+        at = (clip.count('A') + clip.count('T')) / len(clip)
+        if at > CONFIG['annotate'].get('sv_clip_max_at', 0.72):
+            return False
+        return True
+
+    # ---------------------------------------------------------- (E) split / local-remap subtype
+    def _local_remap_subtype(self):
+        """Feature E: when the whole-clip --end-to-end remap failed but a bowtie2 --local pass
+        placed part of a clip, use that partial placement to name the event. A clip whose novel
+        core maps uniquely to a DISTAL locus is a templated / complex insertion sourced there; a
+        clip that maps back within this locus corroborates a local duplication. Returns a label or
+        None. Inert unless the local-remap channel ran (left_local_maps / right_local_maps
+        populated by read_sam_local); it is a no-op on data scored without the --local pass."""
+        loc = self._parse_locus()
+        if loc is None:
+            return None
+        contig, s, e = loc
+        floor = CONFIG['annotate'].get('sv_min_mapq', 30)
+        near = CONFIG['annotate'].get('sv_min_distance', 1000)
+        best = None
+        for side, maps in (('left', self.left_local_maps), ('right', self.right_local_maps)):
+            for pc, pp, strand, qcov, mapq in maps:
+                if mapq is None or mapq < floor:
+                    continue
+                if qcov < CONFIG['annotate'].get('local_min_qcov', 20):
+                    continue
+                if pc == contig and min(abs(pp - s), abs(pp - e)) < near:
+                    cand = (2, "local duplication (confirmed by split remap)")
+                else:
+                    cand = (1, f"templated/complex insertion (source {pc}:{pp})")
+                if best is None or cand[0] < best[0]:
+                    best = cand
+        return best[1] if best else None
+
+    def site(self):
+        """Insertion-site annotation for this junction's own reference locus (the title), or
+        None when no gene model is configured or the title carries no parseable locus. Returns
+        the GeneModel.annotate() tuple (region_keyword, gene, strand, human_text). Orthogonal to
+        the element identity: it says WHERE the insertion landed, not WHAT landed."""
+        if self.gene_model is None:
+            return None
+        loc = self._parse_locus()
+        if loc is None:
+            return None
+        contig, s, e = loc
+        return self.gene_model.annotate(contig, s, e)
+
     def conclusion(self) -> str:
+        """Full annotation: the element identity from _element_conclusion(), plus — because a
+        structural variant and a mobile element are NOT mutually exclusive (a rearrangement
+        junction may fall inside a retrotransposon, or the SV may itself be MEI-caused) — an
+        additive `[SV: ...]` note when a clip uniquely maps to a distal / other-contig
+        rearrangement partner, and — orthogonally to both — an additive `[site: ...]` note
+        describing where the insertion LANDED (gene / exon / splice site / intron / promoter),
+        from GeneModel via the title locus. Neither note ever changes the element class and
+        nothing is dropped; they only annotate. Pure structural variants (no element call) are
+        handled inside _element_conclusion() and carry the subtype directly."""
+        out = self._conclusion_no_site()
+        site = self.site()
+        if site is not None:
+            out = f"{out} [site: {site[3]}]"
+        return out
+
+    def _conclusion_no_site(self) -> str:
+        base = self._element_conclusion()
+        cls = VariantAnnotationContainer.element_class(base)
+        if cls in ('ALU', 'LINE1', 'SVA', 'RTE_other'):
+            # An element call gets an additive SV note only for a *trustworthy* partner: a clip
+            # that maps uniquely to NON-RTE sequence (the genuine MEI-caused-SV signal — e.g. an
+            # Alu-mediated deletion whose far breakpoint is a unique locus). A clip matching only
+            # a paralogous repeat copy is NOT reported: it is far more likely the element itself
+            # aligning to a family member than a real rearrangement, and would decorate hundreds
+            # of ordinary Alu/L1 insertions with spurious translocations. A repeat partner is
+            # admitted only when reciprocally confirmed (two junctions pointing back at each
+            # other — corroboration a lone paralog match cannot fake).
+            allow_rte = self.reciprocal_partner is not None
+            # Transduction guard: a 3' transduction drags a unique, poly-adenylated genomic
+            # flank that mimics a co-oriented SV partner. Under a poly-A hallmark accept only
+            # the inversion signature (a reverse-strand partner), which a transduction — always
+            # co-oriented — cannot produce.
+            polya = bool(self.has_left_polyA() or self.has_right_polyA())
+            sub = self._sv_subtype(allow_rte=allow_rte, inversion_only=polya)
+            if sub is not None:
+                return f"{base} [SV: {sub[1]}]"
+        return base
+
+    def _element_conclusion(self) -> str:
         """
         This function aggregates all information available to come to a conclusion
         """
@@ -204,7 +844,21 @@ class Insertion:
             gene, side, nex = max(self.splice_hits, key=lambda x: x[2])
             return f"processed pseudogene of {gene} (splice: {nex} exons, discovery mates)"
         if len(self.right_dfams)==0 and len(self.left_dfams)==0 and len(self.right_maps)==0 and len(self.left_maps)==0:
+            # Nothing identified this junction: no Dfam hit, no clip remap, no poly-A. If BOTH
+            # clips nonetheless carry substantial high-complexity inserted sequence it is a real
+            # but uncharacterised insertion (a non-MEI / complex / templated insertion whose novel
+            # or chimeric clip fails the --end-to-end remap and matches no retrotransposon model),
+            # not genotyping noise -- keep those out of the artefact bin.
+            if self._is_complex_insertion():
+                return 'unknown (unmapped complex insertion)'
             return 'artefact'
+        # SVA is a composite element: its Alu-like body scores an Alu model and its poly-A can be
+        # on either junction, so the strand-gated Alu/L1 logic below both mislabels and (when the
+        # SVA hit is on the left clip with a bare poly-A right, since that block is nested under
+        # `len(right_dfams)>0`) skips real SVAs. Give the SVA-specific composite test first claim.
+        sva = self._sva_conclusion()
+        if sva is not None:
+            return sva
         if len(self.right_dfams)>0:
             for m in self.right_dfams:
                 if True or m.is_active:
@@ -363,6 +1017,13 @@ class Insertion:
         if (not self.has_left_polyA() and not self.has_right_polyA()
                 and (self._maps_uniquely_to_nonrte(self.left_maps)
                      or self._maps_uniquely_to_nonrte(self.right_maps))):
+            # A pure (non-RTE) rearrangement: subtype it (translocation / inversion /
+            # deletion-duplication) when the partner resolves, else keep the legacy generic
+            # flag. Same firing condition as before, so no locus that used to be flagged is
+            # lost — the change is only that the label is now specific where it can be.
+            sub = self._sv_subtype(allow_rte=False)
+            if sub is not None:
+                return sub[1]
             return 'unknown (possible non-RTE SV, e.g. translocation)'
         return 'unknown'
 
@@ -392,6 +1053,49 @@ class VariantAnnotationContainer:
         if not os.path.exists(self.sam_file) or os.path.getsize(self.sam_file) == 0:
             self.generate_sam_file()
         self.read_sam()
+        self.link_reciprocal_translocations()
+        self.read_gene_model()
+
+    def read_gene_model(self):
+        """Load the insertion-SITE gene model (CONFIG['annotate']['gene_model']) once and share it
+        across all insertions via the Insertion.gene_model class attribute. Optional: None (the
+        default) leaves site annotation off. Window parameters are read from the same config
+        block (splice_*_window, promoter_*), so a deployment can tune them without code changes."""
+        path = CONFIG['annotate'].get('gene_model')
+        if not path:
+            Insertion.gene_model = None
+            return
+        Insertion.gene_model = GeneModel(path, CONFIG['annotate'])
+
+    def link_reciprocal_translocations(self, window=100000):
+        """Pair reciprocal (balanced) translocation junctions. A single junction only shows a
+        one-way pointer locus_A -> partner_B; it is a *balanced* translocation when another
+        junction near B points back near A. This pass finds those pairs and records the partner
+        locus on each Insertion (`reciprocal_partner`), which _sv_subtype() then reports as
+        'balanced translocation (reciprocal ...)'. `window` is the coordinate tolerance for
+        matching a junction to a partner breakpoint. Interchromosomal junctions only (few
+        hundred typically), so the pairwise scan is cheap."""
+        trans = []   # (key, locus_contig, locus_mid, partner_contig, partner_pos)
+        for key, ins in self.insertions.items():
+            loc = ins._parse_locus()
+            if loc is None:
+                continue
+            sub = ins._sv_subtype(allow_rte=True)          # reciprocal_partner still None here
+            if sub is None or sub[0] != 1:                 # rank 1 == interchromosomal
+                continue
+            trans.append((key, loc[0], (loc[1] + loc[2]) // 2, sub[2], sub[3]))
+        n = 0
+        for ki, lci, lmi, pci, ppi in trans:
+            for kj, lcj, lmj, pcj, ppj in trans:
+                if ki == kj:
+                    continue
+                # kj's locus sits at ki's partner, and kj's partner points back at ki's locus.
+                if (lcj == pci and abs(lmj - ppi) <= window
+                        and pcj == lci and abs(ppj - lmi) <= window):
+                    self.insertions[ki].reciprocal_partner = f"{lcj}:{lmj}"
+                    n += 1
+                    break
+        print(f"linked {n} reciprocal (balanced) translocation junction(s).")
 
     def read_splice(self):
         """Attach discovery splice-hallmark (Feature B) evidence to the insertions. The
@@ -728,10 +1432,69 @@ class VariantAnnotationContainer:
                         raise ValueError(f"Unknown insertion side {read.query_name}, expected R or L.")
         print(f"imported {rightn} right mappings and {leftn} left mappings.")
 
+    # Coarse element class from a conclusion() string, for the flat table. The order
+    # matters: the non-RTE SV flag and the pseudogene calls also read as "unknown"/contain
+    # element-like tokens, so the specific cases are tested before the generic ones.
+    @staticmethod
+    def element_class(conclusion: str) -> str:
+        # The element identity wins over an additive `[SV: ...]` suffix: a rearrangement
+        # junction that falls inside a retrotransposon is still classed by that element. Strip
+        # the suffix and classify the element head, so even an RTE_other element (which carries
+        # no big-three token) keeps its class. A pure SV has no element head — the whole string
+        # is the SV descriptor — so it still falls through to the non_RTE_SV umbrella below.
+        head = conclusion.split(' [SV:', 1)[0].split(' [site:', 1)[0]
+        u = head.upper()
+        if 'PSEUDOGENE' in u:
+            return 'processed_pseudogene'
+        if head == 'artefact':
+            return 'artefact'
+        if 'SVA' in u:
+            return 'SVA'
+        if 'ALU' in u:
+            return 'ALU'
+        if 'L1' in u or 'LINE' in u:
+            return 'LINE1'
+        if any(t in u for t in ('TRANSLOCATION', 'INVERSION', 'INTRACHROMOSOMAL SV',
+                                'DELETION', 'DUPLICATION', 'NON-RTE SV')):
+            return 'non_RTE_SV'
+        if u.startswith('UNKNOWN'):
+            return 'unknown'
+        return 'RTE_other'   # a mapped/dfam RTE that is none of the big three (HERV/LTR, MIR, ...)
+
+    def write_table(self, path: str):
+        """Flat, machine-readable annotation table: one row per called locus. Complements
+        print() (the verbose per-junction report). Gzipped when `path` ends in .gz."""
+        opener = gzip.open if path.endswith('.gz') else open
+        cols = ['locus', 'class', 'conclusion', 'n_ins', 'n_wt', 'n_art',
+                'left_polyA', 'right_polyA', 'left_dfam', 'right_dfam', 'left_map', 'right_map',
+                'site_region', 'site_gene', 'site_strand']
+        n = 0
+        with opener(path, 'wt') as fh:
+            fh.write('\t'.join(cols) + '\n')
+            for key, ins in self.insertions.items():
+                concl = ins.conclusion()
+                ld = ','.join(sorted({m.model for m in ins.left_dfams})) or '.'
+                rd = ','.join(sorted({m.model for m in ins.right_dfams})) or '.'
+                lm = (','.join(sorted({p for p, _, _, _ in ins.left_maps})) or '.')[:80]
+                rm = (','.join(sorted({p for p, _, _, _ in ins.right_maps})) or '.')[:80]
+                site = ins.site()
+                sregion, sgene, sstrand = (site[0], site[1], site[2]) if site else ('.', '.', '.')
+                row = [key, self.element_class(concl), concl.replace('\t', ' ').replace('\n', ' '),
+                       str(ins.nins), str(ins.nwt), str(ins.nart),
+                       'Y' if ins.has_left_polyA() else 'N',
+                       'Y' if ins.has_right_polyA() else 'N',
+                       ld, rd, lm, rm, sregion, sgene, sstrand]
+                fh.write('\t'.join(row) + '\n')
+                n += 1
+        print(f"wrote annotation table ({n} loci) to {path}")
+
     def print(self):
         for key, insertion in self.insertions.items():
             print(f"> insertion {key} found in {insertion.nins} tip{'s' if insertion.nins!=1 else ''} ({insertion.nwt}=wt, {insertion.nart}=art)")
             print(f" {insertion.conclusion()}")
+            site = insertion.site()
+            if site is not None:
+                print(f"  SITE: {site[3]}")
             print(f"  RIGHT INSERTION: {insertion.right_seq}")
             for dfam in insertion.right_dfams:
                 print(f"    {str(dfam)}")
@@ -761,6 +1524,9 @@ if __name__== '__main__':
     else:
         output_path = f"{sample}.out"
     f = VariantAnnotationContainer(sample, output_path)
+    # output_path is the flat table (pipeline.sh expects <PATIENT_ID>.annotated.csv.gz);
+    # the verbose per-junction report still goes to stdout (captured in the job log).
+    f.write_table(output_path)
     f.print()
 
 

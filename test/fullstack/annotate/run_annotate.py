@@ -29,6 +29,7 @@ def main():
     ap.add_argument("--combined", required=True)
     ap.add_argument("--genotypes", required=True)
     ap.add_argument("--out", required=True)
+    ap.add_argument("--table", default=None, help="flat annotation TSV (default: <out without ext>.tsv; .gz ok)")
     ap.add_argument("--workdir", default=None, help="dir for tmp dfam/sam/fa (default: alongside --out)")
     a = ap.parse_args()
     workdir = a.workdir or (os.path.dirname(os.path.abspath(a.out)) or ".")
@@ -58,6 +59,8 @@ def main():
     m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
     sample = os.path.basename(a.combined).split(".")[0]
     f = m.VariantAnnotationContainer(sample, a.out)   # setup logging -> console
+    table = a.table or (os.path.splitext(a.out)[0] + ".tsv")
+    f.write_table(table)                               # flat table -> --table
     with open(a.out, "w") as fh:                       # per-insertion report -> --out
         old = sys.stdout
         sys.stdout = fh
@@ -65,7 +68,7 @@ def main():
             f.print()
         finally:
             sys.stdout = old
-    print(f"wrote annotation report to {a.out}")
+    print(f"wrote annotation report to {a.out} and table to {table}")
 
 
 def _which(x):
