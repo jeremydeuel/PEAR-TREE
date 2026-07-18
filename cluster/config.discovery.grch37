@@ -50,6 +50,12 @@ slippage_min_ref_run = 8      # >= 8 stays clear of the 4 bp TTTT/AA L1-endonucl
 slippage_min_clip_frac = 0.6  # the only real lever: 0.6 -> 41% of band, 0.9 -> 9%
 slippage_max_period = 6       # 1 = poly-A only; <=6 also allows (CA)n/(TG)n/(TAAAA)n
 
+# SPEC-8b -- bilateral clip-consensus slippage gate. Now the shipped DEFAULT, but pinned OFF
+# here: the 11/1.95 operating point was validated on GRCh38 151 bp reads, and PD44579 is 75 bp
+# on hs37d5 — shorter clips change how a run>=11 bilateral test behaves. Enable only after a
+# GRCh37/75 bp re-validation.
+clip_slippage_filter = false
+
 # Why min_clip_frac must stay > 0 — the pairing is load-bearing (measured 2026-07-16).
 # Setting it to 0 makes the gate reference-only ("junction sits in a tandem tract"), which
 # looks tempting on the artefact band (80% vs 41%) but costs 5x the real recall.

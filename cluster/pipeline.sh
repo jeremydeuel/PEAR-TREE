@@ -2,25 +2,41 @@
 # =============================================================================
 # PEAR-TREE end-to-end pipeline for ONE patient, on farm22 (LSF).
 #
-#   cluster/pipeline.sh submit <PROJECT_ID> <PATIENT_ID>
-#   cluster/pipeline.sh status <PATIENT_ID>
+#   cluster/pipeline.sh submit      <PROJECT_ID> <PATIENT_ID>   # samples from irods.txt
+#   cluster/pipeline.sh submit-list <PATIENT_ID> <SAMPLES_TSV>  # samples from a prebuilt list
+#   cluster/pipeline.sh status      <PATIENT_ID>
+#
+# SAMPLES_TSV is two tab-separated columns: <sample><TAB><iRODS project id>. This
+# is what cluster/fleet.sh builds from patients/<organ>/<patient>/colonies.tsv, and
+# it lets a single patient span several projects (per-sample staging).
 #
 # Submits the whole DAG and returns immediately. One self-dispatching file: the
 # LSF tasks re-invoke this same script with an internal subcommand.
 #
 #   phase                depends on                 what it does
 #   -------------------  -------------------------  -----------------------------
-#   0 resolve            (login node)               irods.txt -> sample list
-#   1 stagedisc[1-N]%K   -                          PER SAMPLE: stageBam.pl -> discover
-#   2 combine            ended(stagedisc)           combine_insertions -> contract
-#   3 genotype[1-N]%K    done(combine)              PER SAMPLE: index + genotype
-#   4 combine_genotypes  ended(genotype)            -> <patient>.genotypes.csv.gz
+#   0 resolve            (login node)               build samples.tsv (sample<TAB>proj)
+#   1 sd[1-N]%K          -                          PER SAMPLE: stageBam.pl -> discover
+#   1r sdr               ended(sd)                  RETRY oom/timeout discoveries at tier2
+#   2 combine            done(sdr)                  combine_insertions -> contract
+#   3 gt[1-N]%K          done(combine)              PER SAMPLE: index + genotype (+stats)
+#   3r gtr               ended(gt)                  RETRY oom/timeout genotypes at tier2
+#   4 combine_genotypes  done(gtr)                  -> <patient>.genotypes.csv.gz
 #   5 cleanup            done(combine_genotypes)    delete this patient's staged BAMs
 #   6 annotate           done(combine_genotypes)    annotate_v2 (runs beside cleanup)
 #
 # WHY stage+discover share a task: discovery for a sample starts the instant THAT
 # sample lands — no waiting for the other 191, no LSF element-dependency tricks,
 # and one sample's failure cannot touch another's.
+#
+# OOM / TIMEOUT ESCALATION (sdr, gtr controllers): an OOM (TERM_MEMLIMIT) or wall
+# (TERM_RUNLIMIT) kill is a SIGKILL the task cannot trap, and -M is fixed at submit
+# time. So a controller job runs AFTER each array, classifies each genuine failure
+# from its own LSF log, and resubmits only the oom/timeout ones ONCE at tier2
+# (2x-4x mem + the `long` queue). There is no tier3: a sample that still fails, or
+# that failed for any non-oom/timeout reason, is FLAGGED and EXCLUDED
+# (<phase>_excluded.tsv) and the phase proceeds without it. If EVERY sample fails,
+# the controller writes FLEET_FATAL.<phase> and exits non-zero -> the patient aborts.
 #
 # ERROR TOLERANCE (by design — iRODS routinely lists samples with no data; for
 # PD44579, 192 samples were listed and only 174 exist, and the phylogeny has
@@ -33,9 +49,8 @@
 #   * no two tasks ever write the same file (Lustre multi-writer corrupts): the
 #     "missing sample" record is one marker FILE per sample, not a shared list
 #
-# ASSEMBLY: runs discovery directly on the GRCh37/hs37d5 BAMs (no bwa remap to
-# hs1). combine_insertions remaps clips to hs1 and reconciles them to GRCh37 via
-# the hs1->hg19 chain, so final coordinates are GRCh37.
+# ASSEMBLY: defaults to the GRCh38 configs. combine_insertions is assembly-specific
+# and is gated by install.sh check-config against a staged BAM header before it runs.
 # =============================================================================
 set -euo pipefail
 
@@ -51,32 +66,33 @@ RESULTS_DIR="${RESULTS_DIR:-$HOME/results}"
 
 DISCOVER_BIN="${DISCOVER_BIN:-$PT_ROOT/rust/peartree-discovery/target/release/peartree-discovery}"
 GENOTYPE_BIN="${GENOTYPE_BIN:-$PT_ROOT/rust/peartree-genotype/target/release/peartree-genotype}"
-DISC_CFG="${DISC_CFG:-$PT_ROOT/cluster/config.discovery.grch37}"
-GENO_CFG="${GENO_CFG:-$PT_ROOT/cluster/config.genotype.grch37}"
+DISC_CFG="${DISC_CFG:-$PT_ROOT/cluster/config.discovery.grch38}"
+GENO_CFG="${GENO_CFG:-$PT_ROOT/cluster/config.genotype.grch38}"
 SAMTOOLS_MODULE="${SAMTOOLS_MODULE:-samtools-1.19}"
 
 # --- resources (tuned from the PD44579 run) -----------------------------------
 STAGE_THROTTLE="${STAGE_THROTTLE:-20}"   # concurrent stageBam.pl -> bounds iRODS + Lustre I/O
 GT_THROTTLE="${GT_THROTTLE:-30}"
-# Budgets below are MEASURED on the full PD44579 run (174 colonies x 30,025 loci,
-# GRCh37 30x WGS), not guessed. Peak RSS from the LSF reports, with headroom:
-#   discovery          12.2 GB peak, ~16-24 min/colony  -> 16 GB
-#   combine_insertions 15.5 GB peak, 854 s on 8 cores    -> 24 GB  (was 64 GB: 4x over)
-#   genotype (Rust)    140 MB peak (!), ~17 min/colony   ->  2 GB  (was 8 GB: 57x over)
-#   combine_genotypes   1.3 GB peak, 456 s               ->  8 GB  (was 32 GB: 24x over)
-# Over-provisioning is not free: rusage[mem] RESERVES memory, so an inflated GT_MEM
-# throttles how many array elements the scheduler will co-locate. Re-measure on new
-# data before trusting these (pilot.sh reports discovery's peak).
-SD_MEM="${SD_MEM:-16000}"                # discovery peaked at 12.2 GB on PD44579
+# tier1 budgets are MEASURED on the full PD44579 run (peak RSS from LSF, with headroom):
+#   discovery          12.2 GB peak  -> 16 GB
+#   combine_insertions 15.5 GB peak  -> 24 GB
+#   genotype (Rust)    140 MB peak   ->  2 GB
+#   combine_genotypes   1.3 GB peak  ->  8 GB
+SD_MEM_T1="${SD_MEM_T1:-16000}"; SD_MEM_T2="${SD_MEM_T2:-32000}"   # discovery: tier1 / tier2
+GT_MEM_T1="${GT_MEM_T1:-2000}";  GT_MEM_T2="${GT_MEM_T2:-8000}"    # genotype:  tier1 / tier2
 CI_MEM="${CI_MEM:-24000}"; CI_CORES="${CI_CORES:-8}"
-GT_MEM="${GT_MEM:-2000}"                 # Rust genotyper is memory-trivial: 140 MB measured
 CG_MEM="${CG_MEM:-8000}"; CG_CORES="${CG_CORES:-8}"
-AN_MEM="${AN_MEM:-32000}"; AN_CORES="${AN_CORES:-4}"   # not yet measured
-QUEUE="${QUEUE:-normal}"                 # 12 h wall; full PD44579 run fits comfortably
+AN_MEM="${AN_MEM:-32000}"; AN_CORES="${AN_CORES:-4}"
+QUEUE="${QUEUE:-normal}"                  # tier1 wall: 12 h
+RETRY_QUEUE="${RETRY_QUEUE:-long}"        # tier2 wall: 48 h
+CTRL_QUEUE="${CTRL_QUEUE:-week}"          # controller waits out the tier2 array (up to 48 h)
 
 log() { echo "[$(date +%H:%M:%S)] $*"; }
 
-bam_path() { echo "$STAGING_ROOT/$1/$2/mapped_sample/$2.sample.dupmarked.bam"; }  # project sample
+bam_path() { echo "$STAGING_ROOT/$1/$2/mapped_sample/$2.sample.dupmarked.bam"; }  # proj sample
+
+# fields of a samples.tsv line: 1=sample 2=proj
+samp_field() { sed -n "${1}p" "$SAMPLES" | cut -f"$2"; }
 
 # Submit and echo the job id (stderr carries LSF's own message).
 submit_job() {
@@ -86,6 +102,13 @@ submit_job() {
     echo "$out" | sed -n 's/^Job <\([0-9]*\)>.*/\1/p'
 }
 
+# Block until an LSF job (or array) has ended. Prefer bwait; fall back to polling.
+wait_job() {
+    local jid="$1"
+    if command -v bwait >/dev/null 2>&1 && bwait -w "ended($jid)" 2>/dev/null; then return 0; fi
+    while bjobs -a -noheader -o stat "$jid" 2>/dev/null | grep -qiE 'PEND|RUN|WAIT|PROV'; do sleep 30; done
+}
+
 load_env() {
     : "${PT_RUNDIR:?internal subcommands need PT_RUNDIR}"
     # shellcheck disable=SC1091
@@ -93,36 +116,16 @@ load_env() {
 }
 
 # =============================================================================
-# phase 0 — resolve samples + submit the DAG
+# phase 0 — build samples.tsv + freeze run.env, then submit the DAG
 # =============================================================================
-cmd_submit() {
-    local PROJECT_ID="${1:?usage: pipeline.sh submit <PROJECT_ID> <PATIENT_ID>}"
-    local PATIENT_ID="${2:?usage: pipeline.sh submit <PROJECT_ID> <PATIENT_ID>}"
-    local RUNDIR="$WORKROOT/$PATIENT_ID"
 
-    [ -r "$IRODS_TXT" ] || { echo "cannot read IRODS_TXT=$IRODS_TXT" >&2; exit 1; }
-    for f in "$DISCOVER_BIN" "$GENOTYPE_BIN" "$DISC_CFG" "$GENO_CFG"; do
-        [ -e "$f" ] || { echo "missing: $f (run cluster/build.sh?)" >&2; exit 1; }
-    done
-    [ -x "$VENV/bin/python" ] || { echo "missing venv python: $VENV/bin/python" >&2; exit 1; }
-
-    mkdir -p "$RUNDIR"/{discovery,genotypes,insertions,logs,missing}
-
-    # sample list: the >PROJECT block of irods.txt, filtered to this patient.
-    local SAMPLES="$RUNDIR/samples.txt"
-    awk -v proj=">$PROJECT_ID" -v pat="$PATIENT_ID" '
-        $0 ~ /^>/ { inblk = ($0 == proj); next }
-        inblk && index($0, pat) { print $1 }
-    ' "$IRODS_TXT" | sort -u > "$SAMPLES"
-    local N; N="$(wc -l < "$SAMPLES" | tr -d ' ')"
-    [ "$N" -gt 0 ] || { echo "no samples for $PATIENT_ID in project $PROJECT_ID of $IRODS_TXT" >&2; exit 1; }
-
-    # freeze the run's parameters so every task sees identical settings
+# write run.env (called after RUNDIR + SAMPLES exist)
+freeze_env() {
+    local RUNDIR="$1"
     cat > "$RUNDIR/run.env" <<EOF
-PROJECT_ID='$PROJECT_ID'
 PATIENT_ID='$PATIENT_ID'
 RUNDIR='$RUNDIR'
-SAMPLES='$SAMPLES'
+SAMPLES='$RUNDIR/samples.tsv'
 PT_ROOT='$PT_ROOT'
 STAGING_ROOT='$STAGING_ROOT'
 VENV='$VENV'
@@ -132,54 +135,119 @@ GENOTYPE_BIN='$GENOTYPE_BIN'
 DISC_CFG='$DISC_CFG'
 GENO_CFG='$GENO_CFG'
 SAMTOOLS_MODULE='$SAMTOOLS_MODULE'
+STAGE_THROTTLE='$STAGE_THROTTLE'
+SD_MEM_T2='$SD_MEM_T2'
+GT_MEM_T2='$GT_MEM_T2'
+RETRY_QUEUE='$RETRY_QUEUE'
 CI_CORES='$CI_CORES'
 CG_CORES='$CG_CORES'
 EOF
+}
 
-    log "patient $PATIENT_ID / project $PROJECT_ID: $N samples listed in iRODS"
+cmd_submit() {
+    local PROJECT_ID="${1:?usage: pipeline.sh submit <PROJECT_ID> <PATIENT_ID>}"
+    PATIENT_ID="${2:?usage: pipeline.sh submit <PROJECT_ID> <PATIENT_ID>}"
+    local RUNDIR="$WORKROOT/$PATIENT_ID"
+    [ -r "$IRODS_TXT" ] || { echo "cannot read IRODS_TXT=$IRODS_TXT" >&2; exit 1; }
+    preflight_binaries
+    mkdir -p "$RUNDIR"/{discovery,genotypes,insertions,stats,logs,missing}
+
+    # >PROJECT block of irods.txt, filtered to this patient -> sample<TAB>proj
+    awk -v proj=">$PROJECT_ID" -v pat="$PATIENT_ID" -v p="$PROJECT_ID" '
+        $0 ~ /^>/ { inblk = ($0 == proj); next }
+        inblk && index($0, pat) { print $1 "\t" p }
+    ' "$IRODS_TXT" | sort -u > "$RUNDIR/samples.tsv"
+    finish_submit "$RUNDIR"
+}
+
+cmd_submit_list() {
+    PATIENT_ID="${1:?usage: pipeline.sh submit-list <PATIENT_ID> <SAMPLES_TSV>}"
+    local SRC="${2:?usage: pipeline.sh submit-list <PATIENT_ID> <SAMPLES_TSV>}"
+    [ -s "$SRC" ] || { echo "empty/missing samples list: $SRC" >&2; exit 1; }
+    preflight_binaries
+    local RUNDIR="$WORKROOT/$PATIENT_ID"
+    mkdir -p "$RUNDIR"/{discovery,genotypes,insertions,stats,logs,missing}
+    # accept <sample> or <sample><TAB><proj>; a missing proj is an error (we can't stage it)
+    awk -F'\t' 'NF>=2 && $1!="" && $2!="" {print $1"\t"$2}' "$SRC" | sort -u > "$RUNDIR/samples.tsv"
+    local bad; bad="$(awk -F'\t' 'NF<2 || $1=="" || $2==""' "$SRC" | wc -l | tr -d ' ')"
+    [ "$bad" -eq 0 ] || echo "WARNING: dropped $bad line(s) from $SRC lacking a project id" >&2
+    finish_submit "$RUNDIR"
+}
+
+preflight_binaries() {
+    for f in "$DISCOVER_BIN" "$GENOTYPE_BIN" "$DISC_CFG" "$GENO_CFG"; do
+        [ -e "$f" ] || { echo "missing: $f (run cluster/build.sh?)" >&2; exit 1; }
+    done
+    [ -x "$VENV/bin/python" ] || { echo "missing venv python: $VENV/bin/python" >&2; exit 1; }
+}
+
+finish_submit() {
+    local RUNDIR="$1"
+    SAMPLES="$RUNDIR/samples.tsv"
+    local N; N="$(wc -l < "$SAMPLES" | tr -d ' ')"
+    [ "$N" -gt 0 ] || { echo "no samples for $PATIENT_ID" >&2; exit 1; }
+    rm -f "$RUNDIR"/FLEET_FATAL.* "$RUNDIR"/*_excluded.tsv 2>/dev/null || true
+    freeze_env "$RUNDIR"
+    log "patient $PATIENT_ID: $N samples"
     log "run dir: $RUNDIR"
-    log "NOTE: iRODS lists samples that have no data; those are skipped, not errors."
+    log "NOTE: listed samples with no data are skipped, not errors."
+    submit_dag "$RUNDIR" "$N"
+    log "submitted. watch:  bjobs -A ;  $SELF status $PATIENT_ID"
+}
 
+submit_dag() {
+    local RUNDIR="$1" N="$2"
     local R="span[hosts=1]"
-    local jid_sd jid_ci jid_gt jid_cg jid_cu jid_an
+    local W="PT_RUNDIR='$RUNDIR' bash '$SELF'"
+    local jid_sd jid_sdr jid_ci jid_gt jid_gtr jid_cg jid_cu jid_an
 
     jid_sd=$(submit_job -J "${PATIENT_ID}_sd[1-$N]%$STAGE_THROTTLE" \
         -o "$RUNDIR/logs/sd.%I.log" -e "$RUNDIR/logs/sd.%I.err" \
-        -n 1 -q "$QUEUE" -M "$SD_MEM" -R "select[mem>$SD_MEM] rusage[mem=$SD_MEM] $R" \
-        "PT_RUNDIR='$RUNDIR' bash '$SELF' stage-discover \$LSB_JOBINDEX")
-    log "phase 1 stage+discover : $jid_sd"
+        -n 1 -q "$QUEUE" -M "$SD_MEM_T1" -R "select[mem>$SD_MEM_T1] rusage[mem=$SD_MEM_T1] $R" \
+        "$W stage-discover \$LSB_JOBINDEX")
+    log "phase 1 stage+discover : $jid_sd  (tier1 ${SD_MEM_T1}MB/$QUEUE)"
 
-    jid_ci=$(submit_job -J "${PATIENT_ID}_ci" -w "ended($jid_sd)" \
+    jid_sdr=$(submit_job -J "${PATIENT_ID}_sdr" -w "ended($jid_sd)" \
+        -o "$RUNDIR/logs/sd_retry.%J.log" -e "$RUNDIR/logs/sd_retry.%J.err" \
+        -n 1 -q "$CTRL_QUEUE" -M 1000 -R "select[mem>1000] rusage[mem=1000]" \
+        "$W retry discover")
+    log "phase 1r retry(disc)   : $jid_sdr  (tier2 ${SD_MEM_T2}MB/$RETRY_QUEUE, oom/timeout only)"
+
+    jid_ci=$(submit_job -J "${PATIENT_ID}_ci" -w "done($jid_sdr)" \
         -o "$RUNDIR/logs/combine.%J.log" -e "$RUNDIR/logs/combine.%J.err" \
         -n "$CI_CORES" -q "$QUEUE" -M "$CI_MEM" -R "select[mem>$CI_MEM] rusage[mem=$CI_MEM] $R" \
-        "PT_RUNDIR='$RUNDIR' bash '$SELF' combine")
+        "$W combine")
     log "phase 2 combine        : $jid_ci"
 
     jid_gt=$(submit_job -J "${PATIENT_ID}_gt[1-$N]%$GT_THROTTLE" -w "done($jid_ci)" \
         -o "$RUNDIR/logs/gt.%I.log" -e "$RUNDIR/logs/gt.%I.err" \
-        -n 1 -q "$QUEUE" -M "$GT_MEM" -R "select[mem>$GT_MEM] rusage[mem=$GT_MEM] $R" \
-        "PT_RUNDIR='$RUNDIR' bash '$SELF' genotype \$LSB_JOBINDEX")
-    log "phase 3 genotype       : $jid_gt"
+        -n 1 -q "$QUEUE" -M "$GT_MEM_T1" -R "select[mem>$GT_MEM_T1] rusage[mem=$GT_MEM_T1] $R" \
+        "$W genotype \$LSB_JOBINDEX")
+    log "phase 3 genotype       : $jid_gt  (tier1 ${GT_MEM_T1}MB/$QUEUE)"
 
-    jid_cg=$(submit_job -J "${PATIENT_ID}_cg" -w "ended($jid_gt)" \
+    jid_gtr=$(submit_job -J "${PATIENT_ID}_gtr" -w "ended($jid_gt)" \
+        -o "$RUNDIR/logs/gt_retry.%J.log" -e "$RUNDIR/logs/gt_retry.%J.err" \
+        -n 1 -q "$CTRL_QUEUE" -M 1000 -R "select[mem>1000] rusage[mem=1000]" \
+        "$W retry genotype")
+    log "phase 3r retry(geno)   : $jid_gtr  (tier2 ${GT_MEM_T2}MB/$RETRY_QUEUE, oom/timeout only)"
+
+    jid_cg=$(submit_job -J "${PATIENT_ID}_cg" -w "done($jid_gtr)" \
         -o "$RUNDIR/logs/combine_gt.%J.log" -e "$RUNDIR/logs/combine_gt.%J.err" \
         -n "$CG_CORES" -q "$QUEUE" -M "$CG_MEM" -R "select[mem>$CG_MEM] rusage[mem=$CG_MEM] $R" \
-        "PT_RUNDIR='$RUNDIR' bash '$SELF' combine-genotypes")
+        "$W combine-genotypes")
     log "phase 4 combine_gt     : $jid_cg"
 
     jid_cu=$(submit_job -J "${PATIENT_ID}_cleanup" -w "done($jid_cg)" \
         -o "$RUNDIR/logs/cleanup.%J.log" -e "$RUNDIR/logs/cleanup.%J.err" \
         -n 1 -q "$QUEUE" -M 1000 -R "select[mem>1000] rusage[mem=1000]" \
-        "PT_RUNDIR='$RUNDIR' bash '$SELF' cleanup")
+        "$W cleanup")
     log "phase 5 cleanup        : $jid_cu  (only on success)"
 
     jid_an=$(submit_job -J "${PATIENT_ID}_annotate" -w "done($jid_cg)" \
         -o "$RUNDIR/logs/annotate.%J.log" -e "$RUNDIR/logs/annotate.%J.err" \
         -n "$AN_CORES" -q "$QUEUE" -M "$AN_MEM" -R "select[mem>$AN_MEM] rusage[mem=$AN_MEM] $R" \
-        "PT_RUNDIR='$RUNDIR' bash '$SELF' annotate")
+        "$W annotate")
     log "phase 6 annotate       : $jid_an"
-
-    log "submitted. watch:  bjobs -A ;  $SELF status $PATIENT_ID"
 }
 
 # =============================================================================
@@ -188,24 +256,24 @@ EOF
 cmd_stage_discover() {
     load_env
     local IDX="${1:?stage-discover <index>}"
-    local SAMPLE; SAMPLE="$(sed -n "${IDX}p" "$SAMPLES")"
+    local SAMPLE PROJ
+    SAMPLE="$(samp_field "$IDX" 1)"; PROJ="$(samp_field "$IDX" 2)"
     [ -n "$SAMPLE" ] || { echo "no sample at line $IDX"; exit 0; }
+    [ -n "$PROJ" ]   || { echo "$SAMPLE: no project id in samples.tsv" >&2; exit 1; }
 
     local OUT="$RUNDIR/discovery/$SAMPLE.txt.gz"
     if [ -s "$OUT" ]; then log "$SAMPLE: discovery exists, skipping"; exit 0; fi
 
-    local BAM; BAM="$(bam_path "$PROJECT_ID" "$SAMPLE")"
+    local BAM; BAM="$(bam_path "$PROJ" "$SAMPLE")"
     if [ ! -s "$BAM" ]; then
-        log "$SAMPLE: staging from iRODS project $PROJECT_ID"
+        log "$SAMPLE: staging from iRODS project $PROJ"
         module load dataImportExport >/dev/null 2>&1 || true
-        # never let a staging failure kill the task: many listed samples have no data
         stageBam.pl --lustre 126 --types m --sample "$SAMPLE" \
-            --project "$PROJECT_ID" -o "$STAGING_ROOT" -fo || \
+            --project "$PROJ" -o "$STAGING_ROOT" -fo || \
             log "$SAMPLE: stageBam.pl returned non-zero (continuing)"
     fi
 
     if [ ! -s "$BAM" ]; then
-        # EXPECTED for a fair number of samples — record and succeed.
         : > "$RUNDIR/missing/$SAMPLE"          # one marker file per sample: no shared-file writes
         log "$SAMPLE: no BAM after staging -> skipping (this is normal, not an error)"
         exit 0
@@ -217,11 +285,89 @@ cmd_stage_discover() {
         log "$SAMPLE: DISCOVERY FAILED"; rm -f "$TMP" "$TMP".*; exit 1
     fi
     mv -f "$TMP" "$OUT"
-    # carry the sidecars ({out}.stats.json, {out}.splice.tsv for Feature B) to the final name
     for ext in stats.json splice.tsv hallmarks.tsv; do
         [ -e "$TMP.$ext" ] && mv -f "$TMP.$ext" "$OUT.$ext"
     done
     log "$SAMPLE: done -> $OUT"
+}
+
+# =============================================================================
+# retry controller — escalate oom/timeout failures ONCE to tier2, then exclude
+#   usage (internal): retry <discover|genotype>
+# =============================================================================
+cmd_retry() {
+    load_env
+    cd "$RUNDIR"
+    local PHASE="${1:?retry <discover|genotype>}"
+    local OUTDIR PREFIX WORKCMD MEM_T2 THROT need_disc
+    case "$PHASE" in
+        discover) OUTDIR=discovery; PREFIX=sd; WORKCMD=stage-discover; MEM_T2="$SD_MEM_T2"; THROT="$STAGE_THROTTLE"; need_disc=0 ;;
+        genotype) OUTDIR=genotypes; PREFIX=gt; WORKCMD=genotype;       MEM_T2="$GT_MEM_T2"; THROT="$STAGE_THROTTLE"; need_disc=1 ;;
+        *) echo "retry: bad phase '$PHASE'" >&2; exit 2 ;;
+    esac
+    local N; N="$(wc -l < "$SAMPLES" | tr -d ' ')"
+
+    # classify: emit "idx<TAB>sample<TAB>reason" for every GENUINE failure.
+    # reason from the sample's own LSF log: TERM_MEMLIMIT->oom, TERM_RUNLIMIT->timeout, else error.
+    # prefers the tier2 log (<prefix>_r2.<i>.log) when present.
+    classify() {
+        local i S out logf errf reason
+        for ((i=1; i<=N; i++)); do
+            S="$(sed -n "${i}p" "$SAMPLES" | cut -f1)"; [ -n "$S" ] || continue
+            out="$OUTDIR/$S.txt.gz"
+            [ -s "$out" ] && continue                                  # succeeded
+            [ -e "missing/$S" ] && continue                            # legit no-data
+            if [ "$need_disc" = 1 ] && [ ! -s "discovery/$S.txt.gz" ]; then continue; fi  # never eligible to genotype
+            if [ -s "logs/${PREFIX}_r2.${i}.log" ] || [ -s "logs/${PREFIX}_r2.${i}.err" ]; then
+                logf="logs/${PREFIX}_r2.${i}.log"; errf="logs/${PREFIX}_r2.${i}.err"
+            else
+                logf="logs/${PREFIX}.${i}.log"; errf="logs/${PREFIX}.${i}.err"
+            fi
+            reason=error
+            if   grep -qs TERM_MEMLIMIT "$logf" "$errf" 2>/dev/null; then reason=oom
+            elif grep -qs TERM_RUNLIMIT "$logf" "$errf" 2>/dev/null; then reason=timeout
+            fi
+            printf '%s\t%s\t%s\n' "$i" "$S" "$reason"
+        done
+    }
+
+    local fails; fails="$(classify)"
+    if [ -n "$fails" ]; then
+        local retry_idx; retry_idx="$(awk -F'\t' '$3=="oom"||$3=="timeout"{print $1}' <<<"$fails" | paste -sd, -)"
+        if [ -n "$retry_idx" ]; then
+            log "$PHASE: tier2 escalation (${MEM_T2}MB / $RETRY_QUEUE) for indices [$retry_idx]"
+            local R="span[hosts=1]" jid
+            jid=$(submit_job -J "${PATIENT_ID}_${PREFIX}_r2[$retry_idx]%$THROT" \
+                -o "$RUNDIR/logs/${PREFIX}_r2.%I.log" -e "$RUNDIR/logs/${PREFIX}_r2.%I.err" \
+                -n 1 -q "$RETRY_QUEUE" -M "$MEM_T2" -R "select[mem>$MEM_T2] rusage[mem=$MEM_T2] $R" \
+                "PT_RUNDIR='$RUNDIR' bash '$SELF' $WORKCMD \$LSB_JOBINDEX")
+            log "$PHASE: waiting on tier2 array $jid"
+            wait_job "$jid"
+            fails="$(classify)"     # re-evaluate against tier2 logs/outputs
+        else
+            log "$PHASE: $(wc -l <<<"$fails") failure(s), none oom/timeout — not retrying"
+        fi
+    else
+        log "$PHASE: no failures"
+    fi
+
+    # ---- after tier2: flag+exclude survivors; fatal only if NOTHING succeeded ----
+    local exf="$RUNDIR/${PHASE}_excluded.tsv"
+    if [ -n "$fails" ]; then
+        { printf 'sample\treason\n'; awk -F'\t' '{print $2"\t"$3}' <<<"$fails"; } > "$exf"
+        log "$PHASE: EXCLUDING $(($(wc -l <<<"$fails"))) sample(s):"
+        sed 's/^/    /' "$exf"
+    else
+        rm -f "$exf"
+    fi
+
+    local succ; succ="$(ls "$OUTDIR"/*.txt.gz 2>/dev/null | wc -l | tr -d ' ')"
+    if [ "$succ" -eq 0 ]; then
+        { echo "FATAL: $PHASE produced ZERO outputs for $PATIENT_ID — all samples failed."
+          [ -n "$fails" ] && awk -F'\t' '{print $2"\t"$3}' <<<"$fails"; } | tee "$RUNDIR/FLEET_FATAL.$PHASE" >&2
+        exit 1
+    fi
+    log "$PHASE: $succ output(s) present; proceeding"
 }
 
 # =============================================================================
@@ -236,17 +382,17 @@ cmd_combine() {
     shopt -s nullglob
     local files=(discovery/*.txt.gz)
     shopt -u nullglob
-    local n_missing; n_missing="$(ls "$RUNDIR/missing" | wc -l | tr -d ' ')"
+    local n_missing; n_missing="$(ls "$RUNDIR/missing" 2>/dev/null | wc -l | tr -d ' ')"
     log "combining ${#files[@]} discovery files ($n_missing samples had no data)"
     [ "${#files[@]}" -gt 0 ] || { echo "no discovery files at all — aborting" >&2; exit 1; }
 
-    # ASSEMBLY GATE. Unlike discovery, combine_insertions is assembly-specific: it
-    # reads flanks from genome_2bit and lifts hs1 clip hits back with a chain. A
-    # mismatched config produces plausible, silently wrong coordinates — no error.
-    # So prove the config matches the actual data before spending the cycles.
-    local a_sample a_bam
-    for a_sample in $(sed -e 's/\.txt\.gz$//' -e 's#.*/##' <<<"$(printf '%s\n' "${files[@]}")"); do
-        a_bam="$(bam_path "$PROJECT_ID" "$a_sample")"
+    # ASSEMBLY GATE — combine_insertions is assembly-specific; prove the config matches
+    # a real staged BAM before spending cycles (a mismatch is silently wrong coordinates).
+    local a_bam="" a_sample a_idx
+    for a_sample in $(printf '%s\n' "${files[@]}" | sed -e 's/\.txt\.gz$//' -e 's#.*/##'); do
+        a_idx="$(grep -nxF -m1 -- "$a_sample" <(cut -f1 "$SAMPLES") | cut -d: -f1)"
+        [ -n "$a_idx" ] || continue
+        a_bam="$(bam_path "$(samp_field "$a_idx" 2)" "$a_sample")"
         [ -s "$a_bam" ] && break || a_bam=""
     done
     if [ -n "$a_bam" ]; then
@@ -265,26 +411,28 @@ cmd_combine() {
 }
 
 # =============================================================================
-# phase 3 — genotype THIS sample against the contract
+# phase 3 — genotype THIS sample against the contract (+ per-BAM stats sidecar)
 # =============================================================================
 cmd_genotype() {
     load_env
     local IDX="${1:?genotype <index>}"
-    local SAMPLE; SAMPLE="$(sed -n "${IDX}p" "$SAMPLES")"
+    local SAMPLE PROJ
+    SAMPLE="$(samp_field "$IDX" 1)"; PROJ="$(samp_field "$IDX" 2)"
     [ -n "$SAMPLE" ] || exit 0
 
     local OUT="$RUNDIR/genotypes/$SAMPLE.txt.gz"
     if [ -s "$OUT" ]; then log "$SAMPLE: genotype exists, skipping"; exit 0; fi
 
-    local BAM; BAM="$(bam_path "$PROJECT_ID" "$SAMPLE")"
+    local BAM; BAM="$(bam_path "$PROJ" "$SAMPLE")"
     if [ ! -s "$BAM" ]; then log "$SAMPLE: no BAM -> skipping (expected)"; exit 0; fi
 
-    # genotyping needs a coordinate index (discovery did not)
     if [ ! -s "$BAM.bai" ] && [ ! -s "${BAM%.bam}.bai" ]; then
         log "$SAMPLE: indexing BAM"
         module load "$SAMTOOLS_MODULE" >/dev/null 2>&1 || true
         samtools index "$BAM" || { log "$SAMPLE: samtools index failed"; exit 1; }
     fi
+
+    write_bam_stats "$SAMPLE" "$BAM"   # step 5: avg coverage / #reads / read length
 
     local TMP="$OUT.tmp.$$"
     if ! "$GENOTYPE_BIN" --step genotype --bam "$BAM" \
@@ -294,6 +442,20 @@ cmd_genotype() {
     fi
     mv -f "$TMP" "$OUT"
     log "$SAMPLE: genotyped -> $OUT"
+}
+
+# per-BAM minimal stats: sample n_reads read_len mean_cov  (idxstats-based, no extra full pass)
+write_bam_stats() {
+    local S="$1" BAM="$2" sf="$RUNDIR/stats/$1.tsv"
+    [ -s "$sf" ] && return 0
+    module load "$SAMTOOLS_MODULE" >/dev/null 2>&1 || true
+    local idx rl
+    idx="$(samtools idxstats "$BAM" 2>/dev/null)" || { log "$S: idxstats failed (no stats)"; return 0; }
+    rl="$(samtools view "$BAM" 2>/dev/null | head -1 | awk '{print length($10)}')"; [ -n "$rl" ] || rl=NA
+    printf '%s\n' "$idx" | awk -v s="$S" -v rl="$rl" '
+        $1 ~ /^(chr)?([0-9]+|X|Y)$/ { m+=$3; L+=$2 }
+        END { cov=(L>0 && rl!="NA") ? sprintf("%.2f", m*rl/L) : "NA";
+              printf "%s\t%d\t%s\t%s\n", s, m, rl, cov }' > "$sf.tmp.$$" && mv -f "$sf.tmp.$$" "$sf"
 }
 
 # =============================================================================
@@ -315,8 +477,16 @@ cmd_combine_genotypes() {
         --genotypes "${files[@]}" --out "$CALLS" --threads "$CG_CORES"
 
     [ -s "$CALLS" ] || { echo "combine_genotypes produced no $CALLS" >&2; exit 1; }
+
+    # per-BAM stats summary (step 5/7): one table for the whole patient
+    local STATS_SUM="$PATIENT_ID.bam_stats.tsv"
+    { printf 'sample\tn_reads\tread_len\tmean_cov\n'; cat stats/*.tsv 2>/dev/null; } > "$STATS_SUM"
+
     mkdir -p "$RESULTS_DIR/$PATIENT_ID"
-    cp -f "$CALLS" "insertions/$PATIENT_ID".* "$RESULTS_DIR/$PATIENT_ID/" 2>/dev/null || true
+    cp -f "$CALLS" "$STATS_SUM" "insertions/$PATIENT_ID".* "$RESULTS_DIR/$PATIENT_ID/" 2>/dev/null || true
+    for x in discover genotype; do
+        [ -s "${x}_excluded.tsv" ] && cp -f "${x}_excluded.tsv" "$RESULTS_DIR/$PATIENT_ID/" || true
+    done
     log "calls: $CALLS  (copied to $RESULTS_DIR/$PATIENT_ID)"
 }
 
@@ -325,16 +495,18 @@ cmd_combine_genotypes() {
 # =============================================================================
 cmd_cleanup() {
     load_env
-    local freed=0
-    # Per-sample deletion only. The staging project dir can hold OTHER patients —
-    # the legacy remapping.bsub.sh did `rm -rdf .../$PROJECT_ID/`, which also
-    # deleted the inputs of still-running sibling tasks.
-    while read -r SAMPLE; do
-        local d="$STAGING_ROOT/$PROJECT_ID/$SAMPLE"
+    local freed=0 SAMPLE PROJ
+    # per-sample deletion only; the staging project dir can hold OTHER patients.
+    while IFS=$'\t' read -r SAMPLE PROJ; do
+        [ -n "$SAMPLE" ] && [ -n "$PROJ" ] || continue
+        local d="$STAGING_ROOT/$PROJ/$SAMPLE"
         if [ -d "$d" ]; then rm -rf "$d" && freed=$((freed+1)); fi
     done < "$SAMPLES"
-    log "cleanup: removed $freed staged sample dirs under $STAGING_ROOT/$PROJECT_ID"
-    rmdir "$STAGING_ROOT/$PROJECT_ID" 2>/dev/null || true   # only if now empty
+    # rmdir each distinct project dir, only if now empty
+    cut -f2 "$SAMPLES" | sort -u | while read -r PROJ; do
+        [ -n "$PROJ" ] && rmdir "$STAGING_ROOT/$PROJ" 2>/dev/null || true
+    done
+    log "cleanup: removed $freed staged sample dirs under $STAGING_ROOT"
 }
 
 # =============================================================================
@@ -362,15 +534,19 @@ cmd_status() {
     local RUNDIR="$WORKROOT/$PATIENT_ID"
     [ -d "$RUNDIR" ] || { echo "no run dir $RUNDIR" >&2; exit 1; }
     local n_s n_d n_m n_g
-    n_s=$(wc -l < "$RUNDIR/samples.txt" | tr -d ' ')
+    n_s=$(wc -l < "$RUNDIR/samples.tsv" | tr -d ' ')
     n_d=$(ls "$RUNDIR"/discovery/*.txt.gz 2>/dev/null | wc -l | tr -d ' ')
     n_m=$(ls "$RUNDIR"/missing 2>/dev/null | wc -l | tr -d ' ')
     n_g=$(ls "$RUNDIR"/genotypes/*.txt.gz 2>/dev/null | wc -l | tr -d ' ')
     echo "patient   : $PATIENT_ID   ($RUNDIR)"
-    echo "samples   : $n_s listed in iRODS"
-    echo "no data   : $n_m  (expected: iRODS lists samples that were never sequenced)"
+    echo "samples   : $n_s"
+    echo "no data   : $n_m  (iRODS lists samples that were never sequenced)"
     echo "discovered: $n_d / $((n_s - n_m))"
     echo "genotyped : $n_g / $((n_s - n_m))"
+    for x in discover genotype; do
+        [ -s "$RUNDIR/${x}_excluded.tsv" ] && echo "excluded  : $x -> $(($(wc -l < "$RUNDIR/${x}_excluded.tsv")-1)) sample(s), see ${x}_excluded.tsv"
+        [ -s "$RUNDIR/FLEET_FATAL.$x" ] && echo "FATAL     : $x — all samples failed (see FLEET_FATAL.$x)"
+    done
     [ -s "$RUNDIR/insertions/$PATIENT_ID.genotyping.txt.gz" ] && echo "contract  : yes" || echo "contract  : no"
     [ -s "$RUNDIR/$PATIENT_ID.genotypes.csv.gz" ] && echo "calls     : yes" || echo "calls     : no"
     bjobs -J "${PATIENT_ID}_*" -A 2>/dev/null || true
@@ -379,12 +555,14 @@ cmd_status() {
 # --- dispatch -----------------------------------------------------------------
 case "${1:-}" in
     submit)            shift; cmd_submit "$@" ;;
+    submit-list)       shift; cmd_submit_list "$@" ;;
     status)            shift; cmd_status "$@" ;;
     stage-discover)    shift; cmd_stage_discover "$@" ;;
+    retry)             shift; cmd_retry "$@" ;;
     combine)           shift; cmd_combine "$@" ;;
     genotype)          shift; cmd_genotype "$@" ;;
     combine-genotypes) shift; cmd_combine_genotypes "$@" ;;
     cleanup)           shift; cmd_cleanup "$@" ;;
     annotate)          shift; cmd_annotate "$@" ;;
-    *) sed -n '2,30p' "$SELF"; exit 1 ;;
+    *) sed -n '2,35p' "$SELF"; exit 1 ;;
 esac

@@ -1,9 +1,11 @@
 # A/B ARM B: PEAR-TREE Rust discovery for GRCh38 BAMs, homopolymer-slippage gate OFF.
 #
 # Identical to config.discovery.grch38 in EVERY other respect -- diff the two and the only
-# line that differs must be `slippage_filter`. If anything else drifts, the A/B stops
-# measuring the gate and starts measuring the drift. Regenerate rather than hand-edit:
-#     sed 's/^slippage_filter = true/slippage_filter = false/' \
+# lines that differ must be `slippage_filter` and `clip_slippage_filter` (both slippage gates
+# OFF in this arm). If anything else drifts, the A/B stops measuring the gate and starts
+# measuring the drift. Regenerate rather than hand-edit:
+#     sed -e 's/^slippage_filter = true/slippage_filter = false/' \
+#         -e 's/^clip_slippage_filter = true/clip_slippage_filter = false/' \
 #         cluster/config.discovery.grch38 > cluster/config.discovery.grch38.noslip
 #
 # ARM B IS THE SUPERSET. The gate only ever drops clip clusters, so arm B's breakpoints are a
@@ -73,3 +75,10 @@ slippage_filter = false
 slippage_min_ref_run = 8      # >= 8 stays clear of the 4 bp TTTT/AA L1-endonuclease motif
 slippage_min_clip_frac = 0.6  # the only real lever: 0.6 -> 41% of band, 0.9 -> 9% (on hs37d5)
 slippage_max_period = 6       # 1 = poly-A only; <=6 also allows (CA)n/(TG)n/(TAAAA)n
+
+# SPEC-8b -- bilateral clip-consensus slippage gate. OFF in this arm (it is now the shipped
+# default, so ARM B must disable it explicitly to stay the all-slippage-off superset control).
+clip_slippage_filter = false
+clip_slippage_min_run = 11
+clip_slippage_max_entropy = 1.95
+clip_slippage_any_base = true
