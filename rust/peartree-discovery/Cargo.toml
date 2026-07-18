@@ -29,7 +29,13 @@ rustc-hash = "2"
 # heap-fragmentation high-water mark from discovery's tiny per-read allocations.
 tikv-jemallocator = { version = "0.6", optional = true }
 
+# jemalloc is ON by default: glibc malloc holds discovery's millions of tiny
+# per-read/per-breakpoint frees at the process high-water mark (measured 33 GB RSS
+# for ~1 GB of live data on the deepest colonies — the rare 16 GB OOM). jemalloc
+# packs the same run to ~2.5 GB. Opt out with `--no-default-features` (e.g. to
+# debug against the system allocator).
 [features]
+default = ["jemalloc"]
 jemalloc = ["dep:tikv-jemallocator"]
 
 [profile.release]

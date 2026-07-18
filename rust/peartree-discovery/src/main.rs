@@ -24,13 +24,24 @@ use flate2::Compression;
 use config::DiscoveryConfig;
 use discovery::Discovery;
 
-// Optional jemalloc global allocator (build with `--features jemalloc`). glibc's
-// malloc holds freed memory from discovery's millions of tiny per-read/per-breakpoint
-// allocations at the process high-water mark; jemalloc packs them better and, with
-// `MALLOC_CONF=dirty_decay_ms:0,muzzy_decay_ms:0`, returns pages to the OS promptly.
+// jemalloc global allocator (default feature; disable with `--no-default-features`).
+// glibc's malloc holds freed memory from discovery's millions of tiny per-read/
+// per-breakpoint allocations at the process high-water mark: measured 33 GB RSS for
+// ~1 GB live data on the deepest colonies, which is the rare 16 GB OOM. jemalloc
+// packs the same run to ~2.5 GB.
 #[cfg(feature = "jemalloc")]
 #[global_allocator]
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+
+// Bake in the tuning that produced the 2.5 GB result, so a plain `bsub ... binary`
+// gets it without every array task needing MALLOC_CONF in its environment (a runtime
+// MALLOC_CONF env var still overrides this if set). `background_thread:true` runs
+// page purging on a background thread so the aggressive `*_decay_ms:0` (return dirty
+// and muzzy pages to the OS immediately) costs little on the allocation hot path.
+#[cfg(feature = "jemalloc")]
+#[allow(non_upper_case_globals)]
+#[export_name = "malloc_conf"]
+pub static malloc_conf: &[u8] = b"background_thread:true,dirty_decay_ms:0,muzzy_decay_ms:0\0";
 
 fn usage() -> ! {
     eprintln!("usage: peartree-discovery --step discover --bam <bam|cram> --out <out.txt.gz> [--threads N] [--config <file>] [--reference <ref.fa> (required for CRAM)]");
