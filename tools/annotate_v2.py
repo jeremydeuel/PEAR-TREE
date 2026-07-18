@@ -518,6 +518,11 @@ class Insertion:
         floor = CONFIG['annotate'].get('sv_min_mapq', 30)
         out = []
         for side, maps in (('left', self.left_maps), ('right', self.right_maps)):
+            # (D) clip-map trust guard: a short / AT-rich / low-entropy clip yields chance or
+            # paralogous 'unique' hits that masquerade as translocation partners. Drop this
+            # side's maps entirely if the clip that produced them is not credibly unique.
+            if not self._clip_trustworthy_for_sv(side):
+                continue
             for pos, qual, rmsks, strand in maps:
                 if qual is None or qual < floor:
                     continue
@@ -632,7 +637,7 @@ class Insertion:
     # junction reappears as the aligned (upper-case) flank of the other. Forward -> tandem /
     # segmental duplication; reverse-complement -> inverted duplication; a short-period tandem
     # repeat flush to both breakpoints -> microsatellite length change.
-    _STR_RUN = re.compile(r'((?:[ACGT]{1,3})\1{4,})')
+    _STR_RUN = re.compile(r'(([ACGT]{1,3})\2{4,})')
 
     @staticmethod
     def _rc(seq):
@@ -659,33 +664,45 @@ class Insertion:
         rf = ''.join(c for c in self.right_seq if c.isupper())
         return lf, rf
 
+    @staticmethod
+    def _norm_unit(unit):
+        """Rotation-invariant canonical form of a repeat unit (its lexicographically minimal
+        rotation), so (CA)n and (AC)n compare equal."""
+        return min(unit[i:] + unit[:i] for i in range(len(unit))) if unit else unit
+
     def _microsatellite_subtype(self, li, ri, lf, rf):
-        """A short-period tandem repeat flush to BOTH breakpoints, with each clip's core also
-        present in the opposite junction's flank (same-locus): a polymorphic microsatellite / STR
-        length change, not an insertion. Returns a label or None. Runs before the (entropy-gated)
+        """A polymorphic microsatellite / STR length change (not an insertion): the SAME tandem
+        repeat unit (rotation-invariant), long and flush to BOTH breakpoints, with each soft-clip
+        also sharing a stretch with the opposite genomic flank (same locus). Returns a label or
+        None. Requiring the *same unit* at both breakpoints -- not merely a repeat near each -- is
+        what stops an incidental short repeat in a complex insertion from being mis-called STR (so
+        those stay on the duplication / complex-insertion path). Runs before the (entropy-gated)
         duplication test so a low-complexity (CA)n tract is called STR, not a segmental dup."""
         ls, rs = self.left_seq.upper(), self.right_seq.upper()
         lb = len(li)                 # left  breakpoint = insert|flank boundary
         rb = len(rs) - len(ri)       # right breakpoint = flank|insert boundary
-        def crossing_period(seq, bnd):
+        tol = 3   # the repeat need only be flush to the breakpoint, not straddle it
+        min_run = CONFIG['annotate'].get('str_min_run', 14)
+        def crossing_unit(seq, bnd):
+            best = None
             for m in self._STR_RUN.finditer(seq):
-                if m.start() < bnd < m.end() and (m.end() - m.start()) >= 10:
-                    unit = m.group(1)
-                    for p in (1, 2, 3):
-                        if len(unit) >= p and unit == (unit[:p] * (len(unit) // p + 1))[:len(unit)]:
-                            return p
-                    return len(m.group(2)) if m.lastindex and m.lastindex >= 2 else 2
+                if m.start() <= bnd + tol and m.end() >= bnd - tol and (m.end() - m.start()) >= min_run:
+                    run = m.group(1)
+                    p = next((q for q in (1, 2, 3)
+                              if run == (run[:q] * (len(run) // q + 1))[:len(run)]), len(m.group(2)))
+                    cand = (m.end() - m.start(), self._norm_unit(run[:p]))
+                    if best is None or cand[0] > best[0]:
+                        best = cand
+            return best
+        uL = crossing_unit(ls, lb)
+        uR = crossing_unit(rs, rb)
+        if uL is None or uR is None or uL[1] != uR[1]:   # same canonical repeat unit both sides
             return None
-        pL = crossing_period(ls, lb)
-        pR = crossing_period(rs, rb)
-        if pL is None or pR is None:
-            return None
-        # same-locus corroboration: each insert shares a >=10 bp exact stretch with a flank.
         share = (max(self._longest_submatch(li, rf), self._longest_submatch(li, lf)) >= 10
                  and max(self._longest_submatch(ri, lf), self._longest_submatch(ri, rf)) >= 10)
         if not share:
             return None
-        return f"microsatellite (period {min(pL, pR)}) length change"
+        return f"microsatellite ({uL[1]})n length change"
 
     def _reciprocal_dup_subtype(self):
         """Reference-free local-duplication / STR subtype for a junction the element and SV logic
@@ -722,7 +739,7 @@ class Insertion:
         the breakpoint, and that reference tail can carry an old-repeat HMM hit describing the
         SITE, not the inserted element). Detected by: the clip sub-sequence under the hit is a
         long exact copy of one of this locus's reference flanks. Purely local; no reference lookup."""
-        need = CONFIG['annotate'].get('flankleak_min', 25)
+        need = CONFIG['annotate'].get('flankleak_min', 30)
         li, ri = (s.upper() for s in self._insert_clips())
         clip = li if side == 'left' else ri
         s = max(0, dfam.ali_start - 1)
@@ -763,7 +780,9 @@ class Insertion:
         if loc is None:
             return None
         contig, s, e = loc
-        floor = CONFIG['annotate'].get('sv_min_mapq', 30)
+        # bowtie2 --local caps MAPQ lower than --end-to-end (the soft-clipped read is shorter),
+        # so a unique local placement scores ~20-24; use a channel-specific floor, not sv_min_mapq.
+        floor = CONFIG['annotate'].get('local_min_mapq', 20)
         near = CONFIG['annotate'].get('sv_min_distance', 1000)
         best = None
         for side, maps in (('left', self.left_local_maps), ('right', self.right_local_maps)):
@@ -849,6 +868,12 @@ class Insertion:
             # but uncharacterised insertion (a non-MEI / complex / templated insertion whose novel
             # or chimeric clip fails the --end-to-end remap and matches no retrotransposon model),
             # not genotyping noise -- keep those out of the artefact bin.
+            # First try to NAME it: most such loci are local tandem/segmental duplications or
+            # microsatellite length changes whose clips are copies of this locus's own flanks
+            # (reference-free signature), or -- if the --local pass ran -- a templated insertion.
+            dup = self._reciprocal_dup_subtype() or self._local_remap_subtype()
+            if dup is not None:
+                return dup
             if self._is_complex_insertion():
                 return 'unknown (unmapped complex insertion)'
             return 'artefact'
@@ -1005,6 +1030,13 @@ class Insertion:
             gene, nexon, has_polya = pg
             detail = f"{nexon} exons" if nexon >= 2 else "1 exon + polyA"
             return f"processed pseudogene of {gene} ({detail})"
+        # --- reference-free local duplication / microsatellite (precedes the distal-SV flag) ---
+        # A clip that is a copy of THIS locus's own flank is a local duplication, not a distal
+        # rearrangement — so this test takes precedence over the translocation flag below, which
+        # otherwise fires on a paralogous / spurious cross-locus map (worker analyses 7/9/10).
+        dup = self._reciprocal_dup_subtype()
+        if dup is not None:
+            return dup
         # --- annotation-only non-RTE structural-variant flag (non-gating; nothing removed) ---
         # This call could not be explained as a retrotransposition above. If NEITHER junction
         # carries a poly-A tail AND a clip maps uniquely to a locus with no retrotransposon
@@ -1014,9 +1046,14 @@ class Insertion:
         # or a transduction, so we lean on the RTE hallmarks instead — a single-copy RTE maps
         # to its RTE-annotated source and a transduction keeps its poly-A, so both are resolved
         # above and never reach here.
+        # (D) the SV flag only fires for a partner from a *trustworthy* clip (long / complex /
+        # not AT-rich); a short low-complexity clip's 'unique' map is a chance/paralogous hit, not
+        # a rearrangement partner, so it must not even raise the generic flag.
         if (not self.has_left_polyA() and not self.has_right_polyA()
-                and (self._maps_uniquely_to_nonrte(self.left_maps)
-                     or self._maps_uniquely_to_nonrte(self.right_maps))):
+                and ((self._clip_trustworthy_for_sv('left')
+                      and self._maps_uniquely_to_nonrte(self.left_maps))
+                     or (self._clip_trustworthy_for_sv('right')
+                         and self._maps_uniquely_to_nonrte(self.right_maps)))):
             # A pure (non-RTE) rearrangement: subtype it (translocation / inversion /
             # deletion-duplication) when the partner resolves, else keep the legacy generic
             # flag. Same firing condition as before, so no locus that used to be flagged is
@@ -1025,6 +1062,10 @@ class Insertion:
             if sub is not None:
                 return sub[1]
             return 'unknown (possible non-RTE SV, e.g. translocation)'
+        # (E) last resort: a split/--local placement of a chimeric clip, if that pass ran.
+        loc_sub = self._local_remap_subtype()
+        if loc_sub is not None:
+            return loc_sub
         return 'unknown'
 
 
@@ -1035,6 +1076,7 @@ class VariantAnnotationContainer:
         self.genotyping_file = CONFIG['annotate']['genotyping_file'](sample)
         self.dfam_file = CONFIG['annotate']['tmp']('dfam')(sample)
         self.sam_file = CONFIG['annotate']['tmp']('sam')(sample)
+        self.local_sam_file = CONFIG['annotate']['tmp']('local.sam')(sample)
         self.fasta_file = CONFIG['annotate']['tmp']('fa.gz')(sample)
         self.output = output
         self.insertions = {}
@@ -1050,9 +1092,21 @@ class VariantAnnotationContainer:
         if not os.path.exists(self.dfam_file) or os.path.getsize(self.dfam_file) == 0:
             self.generate_dfam_file()
         self.read_dfam()
+        # (C) drop Dfam hits that sit on genomic flank leaked into the soft-clip, so a short
+        # insert's flanking old-repeat context cannot masquerade as a mobile-element hallmark.
+        self.demote_flank_leak_dfams()
         if not os.path.exists(self.sam_file) or os.path.getsize(self.sam_file) == 0:
             self.generate_sam_file()
         self.read_sam()
+        # (E) optional bowtie2 --local pass: places the mappable part of a chimeric clip that the
+        # --end-to-end pass dropped, letting a templated/complex insertion be sourced and a local
+        # duplication corroborated. Guarded — a no-op unless the aligner+index are present and
+        # the channel is enabled, so --end-to-end-only runs are unaffected.
+        if CONFIG['annotate'].get('sv_local_remap', True):
+            if not os.path.exists(self.local_sam_file) or os.path.getsize(self.local_sam_file) == 0:
+                self.generate_sam_local_file()
+            if os.path.exists(self.local_sam_file) and os.path.getsize(self.local_sam_file) > 0:
+                self.read_sam_local()
         self.link_reciprocal_translocations()
         self.read_gene_model()
 
@@ -1234,6 +1288,37 @@ class VariantAnnotationContainer:
         assert 0 == os.system(f"{CONFIG['combine_insertions']['bowtie2_executable']} -x {CONFIG['combine_insertions']['bowtie2_index2']} --end-to-end -f {self.fasta_file} > {self.sam_file}")
         assert os.path.exists(self.sam_file)
         assert os.path.getsize(self.sam_file)>0
+
+    def generate_sam_local_file(self):
+        """(E) bowtie2 --local pass: unlike --end-to-end (which drops a clip unless the WHOLE clip
+        aligns to one contiguous block), --local soft-clips the unmatched ends and reports the
+        best-matching *sub*-sequence's placement. That places the mappable portion of a chimeric,
+        junction-spanning clip. Guarded: silently skipped (leaving the local channel empty, so
+        every consumer is a no-op) unless the bowtie2 executable AND its index are actually
+        present -- deployment-local cluster paths are absent off-cluster, so this never fires on
+        the local re-score, only on a real run."""
+        exe = CONFIG['combine_insertions']['bowtie2_executable']
+        idx = CONFIG['combine_insertions']['bowtie2_index2']
+        if not (os.path.exists(exe) and os.access(exe, os.X_OK) and os.path.exists(idx + '.1.bt2')):
+            print(f"bowtie2 --local pass skipped (executable or index {idx} absent); "
+                  f"local-remap channel inert for {self.sample}")
+            return
+        print(f"running bowtie2 --local on {self.sample}")
+        rc = os.system(f"{exe} -x {idx} --local -f {self.fasta_file} > {self.local_sam_file}")
+        if rc != 0:
+            print(f"bowtie2 --local returned {rc}; local-remap channel left empty")
+
+    def demote_flank_leak_dfams(self):
+        """(C) Remove Dfam hits whose clip span is genomic flank leaked into the soft-clip (see
+        Insertion._dfam_is_flank_leak). Such a hit describes the insertion SITE's old-repeat
+        context, not the inserted element, and would otherwise seed a false Alu/L1/SVA hallmark."""
+        n = 0
+        for ins in self.insertions.values():
+            for side, attr in (('left', 'left_dfams'), ('right', 'right_dfams')):
+                kept = [d for d in getattr(ins, attr) if not ins._dfam_is_flank_leak(d, side)]
+                n += len(getattr(ins, attr)) - len(kept)
+                setattr(ins, attr, kept)
+        print(f"demoted {n} flank-leak Dfam hit(s) (genomic flank in the soft-clip)")
 
     def read_dfam(self):
         """
@@ -1432,6 +1517,30 @@ class VariantAnnotationContainer:
                         raise ValueError(f"Unknown insertion side {read.query_name}, expected R or L.")
         print(f"imported {rightn} right mappings and {leftn} left mappings.")
 
+    def read_sam_local(self):
+        """(E) Read the bowtie2 --local SAM and record each clip's partial placement:
+        (contig, ref_start, strand, query_coverage_bp, mapq) on the insertion's
+        left_local_maps / right_local_maps. query_coverage_bp is how much of the clip aligned
+        (the rest was soft-clipped) -- a chimeric clip aligns only its mappable half. Coordinates
+        are NOT lifted over (the local pass targets the same index as the main remap)."""
+        rightn = leftn = 0
+        with pysam.AlignmentFile(self.local_sam_file) as sam:
+            for read in sam:
+                if read.is_qcfail or read.is_unmapped:
+                    continue
+                name = read.query_name
+                insertion = name[:-2]
+                if insertion not in self.insertions:
+                    continue
+                qcov = read.query_alignment_length or 0
+                rec = (read.reference_name, read.reference_start,
+                       '+' if read.is_forward else '-', qcov, read.mapping_quality)
+                if name[-1] == 'R':
+                    self.insertions[insertion].right_local_maps.append(rec); rightn += 1
+                elif name[-1] == 'L':
+                    self.insertions[insertion].left_local_maps.append(rec); leftn += 1
+        print(f"imported {rightn} right and {leftn} left --local (split) placements.")
+
     # Coarse element class from a conclusion() string, for the flat table. The order
     # matters: the non-RTE SV flag and the pseudogene calls also read as "unknown"/contain
     # element-like tokens, so the specific cases are tested before the generic ones.
@@ -1454,6 +1563,10 @@ class VariantAnnotationContainer:
             return 'ALU'
         if 'L1' in u or 'LINE' in u:
             return 'LINE1'
+        if 'MICROSATELLITE' in u:
+            return 'microsatellite'
+        if 'TEMPLATED' in u:
+            return 'templated_insertion'   # (E) distal-sourced; kept separate from the clean SV set
         if any(t in u for t in ('TRANSLOCATION', 'INVERSION', 'INTRACHROMOSOMAL SV',
                                 'DELETION', 'DUPLICATION', 'NON-RTE SV')):
             return 'non_RTE_SV'
