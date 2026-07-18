@@ -149,6 +149,35 @@ pub struct DiscoveryConfig {
     /// slip by the same mechanism. Periods above ~6 (SVA VNTRs, 19-48bp GC-rich VNTRs) are
     /// deliberately out of scope — see the sweep in the SPEC-8 notes.
     pub slippage_max_period: usize,
+    /// SPEC-8b: NEW clip-level slippage gate, separate from `slippage_filter` (which inspects
+    /// the *aligned* side, and from `max_homopolymer_len` which inspects the mapped part
+    /// adjacent to the junction). This one inspects the two breakpoint CLIP consensuses of a
+    /// paired insertion and rejects it only when BOTH clips are homopolymer/low-complexity
+    /// poly-A/T — the double-sided signature of bwa soft-clipping a reference poly-A/T tract.
+    /// A real MEI has a poly-A/T tail on ONE clip and a structured element body on the other,
+    /// so one-sidedness spares it (the entropy term is the per-clip carve-out for a body). Only
+    /// gates real breakpoint pairs (Bp+Bp); poly-A-mate and discordant ends carry no second
+    /// clip consensus and are untouched. **ON by default** (shipped 2026-07 at min_run=11,
+    /// max_entropy=1.95, any_base=true); set `clip_slippage_filter = false` to disable (the
+    /// config.discovery.grch38.noslip A/B arm and the unvalidated grch37 config do this).
+    ///
+    /// Re-validated on analysis/mei9x10 against the phylogeny-breaking FP anchor (884 germline
+    /// TP / 4645 tree-break FP). At min_run=11, max_entropy=1.95, clip_slippage_any_base=true it
+    /// captures 64.3% of phylogeny-breaking FP at 0.45% germline-TP loss (4 TP). The any-base
+    /// homopolymer detector (vs the old A/T-only) adds +243 poly-C/poly-G FP over A/T at ZERO
+    /// extra TP loss. A junction-microsatellite term was evaluated and REJECTED: it costs more
+    /// germline TP than the FP it adds at every threshold (real MEIs carry tandem repeats in
+    /// their poly-A/TSD region on both clips). An HMM edge-Alu rescue was likewise dominated by
+    /// simply raising min_run. The <1%-TP-loss frontier is min_run 10-11 / max_entropy 1.95.
+    pub clip_slippage_filter: bool,
+    pub clip_slippage_min_run: usize,
+    pub clip_slippage_max_entropy: f64,
+    pub clip_slippage_require_same_base: bool,
+    /// Count a homopolymer run of ANY base (poly-A/C/G/T) toward the slippage gate, not just
+    /// A/T. On by default — captures poly-C/poly-G junction slippage the A/T-only detector is
+    /// blind to (+243 FP at 0 extra germline-TP loss on mei9x10). Set false to restore the
+    /// legacy A/T-only behaviour for A/B comparison.
+    pub clip_slippage_any_base: bool,
     /// SPD-3: process contigs in parallel across this many worker threads for the extract
     /// pass (BAM only, requires a `.bai`/`.csi` index). 1 = the validated single-threaded
     /// path. The mate pass stays a single linear scan (N-way BGZF decode for BAM).
@@ -245,6 +274,11 @@ impl Default for DiscoveryConfig {
             slippage_min_ref_run: 8,
             slippage_min_clip_frac: 0.6,
             slippage_max_period: 1,
+            clip_slippage_filter: true, // SHIPPED default (was false) — see doc comment
+            clip_slippage_min_run: 11, // was 18 (validated operating point, analysis/mei9x10)
+            clip_slippage_max_entropy: 1.95, // was 1.88
+            clip_slippage_require_same_base: false,
+            clip_slippage_any_base: true,
             contig_threads: 1,
             discordant_anchor: false,
             discordant_max_tlen: 1000,
@@ -348,6 +382,11 @@ impl DiscoveryConfig {
             "slippage_min_ref_run" => self.slippage_min_ref_run = parse_num(val)?,
             "slippage_min_clip_frac" => self.slippage_min_clip_frac = parse_num(val)?,
             "slippage_max_period" => self.slippage_max_period = parse_num(val)?,
+            "clip_slippage_filter" => self.clip_slippage_filter = parse_bool(val)?,
+            "clip_slippage_min_run" => self.clip_slippage_min_run = parse_num(val)?,
+            "clip_slippage_max_entropy" => self.clip_slippage_max_entropy = parse_num(val)?,
+            "clip_slippage_require_same_base" => self.clip_slippage_require_same_base = parse_bool(val)?,
+            "clip_slippage_any_base" => self.clip_slippage_any_base = parse_bool(val)?,
             "contig_threads" => self.contig_threads = parse_num(val)?,
             "discordant_anchor" => self.discordant_anchor = parse_bool(val)?,
             "discordant_max_tlen" => self.discordant_max_tlen = parse_num(val)?,
@@ -399,6 +438,17 @@ mod tests {
         assert_eq!(c.cluster_window, CLUSTER_WINDOW);
         assert_eq!(c.tsd_max, TSD_MAX);
         assert_eq!(c.polya_far_dist, POLYA_FAR_DIST);
+    }
+
+    #[test]
+    fn spec8b_ships_on_at_validated_operating_point() {
+        // Pins the 2026-07 shipped default so a refactor can't silently revert it.
+        let c = DiscoveryConfig::default();
+        assert!(c.clip_slippage_filter, "SPEC-8b must be ON by default");
+        assert_eq!(c.clip_slippage_min_run, 11);
+        assert_eq!(c.clip_slippage_max_entropy, 1.95);
+        assert!(c.clip_slippage_any_base, "any-base homopolymer must be ON");
+        assert!(!c.clip_slippage_require_same_base);
     }
 
     #[test]

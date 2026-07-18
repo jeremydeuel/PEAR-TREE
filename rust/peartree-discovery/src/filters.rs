@@ -189,6 +189,117 @@ pub fn is_slippage_clip(
     (same as f64) / (clip_out.len() as f64) >= min_clip_frac
 }
 
+/// Longest homopolymer run of A **or** of T in `seq` (uppercased), and which base won
+/// (`b'A'` or `b'T'`; A wins ties). Poly-A and poly-T are handled symmetrically because a
+/// clip is emitted in an arbitrary strand orientation — a genomic poly-A tract reads as A
+/// on one breakpoint's clip and T on the other. `(0, b'A')` for a run-free clip.
+pub fn longest_at_run(seq: &[u8]) -> (usize, u8) {
+    let (mut best_a, mut cur_a, mut best_t, mut cur_t) = (0usize, 0usize, 0usize, 0usize);
+    for &b in seq {
+        match b.to_ascii_uppercase() {
+            b'A' => { cur_a += 1; cur_t = 0; }
+            b'T' => { cur_t += 1; cur_a = 0; }
+            _ => { cur_a = 0; cur_t = 0; }
+        }
+        best_a = best_a.max(cur_a);
+        best_t = best_t.max(cur_t);
+    }
+    if best_a >= best_t { (best_a, b'A') } else { (best_t, b'T') }
+}
+
+/// Longest homopolymer run of **any** base (A/C/G/T) in `seq`, and which base won (first to
+/// reach the max, on a left-to-right scan). Generalises `longest_at_run` beyond A/T: bwa also
+/// soft-clips at reference poly-C and poly-G tracts, so a junction slippage clip can be a run
+/// of any single base. On the mei9x10 truth set, switching the slippage gate from A/T-only to
+/// any-base captures +243 phylogeny-breaking FP (2743 -> 2986, mostly poly-G/poly-C) at ZERO
+/// additional germline-TP loss (the same 4 TP are lost as under A/T). Non-ACGT bytes break a
+/// run. `(0, b'A')` for a run-free clip.
+pub fn longest_homopolymer_run(seq: &[u8]) -> (usize, u8) {
+    let (mut best, mut best_base) = (0usize, b'A');
+    let (mut cur, mut cur_base) = (0usize, 0u8);
+    for &b in seq {
+        let u = b.to_ascii_uppercase();
+        match u {
+            b'A' | b'C' | b'G' | b'T' => {
+                if u == cur_base { cur += 1; } else { cur = 1; cur_base = u; }
+            }
+            _ => { cur = 0; cur_base = 0; }
+        }
+        if cur > best { best = cur; best_base = cur_base; }
+    }
+    (best, best_base)
+}
+
+/// Shannon entropy (bits) of the base composition of `seq` over {A,C,G,T}; other symbols
+/// (N, etc.) are ignored. A poly-A/T or low-complexity clip is near 0-1.8 bits; a structured
+/// element body is near 1.9-2.0. `0.0` for an empty (or all-non-ACGT) clip.
+pub fn clip_entropy(seq: &[u8]) -> f64 {
+    let mut counts = [0u64; 4]; // A,C,G,T
+    let mut n = 0u64;
+    for &b in seq {
+        let idx = match b.to_ascii_uppercase() {
+            b'A' => 0, b'C' => 1, b'G' => 2, b'T' => 3, _ => continue,
+        };
+        counts[idx] += 1;
+        n += 1;
+    }
+    if n == 0 {
+        return 0.0;
+    }
+    let nf = n as f64;
+    let mut h = 0.0f64;
+    for &c in &counts {
+        if c > 0 {
+            let p = c as f64 / nf;
+            h -= p * p.log2();
+        }
+    }
+    h
+}
+
+/// A clip consensus is "slippage-like" when its longest homopolymer run is at least `min_run`
+/// bases **and** its overall base composition is low-entropy (`<= max_entropy`). With
+/// `any_base` the run may be of any single base (A/C/G/T — catches poly-C/poly-G slippage);
+/// otherwise only A/T runs count (the legacy behaviour). The entropy term is the one-sided
+/// carve-out at the single-clip level: a clip that carries a structured element body (an
+/// Alu/L1/SVA 5' end, or a TSD-flanked insert) is high-entropy and so is *not* slippage-like,
+/// even if it happens to contain an internal homopolymer run. Returns
+/// `(is_slippage_like, dominant_base)`.
+pub fn clip_is_slippage_like(seq: &[u8], min_run: usize, max_entropy: f64, any_base: bool) -> (bool, u8) {
+    if seq.is_empty() {
+        return (false, b'A');
+    }
+    let (run, base) = if any_base { longest_homopolymer_run(seq) } else { longest_at_run(seq) };
+    (run >= min_run && clip_entropy(seq) <= max_entropy, base)
+}
+
+/// NEW clip-level slippage gate (distinct from `is_slippage_clip`, which inspects the aligned
+/// side). Reject a candidate insertion when **both** breakpoint clip consensuses are
+/// homopolymer/low-complexity poly-A/T — the signature of bwa soft-clipping at a reference
+/// poly-A/T tract on both flanks. A **real** mobile-element insertion has a poly-A/T tail on
+/// only ONE breakpoint and a structured element body on the other, so one-sidedness is the
+/// hallmark that keeps it: if *either* clip is not slippage-like, the pair is spared. With
+/// `require_same_base`, both clips must also share the dominant base (both poly-A or both
+/// poly-T), tightening precision toward true single-tract slippage at some FP-recall cost.
+pub fn both_clips_slippage(
+    left_clip: &[u8],
+    right_clip: &[u8],
+    min_run: usize,
+    max_entropy: f64,
+    require_same_base: bool,
+    any_base: bool,
+) -> bool {
+    let (l_ok, l_base) = clip_is_slippage_like(left_clip, min_run, max_entropy, any_base);
+    let (r_ok, r_base) = clip_is_slippage_like(right_clip, min_run, max_entropy, any_base);
+    if !(l_ok && r_ok) {
+        return false; // one-sided (structured element body on a side) -> spare
+    }
+    if require_same_base && l_base != r_base {
+        return false;
+    }
+    true
+}
+
 /// Port of sequence_checks.clean_clipped_seq (the QualitySeq version).
 pub fn clean_clipped_seq(seq: &QualitySeq) -> QualitySeq {
     if seq.len() < 2 {
@@ -396,6 +507,69 @@ mod tests {
         // reads shorter than 20 bp are not judged
         assert!(mean_kmer_diversity(&[q(b"ACGTACGT")], 4).is_none());
         assert!(mean_kmer_diversity(&[], 4).is_none());
+    }
+
+    #[test]
+    fn longest_at_run_handles_both_bases_and_ties() {
+        assert_eq!(longest_at_run(b"GGAAAAAAAAAAGG"), (10, b'A'));
+        assert_eq!(longest_at_run(b"ccTTTTTTTTTTTTggcc"), (12, b'T'));
+        // A and T runs of equal length -> A wins the tie
+        assert_eq!(longest_at_run(b"AAAAgcTTTT"), (4, b'A'));
+        // lowercase counts; interruptions reset the run
+        assert_eq!(longest_at_run(b"aaaGaaaa"), (4, b'A'));
+        assert_eq!(longest_at_run(b"GCGCGC"), (0, b'A'));
+    }
+
+    #[test]
+    fn clip_entropy_separates_homopolymer_from_structured() {
+        assert_eq!(clip_entropy(b""), 0.0);
+        assert_eq!(clip_entropy(b"AAAAAAAAAA"), 0.0); // single base -> 0 bits
+        // an even 4-base mix -> 2 bits (max)
+        assert!((clip_entropy(b"ACGTACGTACGT") - 2.0).abs() < 1e-9);
+        // a real element clip is high-entropy; a poly-A-dominated clip is low
+        assert!(clip_entropy(b"GGCCGGGCGCGGTGGCTCACGCCTGTAATCCCAGCACT") > 1.8);
+        assert!(clip_entropy(b"AAAAAAAAAAAAAAAAAAAAAGCAAAAAAAAA") < 1.0);
+    }
+
+    #[test]
+    fn longest_homopolymer_run_covers_all_four_bases() {
+        assert_eq!(longest_homopolymer_run(b"GGAAAAAAAAAAGG"), (10, b'A'));
+        assert_eq!(longest_homopolymer_run(b"atCCCCCCCCCCCCat"), (12, b'C'));
+        assert_eq!(longest_homopolymer_run(b"ttGGGGGGGGGGGGGtt"), (13, b'G'));
+        assert_eq!(longest_homopolymer_run(b"ACGT"), (1, b'A'));
+        assert_eq!(longest_homopolymer_run(b"NNNN"), (0, b'A'));
+    }
+
+    #[test]
+    fn both_clips_slippage_rejects_double_polya_spares_one_sided() {
+        // BOTH clips a poly-A/T homopolymer run, low entropy -> reject (double-sided slippage)
+        let l = b"AAAAAAAAAAAAAAAAAAAAAAAA";
+        let r = b"TTTTTTTTTTTTTTTTTTTTTTTT";
+        assert!(both_clips_slippage(l, r, 18, 1.88, false, false));
+        // ONE side a structured element body (high entropy) -> spared, even with a long A-run
+        // on the other side. This is the real-MEI hallmark (poly-A tail + element body).
+        let body = b"GGCCGGGCGCGGTGGCTCACGCCTGTAATCCCAGCACTTTGGGAGGCCGAGGCGGG";
+        assert!(!both_clips_slippage(l, body, 18, 1.88, false, false));
+        assert!(!both_clips_slippage(body, r, 18, 1.88, false, false));
+        // runs too short -> not slippage-like -> spared
+        let short = b"AAAAAAAAGGCCTTAACCGG";
+        assert!(!both_clips_slippage(short, short, 18, 1.88, false, false));
+        // same-base tightening: A-clip + T-clip differ -> spared when require_same_base
+        assert!(!both_clips_slippage(l, r, 18, 1.88, true, false));
+        assert!(both_clips_slippage(l, l, 18, 1.88, true, false));
+    }
+
+    #[test]
+    fn both_clips_slippage_any_base_catches_polyc_polyg() {
+        // A bilateral poly-C / poly-G junction slippage clip: invisible to the A/T-only gate,
+        // caught only when any_base is on. (mei9x10: +243 such FP at 0 extra germline-TP loss.)
+        let polyc = b"CCCCCCCCCCCCCCCCCCCCCCCC";
+        let polyg = b"GGGGGGGGGGGGGGGGGGGGGGGG";
+        assert!(!both_clips_slippage(polyc, polyg, 18, 1.88, false, false)); // A/T-only: missed
+        assert!(both_clips_slippage(polyc, polyg, 18, 1.88, false, true)); // any-base: caught
+        // one-sided element body still spared under any_base (the load-bearing guarantee)
+        let body = b"GGCCGGGCGCGGTGGCTCACGCCTGTAATCCCAGCACTTTGGGAGGCCGAGGCGGG";
+        assert!(!both_clips_slippage(polyc, body, 18, 1.88, false, true));
     }
 
     #[test]

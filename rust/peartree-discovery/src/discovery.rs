@@ -16,7 +16,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use crate::config::*;
 use crate::coverage::Coverage;
 use crate::exons::GeneModel;
-use crate::filters::{clean_clipped_seq, is_adapter, is_low_complexity, is_slippage_clip, mean_kmer_diversity};
+use crate::filters::{both_clips_slippage, clean_clipped_seq, is_adapter, is_low_complexity, is_slippage_clip, mean_kmer_diversity};
 use crate::intervals::IntervalIndex;
 use crate::model::{join, Breakpoint};
 use crate::polya::PolyABreakpoint;
@@ -1278,6 +1278,27 @@ impl Discovery {
                     il += 1;
                     continue;
                 } else {
+                    // SPEC-8b: reject a Bp+Bp insertion whose BOTH clip consensuses are
+                    // homopolymer/low-complexity poly-A/T — double-sided reference-tract
+                    // slippage, not a real junction. Clips are passed in the same orientation
+                    // print_output emits them (left CLIPPED is revcomp'd, right CLIPPED plain),
+                    // so the gate matches the emitted consensus exactly. A real MEI keeps a
+                    // structured element body on one side, so it survives (one-sided spare).
+                    if self.config.clip_slippage_filter
+                        && both_clips_slippage(
+                            &l[il].clipped.revcomp().seq,
+                            &r[ir].clipped.seq,
+                            self.config.clip_slippage_min_run,
+                            self.config.clip_slippage_max_entropy,
+                            self.config.clip_slippage_require_same_base,
+                            self.config.clip_slippage_any_base,
+                        )
+                    {
+                        // both breakpoints consumed by this (rejected) insertion — advance both
+                        il += 1;
+                        ir += 1;
+                        continue;
+                    }
                     if hm {
                         write_hallmark(hallmarks, rn, &Emit::Bp(l[il]), &Emit::Bp(r[ir]))?;
                     }
