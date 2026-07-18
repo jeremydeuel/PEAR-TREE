@@ -54,9 +54,17 @@ echo "submitting combine_genotypes: $CORES cores, ${MEM}MB, queue=$QUEUE"
 # Pass every var explicitly. Env set in the submitting shell does NOT reliably reach the job,
 # and the failure is silent: the script falls back to its defaults and does something
 # plausible-looking against the wrong inputs. This bit us twice already.
+# Namespace the job name (and logs) by the run's GTDIR. A FIXED name like "ptcombgt" is a
+# trap for downstream `WAIT=ended(ptcombgt)`: LSF matches the name against ALL the user's
+# jobs, so an already-ended ptcombgt from an earlier run satisfies the condition instantly
+# and the dependent job fires early against inputs that do not exist yet. (This exact bug
+# released a genotype array and a combine_genotypes job seconds after submit.) A per-run name
+# keeps `ended(<name>)` chaining safe as long as each run uses a fresh output dir; for extra
+# safety, prefer depending on the numeric job id this script prints.
+CJTAG="$(basename "$GTDIR")"
 bsub \
-    -J "ptcombgt" \
-    -o "logs/combgt.out" -e "logs/combgt.err" \
+    -J "ptcombgt_$CJTAG" \
+    -o "logs/combgt.$CJTAG.out" -e "logs/combgt.$CJTAG.err" \
     -n "$CORES" -q "$QUEUE" "${WAIT_ARG[@]}" "${GROUP_ARG[@]}" \
     -R "select[mem>${MEM}] rusage[mem=${MEM}] span[hosts=1]" -M "${MEM}" \
     "FOFN='$FOFN' GTDIR='$GTDIR' OUT='$OUT' THREADS='$CORES' VENV='$VENV' ALLOW_MISSING='$ALLOW_MISSING' bash cluster/combine_gt.sh"

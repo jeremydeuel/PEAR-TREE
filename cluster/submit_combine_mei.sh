@@ -57,9 +57,16 @@ echo "submitting pooled combine: ${CORES} cores, ${MEM}MB, queue=$QUEUE"
 # Pass every var explicitly. Env set in the submitting shell does NOT reliably reach the
 # job, and the failure is silent: the script falls back to its defaults and does something
 # plausible-looking against the wrong inputs. This bit us twice already.
+# Namespace the job name (and logs) by the run's OUTDIR. A FIXED name like "ptcomb" is a trap
+# for downstream `WAIT=ended(ptcomb)`: LSF matches the name against ALL the user's jobs, so an
+# already-ended ptcomb from an earlier run satisfies the condition instantly and the dependent
+# genotype array fires early against a contract that does not exist yet. A per-run name keeps
+# `ended(<name>)` chaining safe as long as each run uses a fresh OUTDIR; for extra safety,
+# prefer depending on the numeric job id this script prints.
+CJTAG="$(basename "$OUTDIR")"
 bsub \
-    -J "ptcomb" \
-    -o "logs/comb.out" -e "logs/comb.err" \
+    -J "ptcomb_$CJTAG" \
+    -o "logs/comb.$CJTAG.out" -e "logs/comb.$CJTAG.err" \
     -n "$CORES" -q "$QUEUE" "${WAIT_ARG[@]}" "${GROUP_ARG[@]}" \
     -R "select[mem>${MEM}] rusage[mem=${MEM}] span[hosts=1]" -M "${MEM}" \
     "PATIENTS='$PATIENTS' FOFNDIR='$FOFNDIR' DISCDIR='$DISCDIR' OUTDIR='$OUTDIR' STEM='$STEM' THREADS='$CORES' VENV='$VENV' ALLOW_MISSING='$ALLOW_MISSING' bash cluster/combine_mei.sh"
