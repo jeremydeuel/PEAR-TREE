@@ -8,6 +8,7 @@ mod discovery;
 mod exons;
 mod filters;
 mod intervals;
+mod mem;
 mod model;
 mod polya;
 mod qseq;
@@ -22,6 +23,14 @@ use flate2::Compression;
 
 use config::DiscoveryConfig;
 use discovery::Discovery;
+
+// Optional jemalloc global allocator (build with `--features jemalloc`). glibc's
+// malloc holds freed memory from discovery's millions of tiny per-read/per-breakpoint
+// allocations at the process high-water mark; jemalloc packs them better and, with
+// `MALLOC_CONF=dirty_decay_ms:0,muzzy_decay_ms:0`, returns pages to the OS promptly.
+#[cfg(feature = "jemalloc")]
+#[global_allocator]
+static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
 fn usage() -> ! {
     eprintln!("usage: peartree-discovery --step discover --bam <bam|cram> --out <out.txt.gz> [--threads N] [--config <file>] [--reference <ref.fa> (required for CRAM)]");
@@ -224,15 +233,18 @@ fn main() -> io::Result<()> {
     d.set_exon_model(exon_model);
     d.set_reference_path(reference);
     d.discovery()?;
+    mem::phase("after discovery (extract+find_mates+cluster)");
 
     let file = File::create(&out)?;
     let encoder = GzEncoder::new(BufWriter::new(file), Compression::default());
     let mut writer = BufWriter::new(encoder);
     let mut hallmarks: Vec<u8> = Vec::new();
     d.output(&mut writer, &mut hallmarks)?;
+    mem::phase("after output");
     // Feature A: append discordant-anchored calls (no-op unless discordant_anchor).
     d.discordant_rescue(&mut writer)?;
     writer.into_inner()?.finish()?;
+    mem::phase("after rescue+flush");
 
     // OBS-1: reject-counter sidecar next to the output.
     let stats_path = format!("{out}.stats.json");
@@ -248,6 +260,7 @@ fn main() -> io::Result<()> {
 
     // D5: splice / processed-pseudogene annotation sidecar (only when enabled).
     let splice = d.splice_annotate()?;
+    mem::phase("after splice_annotate");
     if !splice.is_empty() {
         let sp_path = format!("{out}.splice.tsv");
         std::fs::write(&sp_path, &splice)?;

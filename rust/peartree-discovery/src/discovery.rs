@@ -502,12 +502,38 @@ impl Discovery {
         self.temporary_breakpoints.push(bp);
     }
 
+    /// Debug-gated (`PEARTREE_MEM_DEBUG`) phase-boundary line attributing resident
+    /// bytes to each accumulator. `tmp` is the peak `temporary_breakpoints` slice
+    /// for this tag (empty when it has already been drained).
+    fn mem_report(&self, tag: &str, tmp: &[Breakpoint]) {
+        let disc_bytes: usize = self
+            .discordant_obs
+            .iter()
+            .map(|o| std::mem::size_of::<DiscordantObs>() + o.contig.capacity())
+            .sum();
+        crate::mem::report(
+            tag,
+            tmp,
+            &self.final_left_breakpoints,
+            &self.final_right_breakpoints,
+            &self.polya,
+            self.discordant_obs.len(),
+            disc_bytes,
+        );
+    }
+
     fn cleanup(&mut self) {
         if self.reference_name.is_none() {
             return;
         }
         if self.temporary_breakpoints.is_empty() {
             return;
+        }
+        // temporary_breakpoints holds the just-finished contig's full clipped-read
+        // set here, right before it is drained — its true per-contig peak.
+        if crate::mem::enabled() {
+            let tag = format!("cleanup {}", self.reference_name.as_deref().unwrap_or("?"));
+            self.mem_report(&tag, &self.temporary_breakpoints);
         }
         let mut left_bps: Vec<Breakpoint> = Vec::new();
         let mut right_bps: Vec<Breakpoint> = Vec::new();
@@ -836,6 +862,25 @@ impl Discovery {
     /// Validated path: a second linear pass matching mates by qname.
     fn find_mates_scan(&mut self) -> io::Result<()> {
         let (read1_mates, read2_mates, qmap) = self.get_mates();
+        // The qname hashmaps live for the whole mate scan and are dropped on return,
+        // so this is the only point that sees them — report their footprint here.
+        if crate::mem::enabled() {
+            let map_bytes: usize = qmap.keys().map(|k| k.capacity()).sum::<usize>()
+                + qmap.len() * std::mem::size_of::<(String, BpRef)>()
+                + read1_mates.iter().map(|k| k.capacity()).sum::<usize>()
+                + read2_mates.iter().map(|k| k.capacity()).sum::<usize>()
+                + (read1_mates.len() + read2_mates.len()) * std::mem::size_of::<String>();
+            let rss = crate::mem::rss_bytes()
+                .map(|b| format!("rss={:.0}MiB ", b as f64 / 1048576.0))
+                .unwrap_or_default();
+            eprintln!(
+                "[mem] find_mates maps: {rss}qmap={} read1={} read2={} (~{:.1}MiB of qname keys)",
+                qmap.len(),
+                read1_mates.len(),
+                read2_mates.len(),
+                map_bytes as f64 / 1048576.0,
+            );
+        }
         // Feature B: only pay for mate-destination capture when a consumer is enabled.
         let capture_dests = self.config.splice_hallmark || self.config.discordant_anchor;
         let min_mapq = self.config.min_mapq;
@@ -919,6 +964,9 @@ impl Discovery {
             self.estimate_coverage()?;
         }
         self.extract_chimeric()?;
+        if crate::mem::enabled() {
+            self.mem_report("after extract (single-threaded)", &[]);
+        }
         self.find_mates()?;
         // extend_mates() is a no-op in the Python (operates on the already-emptied
         // temporary_breakpoints); intentionally omitted.
@@ -1075,7 +1123,13 @@ impl Discovery {
             self.stats.merge(&w.stats);
             self.discordant_obs.append(&mut w.discordant_obs);
         }
+        if crate::mem::enabled() {
+            self.mem_report("parent after merge", &[]);
+        }
         self.find_mates()?;
+        if crate::mem::enabled() {
+            self.mem_report("parent after find_mates", &[]);
+        }
         self.cluster_discordant();
         Ok(())
     }
@@ -1087,6 +1141,9 @@ impl Discovery {
         w.only_contig = Some(cid);
         w.coverage = coverage.clone();
         w.extract_chimeric()?;
+        if crate::mem::enabled() {
+            w.mem_report(&format!("worker cid={cid} done"), &[]);
+        }
         Ok(w)
     }
 

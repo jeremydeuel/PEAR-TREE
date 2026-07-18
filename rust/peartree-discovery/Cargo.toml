@@ -25,6 +25,12 @@ flate2 = "1.0"
 # never depends on hash order (BAM coordinate order + union.sort()), so this is
 # byte-identical.
 rustc-hash = "2"
+# Optional drop-in global allocator (enable with `--features jemalloc`) to cut the
+# heap-fragmentation high-water mark from discovery's tiny per-read allocations.
+tikv-jemallocator = { version = "0.6", optional = true }
+
+[features]
+jemalloc = ["dep:tikv-jemallocator"]
 
 [profile.release]
 opt-level = 3
