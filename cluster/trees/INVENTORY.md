@@ -12,7 +12,7 @@ Manifest coverage in `nst_links`: **stomach 238/238, NF1 909/909 — zero missin
 | cohort | donors | WGS samples | assembly | project to use | trees | usable? |
 |---|---|---|---|---|---|---|
 | **NF1 multi-organ** | 3 | 909 (838 LCM + 71 bulk) | GRCh38 | **2571** | **none exist** | **assay/read-len UNKNOWN** |
-| **Stomach** | 30 | 238 | dual: GRCh37 + GRCh38 | see below | 30 fetched, validated | **assay/read-len UNKNOWN** |
+| **Stomach** | 30 | 238 | dual: GRCh37 + GRCh38 | see below | 30 fetched, validated | **YES — WGS / 151bp (probed)** |
 | **Wilms kidney** | 7 | ~40 bulk + ~80 LCM | hs37d5_GRCh37 | 2939/2628/2541/1141 | newick in supplement | mostly TUMOUR |
 
 ## NF1 — PASSES THE ASSAY/READ-LENGTH GATE
@@ -69,11 +69,17 @@ Content of the 838 WGS_LCM (`cluster/manifests/oliver2025nf1.wgs.tsv`):
 PD51122=155, PD51123=83, PD50297=67, across frontal/parietal/occipital cortex, cerebellum,
 hippocampus, SVZ, pons, medulla, pineal, pituitary.
 
-## Stomach — dual-released, and the panel trap
+## Stomach — PASSES THE ASSAY/READ-LENGTH GATE (probed 2026-07-17)
 
-Same samples released twice, identical counts per pair:
+`bash cluster/probe_new_organs.sh cluster/manifests/coorens2025stomach.wgs.tsv`
+(`~/probe_stomach.txt`) — probed all 30 donors across both release projects, unanimous:
+**`WGS_ILLUMINA_short` / 151bp / 776M-1,104M mapped.** DS never reads a panel, confirming
+the manifest correctly excluded the 829-sample TGS arm. This cohort is usable.
+
+Dual-released, and the panel trap. Same samples released twice, identical counts per pair:
 `1911→2405`, `1933→2475`, `2134→2476`, `2398→2477` (left = hs37d5_GRCh37, right = GRCh38).
-The paper is GRCh38.
+The paper is GRCh38. The probe confirms 1911=hs37d5, 2405=GRCh38, same sample basenames on
+both — pick the GRCh38 (2405-series) release, or remap to hs1 as usual.
 
 *** **PROJECT IS NOT A PROXY FOR ASSAY, AND NAME CANNOT SEPARATE WGS FROM PANEL.** ***
 A donor glob returns **~87 samples for PD40293 but the paper ran only 12 as WGS**. The other
@@ -89,15 +95,35 @@ Trees: 30 fetched to `coorens2025stomach/`, 239 real tips vs 238 manifest rows. 
 anything. `PD41759`(25,600 SNV) and `PD41762`(64,203) are hypermutator CANCER clones, not
 normal epithelium. `PD41762`'s tree carries a non-sample tip named `Ancestral` — filter `^PD`.
 
-## THE OPEN QUESTION — nothing should be progressed until this is answered
+## THE OPEN QUESTION — RESOLVED for both usable cohorts (2026-07-17)
 
-`bash cluster/probe_new_organs.sh cluster/manifests/oliver2025nf1.wgs.tsv`
+Both NF1 and stomach have now been header-probed and both are **WGS / 151bp**:
+- NF1: `~/probe_nf1.txt` — 8 BAMs, WGS_ILLUMINA_short / 151bp / GRCh38.
+- Stomach: `~/probe_stomach.txt` — 30 donors × 2 releases, WGS_ILLUMINA_short / 151bp / dual.
 
-Presence in `nst_links` says **nothing** about usability. Still unknown for every donor above:
-- **assay type** (`@RG DS:`) — must be WGS.
-- **read length** — 151bp is fine; **75bp badly compromises clip-based MEI discovery and
-  remapping cannot fix it**. See [[hg19-remap-to-grch38-plan]]: a donor can be on the farm,
-  correctly assembled, and still worthless because the reads are short.
+Presence in `nst_links` still says **nothing** about usability, so the gate remains: for any
+NEW cohort, probe assay (`@RG DS:` must be WGS) and read length (151bp fine; **75bp badly
+compromises clip-based MEI discovery, remapping cannot fix it** — see
+[[hg19-remap-to-grch38-plan]]) before progressing.
+
+## Liver LCM (Brunner 2019, 34 donors) — PROBED 2026-07-17, USABLE
+
+`bash cluster/probe_donors.sh -f cluster/liver.donors.txt` (`~/probe_liver.txt`). The colony
+WGS is **WGS_ILLUMINA_short / 151bp / GRCh38** for all 34 donors — my sub-151bp worry was
+wrong for the WGS. GRCh38 project per donor: 36713-36718,37105,37111,37113,37114,37237 = **2306**;
+37107,37110,37115,37116,37118 = **2325**; 37230-37245 = **2324**; 37904-37918 = **2365**;
+48367/48372 (multi-region explants) = **2839/2840/2842**. Older hs37d5/hg19 dup releases also
+exist (3415/3426/2462/2589) — assembly is per-BAM, re-check @SQ of any BAM you use.
+
+**The donor glob swept in three OTHER assay arms named like the WGS — EXCLUDE them:**
+- **proj 1680 = `TARGETED_ILLUMINA_short` / 75bp** (the matched-normal `PDxxxxxa` panel). The
+  ONLY 75bp risk here, and it is not the colony WGS.
+- **proj 2454 / 3335 = `RNA-Seq_ILLUMINA_short` / 75-90bp** (transcriptome).
+- **proj 2847 / 2927 = `WXS_ILLUMINA_short`** (exome, 151bp but exonic-only).
+This is the report-not-gate design working as intended: `probe_donors.sh` shows DS per sample
+so you read off which release is the WGS. Never fofn straight off the glob.
+
+The only outstanding item now is **Wilms** (mostly tumour) — not yet probed, low priority.
 
 ## Excluded from the inventory (verified, not guessed)
 
