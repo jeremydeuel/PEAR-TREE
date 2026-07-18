@@ -116,6 +116,16 @@ fi
 GROUP_ARG=()
 [ -n "${GROUP:-}" ] && GROUP_ARG=(-G "$GROUP")
 
+# Apply the WAIT as an actual LSF dependency. This was the bug: WAIT was used ONLY to defer the
+# contract preflight above (so the array could be submitted before combine built the contract),
+# but it was never passed to bsub -- so a chained genotype array had NO dependency, ran
+# immediately against a not-yet-existent contract, and every task hit `[ -s "$CONTRACT" ]` in
+# genotype_one.sh and EXITED. (submit_combine_genotypes.sh applies WAIT; this one forgot to.)
+# Deferring the check without gating the job is the worst of both: it removes the guard AND
+# does not wait. Both must move together.
+WAIT_ARG=()
+[ -n "${WAIT:-}" ] && WAIT_ARG=(-w "$WAIT")
+
 # Namespace the logs and the job name by OUTDIR: two arrays running at once (as the A/B arms
 # did) otherwise share logs/gt.<i>.out, and LSF's -o APPENDS -- so the files end up holding
 # both runs interleaved and no failure can be attributed to a run.
@@ -125,10 +135,11 @@ mkdir -p "$LOGDIR"
 echo "  LOGS     = $LOGDIR/gt.<task>.{out,err}"
 
 echo "submitting genotype array: $N colonies x $NLOCI loci, <=$THROTTLE concurrent, ${MEM}MB, queue=$QUEUE"
+[ -n "${WAIT:-}" ] && echo "  waiting on: $WAIT"
 bsub \
     -J "ptgt_${TAG}[1-${N}]%${THROTTLE}" \
     -o "$LOGDIR/gt.%I.out" -e "$LOGDIR/gt.%I.err" \
-    -n 1 -q "$QUEUE" "${GROUP_ARG[@]}" \
+    -n 1 -q "$QUEUE" "${GROUP_ARG[@]}" "${WAIT_ARG[@]}" \
     -R "select[mem>${MEM}] rusage[mem=${MEM}] span[hosts=1]" -M "${MEM}" \
     "FOFN='$FOFN' OUTDIR='$OUTDIR' CONTRACT='$CONTRACT' GENO_CFG='$GENO_CFG' bash cluster/genotype_one.sh \$LSB_JOBINDEX"
 
