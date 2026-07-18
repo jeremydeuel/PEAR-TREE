@@ -63,3 +63,26 @@ clip_slippage_filter = true
 clip_slippage_min_run = 11
 clip_slippage_max_entropy = 1.95
 clip_slippage_any_base = true  # count poly-A/C/G/T runs (+243 poly-C/G FP at 0 extra TP loss)
+
+# SPEC-3 coverage mask + Feature A discordant anchoring + mate-anchor rescue.
+# Enabled 2026-07-18 to bring this config to the full validated feature set. These were
+# previously left at their default-OFF, so any 9x10 run predating this date did NOT have
+# them -- a rerun with these on is therefore NOT comparable to the slippage-only baseline.
+# Values are the operating point validated in test/fullstack/scale10k/discovery_hs.config.
+#   coverage_mask (SPEC-3)     drop breakpoints whose local coverage exceeds 5x the local
+#                              median; kills pericentromeric satellite FP at ~0 recall loss.
+#   discordant_anchor (Feat A) one-sided discordant discovery: +96 TP at 0 FP on benchmark.
+#                              Runs without an RTE track (discordant_rte_only stays false).
+#                              The three gates that hold FP at 0 are coverage_max_mult,
+#                              mate_min_kmer_div, and min_reads below.
+#   mate_anchor_rescue         recover a breakpoint from a well-anchored mate.
+coverage_mask = true
+coverage_mask_multiplier = 5.0
+mate_anchor_rescue = true
+discordant_anchor = true
+discordant_min_reads = 3
+discordant_window = 50
+discordant_max_tlen = 1000
+discordant_rescue_span = 300
+discordant_coverage_max_mult = 3.0
+discordant_mate_min_kmer_div = 0.5
