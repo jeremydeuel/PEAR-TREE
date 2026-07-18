@@ -21,13 +21,20 @@ cd "$(dirname "$0")/.."
 FOFN="${FOFN:-bams.fofn}"
 OUTDIR="${OUTDIR:-discovery}"
 THROTTLE="${THROTTLE:-50}"
-# MEASURED, twice — do not trim this back:
-#   PD44579 30x WGS, 174 colonies : peak 12.2 GB  (8000 => every task TERM_MEMLIMIT)
-#   PD41048b_lo0015 (proj 2073)   : peak 16.28 GB => TERM_MEMLIMIT at -M 16000, killed
-#                                   at 811 s with Delta Memory -284 MB.
-# Peak varies by cohort, not just by depth, and 16000 is NOT enough headroom: it lost
-# 1/50 tasks on the 10x10 benchmark. 24000 covers the observed spread.
-MEM="${MEM:-24000}"
+# MEASURED. The high numbers below are PRE-jemalloc (glibc-retention regime) and no
+# longer bind now that jemalloc is the default discovery build (da646b8):
+#   PRE-jemalloc  PD44579 30x WGS, 174 colonies : peak 12.2 GB (8000 => every task killed)
+#   PRE-jemalloc  PD41048b_lo0015 (proj 2073)   : peak 16.28 GB => TERM_MEMLIMIT at 16000
+#   POST-jemalloc PD44579 GRCh38, 90 BAMs (job 954062, 2026-07-18):
+#                   peak RSS min 0.40 / median 0.86 / p95 2.07 / max 3.10 GB
+#                   -> worst task = 13% of a 24 GB reservation; 0/90 TERM_MEMLIMIT.
+# jemalloc collapsed the glibc blow-up (33 GB RSS for ~1 GB live data) that produced those
+# old 12-16 GB peaks, so 24000 is now ~8x over-reserved. 8000 gives 2.6x headroom over the
+# observed max and ~4x over p99 while letting LSF pack ~2x denser per node (a 754 GB node
+# was memory-bound at ~31 tasks @ 24 GB, wasting cores). CAVEAT: only valid with the
+# jemalloc build active — if you ever revert that or hit a new/deeper cohort, re-check with
+# pilot.sh before trusting 8000 (pre-jemalloc, 8000 killed every task).
+MEM="${MEM:-8000}"
 QUEUE="${QUEUE:-normal}"
 DISCOVER_CFG="${DISCOVER_CFG:-cluster/config.discovery.grch37}"
 [ -s "$FOFN" ] || { echo "no such fofn: $FOFN (run cluster/build_fofn.sh?)" >&2; exit 1; }
