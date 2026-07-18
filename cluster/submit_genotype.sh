@@ -36,20 +36,39 @@ BIN="${GENOTYPE_BIN:-rust/peartree-genotype/target/release/peartree-genotype}"
 [ -s "$FOFN" ]     || { echo "no such fofn: $FOFN (run cluster/stage_picked.sh --fofn)" >&2; exit 1; }
 [ -s "$GENO_CFG" ] || { echo "no config: $GENO_CFG" >&2; exit 1; }
 [ -x "$BIN" ]      || { echo "no genotype binary at $BIN — build it: bash cluster/build.sh" >&2; exit 1; }
-[ -s "$CONTRACT" ] || {
-    echo >&2 "no contract: $CONTRACT"
-    echo >&2 "combine_insertions has not produced one yet — check: bjobs -w ; tail logs/comb.err"
-    exit 1; }
+# The contract is produced by combine_insertions. In the chained case this genotype array is
+# submitted with WAIT=ended(<combine>) BEFORE the contract exists, so a hard existence check
+# here makes dependency-chained submission impossible (the same silent-blocker class as the
+# combine submitters). Defer the contract-dependent checks (loci count + contig preflight) to
+# run time when a WAIT is set; hard-fail only for a standalone submission, where the contract
+# genuinely should already be on disk.
+CONTRACT_DEFERRED=""
+if [ ! -s "$CONTRACT" ]; then
+    if [ -n "${WAIT:-}" ]; then
+        CONTRACT_DEFERRED=1
+        echo >&2 "note: $CONTRACT not present yet — deferring loci + contig preflight to run time"
+        echo >&2 "      (queuing behind: $WAIT)"
+    else
+        echo >&2 "no contract: $CONTRACT"
+        echo >&2 "combine_insertions has not produced one yet. Either wait for it, or submit with"
+        echo >&2 "  WAIT=\"ended(<combine job>)\"  to queue this array behind combine."
+        exit 1
+    fi
+fi
 
 N="$(wc -l < "$FOFN" | tr -d ' ')"
 [ "$N" -gt 0 ] || { echo "empty $FOFN" >&2; exit 1; }
 mkdir -p logs "$OUTDIR"
 
-NLOCI="$(zcat "$CONTRACT" | grep -c '^>' || true)"
-[ "$NLOCI" -gt 0 ] || {
-    echo >&2 "REFUSING TO SUBMIT: the contract $CONTRACT has 0 loci."
-    echo >&2 "Every task would genotype nothing and exit 0. Check combine_insertions' log."
-    exit 1; }
+if [ -n "$CONTRACT_DEFERRED" ]; then
+    NLOCI="(pending combine)"
+else
+    NLOCI="$(zcat "$CONTRACT" | grep -c '^>' || true)"
+    [ "$NLOCI" -gt 0 ] || {
+        echo >&2 "REFUSING TO SUBMIT: the contract $CONTRACT has 0 loci."
+        echo >&2 "Every task would genotype nothing and exit 0. Check combine_insertions' log."
+        exit 1; }
+fi
 
 # Say out loud what we are about to do -- the defaults are a live hazard, not a convenience:
 # if the caller's env does not reach this script it submits a plausible array against the
@@ -67,7 +86,9 @@ echo "  CONFIG   = $GENO_CFG"
 # completion, exits 0, and calls every locus NA -- indistinguishable from "no evidence".
 # 90 colonies x ~17 min of farm time, and it surfaces later as an all-NA call table.
 FIRST_BAM="$(head -1 "$FOFN")"
-if [ -s "$FIRST_BAM" ]; then
+if [ -n "$CONTRACT_DEFERRED" ]; then
+    echo "  contigs  : NOT CHECKED (contract not built yet — deferred with the WAIT dependency)" >&2
+elif [ -s "$FIRST_BAM" ]; then
     module load samtools-1.19/python-3.12.0 2>/dev/null || true
     if command -v samtools >/dev/null 2>&1; then
         # Read the contract's contigs and the BAM's @SQ, then intersect. Header read only.
