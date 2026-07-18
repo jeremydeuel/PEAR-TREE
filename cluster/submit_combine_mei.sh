@@ -34,7 +34,13 @@ for p in $PATIENTS; do
 done
 
 NBAM="$(grep -c . "$FOFNDIR/all.bams.fofn")"
-NDISC="$(ls "$DISCDIR"/*.txt.gz 2>/dev/null | wc -l | tr -d ' ')"
+# NB: `|| NDISC=0` is load-bearing. Under `set -euo pipefail`, when DISCDIR has no
+# *.txt.gz yet (the normal case: this job is submitted with WAIT=ended(discovery) while
+# discovery is STILL RUNNING), the glob matches nothing, `ls` exits non-zero, pipefail
+# propagates it, and set -e kills the script BEFORE bsub — silently, with no output. The
+# `||` catches that so the count is just 0 and submission proceeds. Without it, dependency-
+# chained submission is impossible.
+NDISC="$(ls "$DISCDIR"/*.txt.gz 2>/dev/null | wc -l | tr -d ' ')" || NDISC=0
 echo "  PATIENTS = $PATIENTS"
 echo "  FOFN     = $FOFNDIR/all.bams.fofn  ($NBAM colonies)"
 echo "  DISCDIR  = $DISCDIR  ($NDISC discovery files present)"

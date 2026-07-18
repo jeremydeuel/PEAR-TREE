@@ -31,7 +31,10 @@ ALLOW_MISSING="${ALLOW_MISSING:-0}"
     exit 1; }
 
 NBAM="$(grep -c . "$FOFN")"
-NGT="$(ls "$GTDIR"/*.txt.gz 2>/dev/null | wc -l | tr -d ' ')"
+# `|| NGT=0`: under set -euo pipefail an empty GTDIR glob makes `ls` fail, pipefail
+# propagates, and set -e kills the script before bsub — the silent death that stops a
+# WAIT=ended(genotype) dependency submission from ever queueing. Catch it; count is 0.
+NGT="$(ls "$GTDIR"/*.txt.gz 2>/dev/null | wc -l | tr -d ' ')" || NGT=0
 echo "  FOFN  = $FOFN  ($NBAM colonies)"
 echo "  GTDIR = $GTDIR  ($NGT genotype files present)"
 echo "  OUT   = $OUT"
