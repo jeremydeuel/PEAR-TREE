@@ -62,6 +62,12 @@ impl Coverage {
         self.median
     }
 
+    /// Override the estimated median with a pinned value (region-slice runs, where the
+    /// genome median must come from the full BAM, not the slice). Leaves local bins intact.
+    pub fn set_median(&mut self, m: f64) {
+        self.median = m;
+    }
+
     /// Local bin count at (contig, pos); 0 if the position was never covered.
     pub fn local(&self, contig: &str, pos: i64) -> u32 {
         if pos < 0 {

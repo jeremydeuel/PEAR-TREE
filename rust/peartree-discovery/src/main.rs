@@ -74,11 +74,12 @@ fn main() -> io::Result<()> {
         }
     }
 
-    if step.as_deref() != Some("discover") {
-        eprintln!("this binary only implements --step discover");
+    let step = step.as_deref().unwrap_or("discover").to_string();
+    if step != "discover" && step != "coverage-median" {
+        eprintln!("unknown step '{step}'; this binary implements --step discover | coverage-median");
         usage();
     }
-    let (Some(bam), Some(out)) = (bam, out) else { usage() };
+    let Some(bam) = bam else { usage() };
 
     if !std::path::Path::new(&bam).exists() {
         eprintln!("input bam file {bam} does not exist!");
@@ -109,6 +110,18 @@ fn main() -> io::Result<()> {
     if !bam.ends_with(".cram") && config.contig_threads <= 1 && threads > 1 {
         config.contig_threads = threads;
     }
+
+    // `--step coverage-median`: run only the coverage pre-pass on the full BAM and print
+    // `<bam>\t<median>`. Used to precompute the true genome median that region-slice runs
+    // pin via PEARTREE_COVERAGE_MEDIAN. No output file, no exclude/rm/exon/rte setup.
+    if step == "coverage-median" {
+        let mut d = Discovery::new(bam.clone(), threads, config, None, None);
+        d.set_reference_path(reference);
+        let med = d.compute_coverage_median()?;
+        println!("{bam}\t{med}");
+        return Ok(());
+    }
+    let Some(out) = out else { usage() };
 
     // SPEC-5: build the exclude-BED interval index up front so a bad path fails fast.
     let exclude = match config.exclude_bed.as_deref() {

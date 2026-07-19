@@ -227,6 +227,14 @@ pub struct DiscoveryConfig {
     /// assembly-discordance FPs cluster in ~3-5x pileups that pass the 5x mask). `None` =
     /// fall back to `coverage_mask_multiplier`. Populates coverage even if the mask is off.
     pub discordant_coverage_max_mult: Option<f64>,
+    /// Pin the genome-wide coverage median to this value instead of estimating it from the
+    /// BAM (`None` = estimate as usual). Set per-BAM (via `PEARTREE_COVERAGE_MEDIAN` or the
+    /// config key) when running on a *region slice* of a BAM: the local bin counts near the
+    /// truth loci are still exact, but the genome median would be inflated by the slice, so
+    /// the `local/median` ratio gates (SPEC-3, `discordant_coverage_max_mult`) must be given
+    /// the true full-BAM median. Emit it with `--step coverage-median`. No effect unless a
+    /// coverage-ratio gate is on.
+    pub coverage_median_override: Option<f64>,
     // --- Feature B: processed-pseudogene (splice) annotation ---
     /// Write a non-gating `<out>.splice.tsv` flagging candidates whose mate reads span
     /// >= `splice_min_exons` exons of a single reference gene (intron skipped). The
@@ -292,6 +300,7 @@ impl Default for DiscoveryConfig {
             discordant_rescue_span: None,
             discordant_mate_min_kmer_div: None,
             discordant_coverage_max_mult: None,
+            coverage_median_override: None,
             splice_hallmark: false,
             exon_annotation: None,
             splice_min_exons: 2,
@@ -400,6 +409,7 @@ impl DiscoveryConfig {
             "discordant_rescue_span" => self.discordant_rescue_span = Some(parse_num(val)?),
             "discordant_mate_min_kmer_div" => self.discordant_mate_min_kmer_div = Some(parse_num(val)?),
             "discordant_coverage_max_mult" => self.discordant_coverage_max_mult = Some(parse_num(val)?),
+            "coverage_median_override" => self.coverage_median_override = Some(parse_num(val)?),
             "splice_hallmark" => self.splice_hallmark = parse_bool(val)?,
             "exon_annotation" => self.exon_annotation = Some(val.to_string()),
             "splice_min_exons" => self.splice_min_exons = parse_num(val)?,
@@ -411,6 +421,11 @@ impl DiscoveryConfig {
     fn apply_env(&mut self) -> Result<(), String> {
         if let Ok(v) = std::env::var("PEARTREE_MIN_MAPQ") {
             self.min_mapq = v.trim().parse().map_err(|_| format!("PEARTREE_MIN_MAPQ: not a valid u8: '{v}'"))?;
+        }
+        // PEARTREE_COVERAGE_MEDIAN pins the genome median (per-BAM, for region-slice runs).
+        if let Ok(v) = std::env::var("PEARTREE_COVERAGE_MEDIAN") {
+            let m: f64 = v.trim().parse().map_err(|_| format!("PEARTREE_COVERAGE_MEDIAN: not a valid f64: '{v}'"))?;
+            self.coverage_median_override = Some(m);
         }
         // PEARTREE_KEEP_FULLMAP=1 keeps full-mapping reads (env wins over the file).
         if matches!(std::env::var("PEARTREE_KEEP_FULLMAP").as_deref(), Ok("1") | Ok("true") | Ok("True")) {

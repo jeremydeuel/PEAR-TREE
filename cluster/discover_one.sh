@@ -27,9 +27,21 @@ BAM="$(sed -n "${IDX}p" "$FOFN")"
 # The old dir-based rule silently collapsed every nst_links colony of a patient onto the
 # PROJECT number, so all but the first "skipped, output exists" and you got 1 file per
 # project instead of 1 per colony. Filename-based is correct for both.
-ID="$(basename "$BAM")"; ID="${ID%.bam}"; ID="${ID%.cram}"; ID="${ID%.sample.dupmarked}"
+ID="$(basename "$BAM")"; ID="${ID%.bam}"; ID="${ID%.cram}"; ID="${ID%.slice}"; ID="${ID%.sample.dupmarked}"
 [ -n "$ID" ] || { echo "could not derive id from $BAM" >&2; exit 1; }
 OUT="$OUTDIR/${ID}.txt.gz"
+
+# Region-slice fast-sweep support: when MEDIAN_DIR is set, pin the genome coverage median
+# to the precomputed full-BAM value ($MEDIAN_DIR/<id>.median). A region slice would
+# otherwise estimate an inflated median and silently disable the local/median ratio gates
+# (SPEC-3, discordant_coverage_max_mult). No-op for full-BAM runs (MEDIAN_DIR unset).
+if [ -n "${MEDIAN_DIR:-}" ]; then
+    MEDFILE="$MEDIAN_DIR/${ID}.median"
+    [ -s "$MEDFILE" ] || { echo "MEDIAN_DIR set but no median for $ID ($MEDFILE)" >&2; exit 1; }
+    PEARTREE_COVERAGE_MEDIAN="$(tr -d '[:space:]' < "$MEDFILE")"
+    export PEARTREE_COVERAGE_MEDIAN
+    echo "[$IDX] $ID: pinned coverage median = $PEARTREE_COVERAGE_MEDIAN"
+fi
 
 mkdir -p "$OUTDIR"
 if [ -s "$OUT" ]; then

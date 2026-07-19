@@ -314,6 +314,11 @@ impl Discovery {
             self.coverage.set_contig(cur_name, bins);
         }
         self.coverage.finalize(self.config.coverage_sample_size);
+        // Region-slice runs pin the genome median from the full BAM: local bins (near the
+        // truth loci) stay exact, but the slice-estimated median would be inflated.
+        if let Some(m) = self.config.coverage_median_override {
+            self.coverage.set_median(m);
+        }
         Ok(())
     }
 
@@ -352,6 +357,17 @@ impl Discovery {
     /// Install the reference FASTA path used to decode CRAM input.
     pub fn set_reference_path(&mut self, p: Option<String>) {
         self.reference_path = p;
+    }
+
+    /// Run only the coverage pre-pass and return the estimated genome median. Used by the
+    /// `coverage-median` step to precompute the true full-BAM median that region-slice runs
+    /// then pin via `PEARTREE_COVERAGE_MEDIAN`. Ignores `coverage_median_override` so it
+    /// always reports the freshly estimated value.
+    pub fn compute_coverage_median(&mut self) -> io::Result<f64> {
+        let saved = self.config.coverage_median_override.take();
+        self.estimate_coverage()?;
+        self.config.coverage_median_override = saved;
+        Ok(self.coverage.median())
     }
 
     /// True if a breakpoint at (rn, pos) would survive the output-time masks

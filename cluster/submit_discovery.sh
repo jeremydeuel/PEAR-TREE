@@ -119,7 +119,7 @@ bsub \
     -o "$LOGDIR/disc.%I.out" -e "$LOGDIR/disc.%I.err" \
     -n 1 -q "$QUEUE" "${GROUP_ARG[@]}" \
     -R "select[mem>${MEM}] rusage[mem=${MEM}] span[hosts=1]" -M "${MEM}" \
-    "FOFN='$FOFN' OUTDIR='$OUTDIR' DISCOVER_CFG='$DISCOVER_CFG' bash cluster/discover_one.sh \$LSB_JOBINDEX"
+    "FOFN='$FOFN' OUTDIR='$OUTDIR' DISCOVER_CFG='$DISCOVER_CFG'${MEDIAN_DIR:+ MEDIAN_DIR='$MEDIAN_DIR'} bash cluster/discover_one.sh \$LSB_JOBINDEX"
 
 echo "watch with: bjobs -A ; tail -f $LOGDIR/disc.1.out"
 echo "when done: ls $OUTDIR/*.txt.gz | wc -l   # expect $N"
