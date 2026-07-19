@@ -34,7 +34,11 @@ enum BpRef {
 enum Emit<'a> {
     Bp(&'a Breakpoint),
     Pa(&'a PolyABreakpoint),
-    /// Feature A: a discordant-cluster end (coordinate only, no reads).
+    /// Feature A: a discordant-cluster end (coordinate only, no reads). Dormant since the
+    /// both-sided rescue rework — Feature A now requires a direct clip on the missing side
+    /// (see `discordant_rescue`), so no call is emitted with a bare discordant end. Retained
+    /// with the disc-cluster machinery for a possible future one-sided mode.
+    #[allow(dead_code)]
     Disc(&'a DiscordantCluster),
 }
 
@@ -57,6 +61,9 @@ struct DiscordantObs {
 /// a contig, role and (approximate) breakpoint. It can stand in for a missing
 /// reciprocal breakpoint during output pairing. `mate_dests` are the mate landing
 /// sites, used by the D3 RTE-origin check.
+// Dormant since the both-sided rescue rework (fields written by cluster_discordant but no
+// longer read for emission); retained for a possible future one-sided discordant mode.
+#[allow(dead_code)]
 #[derive(Clone)]
 struct DiscordantCluster {
     contig: String,
@@ -193,6 +200,12 @@ pub struct Discovery {
     temporary_breakpoints: Vec<Breakpoint>,
     final_left_breakpoints: Vec<Breakpoint>,
     final_right_breakpoints: Vec<Breakpoint>,
+    /// Feature A both-sided rescue: clip clusters that passed all quality gates but fell
+    /// below the normal evidence floor (>= discordant_partner_min_reads, < evidence_floor).
+    /// Not part of normal output; only `discordant_rescue` pairs one of these (the missing
+    /// junction) with a solid anchor breakpoint. Empty unless `discordant_anchor` is on.
+    subfloor_left_breakpoints: Vec<Breakpoint>,
+    subfloor_right_breakpoints: Vec<Breakpoint>,
     polya: Vec<PolyABreakpoint>,
     reference_name: Option<String>,
     filepath: String,
@@ -234,6 +247,8 @@ impl Discovery {
             temporary_breakpoints: Vec::new(),
             final_left_breakpoints: Vec::new(),
             final_right_breakpoints: Vec::new(),
+            subfloor_left_breakpoints: Vec::new(),
+            subfloor_right_breakpoints: Vec::new(),
             polya: Vec::new(),
             reference_name: None,
             filepath,
@@ -275,7 +290,9 @@ impl Discovery {
     /// Reject a one-sided discordant call whose real breakpoint's mate reads are a
     /// low-diversity satellite array. True (pass) when no threshold is set or the mates
     /// are too few/short to judge (`None` diversity) — the gate only fires on positive
-    /// evidence of low complexity.
+    /// evidence of low complexity. Dormant since the both-sided rescue rework (no one-sided
+    /// disc-cluster calls to gate); retained for a possible future one-sided mode.
+    #[allow(dead_code)]
     fn disc_mates_ok(&self, bp: &Breakpoint) -> bool {
         let Some(thr) = self.config.discordant_mate_min_kmer_div else { return true };
         match mean_kmer_diversity(&bp.mate_seqs, 4) {
@@ -586,11 +603,36 @@ impl Discovery {
             }
             for g in groups {
                 let floor = self.evidence_floor(g[0].breakpoint);
-                if let Some(joined) = join(g, &self.config, floor, &mut self.stats) {
-                    if out {
-                        self.final_left_breakpoints.push(joined);
-                    } else {
-                        self.final_right_breakpoints.push(joined);
+                // Feature A: also build the consensus at the lower partner floor, so a
+                // quality-passing clip cluster below the normal evidence floor is kept as a
+                // candidate missing junction for discordant_rescue. join() only differs by
+                // floor in its low-support branch, so at n_reads >= floor this is identical
+                // to the final consensus (which we take instead, below). Uses throwaway stats
+                // to avoid double-counting the OBS-1 reject counters.
+                let sub = if self.config.discordant_anchor {
+                    let mut sink = Stats::default();
+                    join(g.clone(), &self.config, self.config.discordant_partner_min_reads, &mut sink)
+                } else {
+                    None
+                };
+                match join(g, &self.config, floor, &mut self.stats) {
+                    Some(joined) => {
+                        if out {
+                            self.final_left_breakpoints.push(joined);
+                        } else {
+                            self.final_right_breakpoints.push(joined);
+                        }
+                    }
+                    // below the normal floor but a valid clip cluster >= partner floor:
+                    // keep only as a discordant missing-junction candidate.
+                    None => {
+                        if let Some(s) = sub {
+                            if out {
+                                self.subfloor_left_breakpoints.push(s);
+                            } else {
+                                self.subfloor_right_breakpoints.push(s);
+                            }
+                        }
                     }
                 }
             }
@@ -654,15 +696,20 @@ impl Discovery {
 
         if read.mapq < min_mapq {
             // Mate-anchored rescue: keep a soft-clipped read below the MAPQ floor if its
-            // mate maps uniquely (proper pair, MQ >= min_mapq). Mirrors Python
-            // src/discovery.py. Otherwise the read only survives as a polyA mate.
+            // mate maps uniquely (MQ >= min_mapq). Mirrors Python src/discovery.py for the
+            // proper-pair case. Feature A extends it to DISCORDANT (non-proper) pairs when
+            // `discordant_anchor` is on: a read whose body maps poorly INTO a repetitive RTE
+            // (low MAPQ) but whose clip pins the junction is exactly the missing-side
+            // evidence we want — a few genomic bases in the clip localise the breakpoint, and
+            // the uniquely-mapped mate is the required high-MAPQ read of the pair. Otherwise
+            // the read only survives as a polyA mate.
             let has_clip = (read.left_is_soft && read.left_len >= MIN_CLIP_LEN)
                 || (read.right_is_soft && read.right_len >= MIN_CLIP_LEN);
+            let mate_unique = read.mate_is_mapped && read.mq().map_or(false, |mq| mq >= min_mapq);
             let rescued = self.config.mate_anchor_rescue
                 && has_clip
-                && read.is_proper_pair
-                && read.mate_is_mapped
-                && read.mq().map_or(false, |mq| mq >= min_mapq);
+                && mate_unique
+                && (read.is_proper_pair || self.config.discordant_anchor);
             if !rescued {
                 if let Some(b) = PolyABreakpoint::find_polya(&read) {
                     self.polya.push(b);
@@ -1080,6 +1127,9 @@ impl Discovery {
 
     /// Feature A: find a discordant cluster on `contig` with the given `role` whose
     /// representative position lies in [lo, hi]. Returns the one with the most reads.
+    /// Dormant since the both-sided rescue rework; retained for a possible future one-sided
+    /// mode.
+    #[allow(dead_code)]
     fn find_disc_cluster(&self, contig: &str, role: i32, lo: i64, hi: i64) -> Option<&DiscordantCluster> {
         self.discordant_clusters
             .iter()
@@ -1135,6 +1185,8 @@ impl Discovery {
         for (_, mut w) in results {
             self.final_left_breakpoints.append(&mut w.final_left_breakpoints);
             self.final_right_breakpoints.append(&mut w.final_right_breakpoints);
+            self.subfloor_left_breakpoints.append(&mut w.subfloor_left_breakpoints);
+            self.subfloor_right_breakpoints.append(&mut w.subfloor_right_breakpoints);
             self.polya.append(&mut w.polya);
             self.stats.merge(&w.stats);
             self.discordant_obs.append(&mut w.discordant_obs);
@@ -1333,35 +1385,59 @@ impl Discovery {
         Ok(())
     }
 
-    /// Feature A: append discordant-anchored calls after the normal output. A real
-    /// breakpoint with no reciprocal real partner in its TSD window is paired with a
-    /// discordant cluster on the missing side (`disc_<pos>` token, no reads for that
-    /// end). Only runs when `discordant_anchor` is on, so the default output above is
-    /// untouched. The "no real partner in window" test is mutually exclusive with the
-    /// main loop's pairing, so a real pair is never duplicated.
+    /// Feature A (both-sided rescue): append discordant-anchored calls after the normal
+    /// output. Both junctions of an insertion must carry DIRECT clip evidence: a solid
+    /// anchor breakpoint (>= `discordant_min_anchor_reads`, i.e. one that clustered
+    /// normally) with no reciprocal real partner in its TSD window is paired with a
+    /// *sub-floor* clip on the missing side — a clip cluster that fell below the normal
+    /// evidence floor (>= `discordant_partner_min_reads`), typically a single read whose
+    /// body maps poorly into a repetitive RTE but whose clip pins the junction, kept alive
+    /// by the low-MAPQ discordant-mate rescue in `handle_record`. A discordant mate cluster
+    /// alone never completes a call. Only runs when `discordant_anchor` is on; the default
+    /// output above is untouched, and the "no real partner in window" test is mutually
+    /// exclusive with the main loop's pairing so a real pair is never duplicated.
     pub fn discordant_rescue<W: Write>(&mut self, writer: &mut W) -> io::Result<()> {
-        if !self.config.discordant_anchor || self.discordant_clusters.is_empty() {
+        if !self.config.discordant_anchor {
+            return Ok(());
+        }
+        if self.subfloor_left_breakpoints.is_empty() && self.subfloor_right_breakpoints.is_empty() {
             return Ok(());
         }
         let (tsd_min, tsd_max) = (self.config.tsd_min, self.config.tsd_max);
         let in_window = |gap: i64| gap >= tsd_min && gap <= tsd_max;
-        // Discordant anchors sit up to ~a fragment length from the junction, so the
-        // cluster search reaches `discordant_rescue_span` (falling back to tsd_max),
-        // decoupled from the TSD bound used to detect a *real* reciprocal partner.
-        let span = self.config.discordant_rescue_span.unwrap_or(tsd_max);
+        let anchor_min = self.config.discordant_min_anchor_reads;
+        let partner_min = self.config.discordant_partner_min_reads;
 
-        // group breakpoints per contig, applying the same SPEC-5/3/7 retains as output.
-        let mut left_map: FxHashMap<String, Vec<usize>> = FxHashMap::default();
-        for (i, bp) in self.final_left_breakpoints.iter().enumerate() {
-            left_map.entry(bp.reference_name.clone()).or_default().push(i);
-        }
-        let mut right_map: FxHashMap<String, Vec<usize>> = FxHashMap::default();
-        for (i, bp) in self.final_right_breakpoints.iter().enumerate() {
-            right_map.entry(bp.reference_name.clone()).or_default().push(i);
-        }
+        let by_contig = |bps: &[Breakpoint]| {
+            let mut m: FxHashMap<String, Vec<usize>> = FxHashMap::default();
+            for (i, bp) in bps.iter().enumerate() {
+                m.entry(bp.reference_name.clone()).or_default().push(i);
+            }
+            m
+        };
+        let left_map = by_contig(&self.final_left_breakpoints);
+        let right_map = by_contig(&self.final_right_breakpoints);
+        let sub_left_map = by_contig(&self.subfloor_left_breakpoints);
+        let sub_right_map = by_contig(&self.subfloor_right_breakpoints);
+
         let mut contigs: Vec<String> = left_map.keys().chain(right_map.keys()).cloned().collect();
         contigs.sort();
         contigs.dedup();
+
+        // strongest sub-floor clip of the given side within [lo, hi] (sorted-by-pos input).
+        fn pick_partner<'a>(sorted: &[&'a Breakpoint], lo: i64, hi: i64, min_reads: usize) -> Option<&'a Breakpoint> {
+            let start = sorted.partition_point(|b| b.breakpoint < lo);
+            let mut best: Option<&'a Breakpoint> = None;
+            let mut i = start;
+            while i < sorted.len() && sorted[i].breakpoint <= hi {
+                let b = sorted[i];
+                if b.n_reads >= min_reads && best.map_or(true, |cur| b.n_reads > cur.n_reads) {
+                    best = Some(b);
+                }
+                i += 1;
+            }
+            best
+        }
 
         let empty: Vec<usize> = Vec::new();
         let mut paired: u64 = 0;
@@ -1369,47 +1445,67 @@ impl Discovery {
             if !self.contig_ok_output(rn) {
                 continue;
             }
+            // solid anchors (finals), masked exactly as normal output masks them.
             let mut l: Vec<&Breakpoint> = left_map.get(rn).unwrap_or(&empty).iter().map(|&i| &self.final_left_breakpoints[i]).collect();
             let mut r: Vec<&Breakpoint> = right_map.get(rn).unwrap_or(&empty).iter().map(|&i| &self.final_right_breakpoints[i]).collect();
             l.sort_by_key(|b| b.breakpoint);
             r.sort_by_key(|b| b.breakpoint);
             self.retain_visible(rn, &mut l);
             self.retain_visible(rn, &mut r);
+            // sub-floor missing-junction candidates, masked the same way.
+            let mut sl: Vec<&Breakpoint> = sub_left_map.get(rn).unwrap_or(&empty).iter().map(|&i| &self.subfloor_left_breakpoints[i]).collect();
+            let mut sr: Vec<&Breakpoint> = sub_right_map.get(rn).unwrap_or(&empty).iter().map(|&i| &self.subfloor_right_breakpoints[i]).collect();
+            sl.sort_by_key(|b| b.breakpoint);
+            sr.sort_by_key(|b| b.breakpoint);
+            self.retain_visible(rn, &mut sl);
+            self.retain_visible(rn, &mut sr);
 
-            // a LEFT breakpoint with no real RIGHT partner in window -> RIGHT-role cluster
+            // a LEFT anchor with no real RIGHT partner in window -> a RIGHT sub-floor clip
             for lb in &l {
+                if lb.n_reads < anchor_min {
+                    continue;
+                }
                 if r.iter().any(|rb| in_window(rb.breakpoint - lb.breakpoint)) {
                     continue;
                 }
                 if !self.disc_coverage_ok(rn, lb.breakpoint) {
                     continue;
                 }
-                // Reject a lone breakpoint whose genomic *flank* (aligned side) is a
-                // low-complexity satellite array: a real insertion has a unique/complex
-                // flank, whereas a pericentromeric/subtelomeric mismap is satellite on
-                // both sides. (The element clip itself may be legitimately low-complexity
-                // — an Alu poly-A tail or SVA VNTR — so the flank, not the clip, is gated.)
-                if is_low_complexity(&lb.unclipped.seq, 0.8) || !self.disc_mates_ok(lb) {
+                // Reject an anchor whose genomic *flank* (aligned side) is a low-complexity
+                // satellite array: a real insertion has a unique/complex flank, whereas a
+                // pericentromeric/subtelomeric mismap is satellite on both sides. (The clip
+                // itself may be legitimately low-complexity — an Alu poly-A tail or SVA VNTR
+                // — so the flank, not the clip, is gated.)
+                if is_low_complexity(&lb.unclipped.seq, 0.8) {
                     continue;
                 }
-                if let Some(c) = self.find_disc_cluster(rn, CLIP_RIGHT, lb.breakpoint + tsd_min, lb.breakpoint + span) {
-                    print_output(writer, Emit::Bp(lb), Emit::Disc(c))?;
+                if let Some(mb) = pick_partner(&sr, lb.breakpoint + tsd_min, lb.breakpoint + tsd_max, partner_min) {
+                    if is_low_complexity(&mb.unclipped.seq, 0.8) {
+                        continue;
+                    }
+                    print_output(writer, Emit::Bp(lb), Emit::Bp(mb))?;
                     paired += 1;
                 }
             }
-            // a RIGHT breakpoint with no real LEFT partner in window -> LEFT-role cluster
+            // a RIGHT anchor with no real LEFT partner in window -> a LEFT sub-floor clip
             for rb in &r {
+                if rb.n_reads < anchor_min {
+                    continue;
+                }
                 if l.iter().any(|lb| in_window(rb.breakpoint - lb.breakpoint)) {
                     continue;
                 }
                 if !self.disc_coverage_ok(rn, rb.breakpoint) {
                     continue;
                 }
-                if is_low_complexity(&rb.unclipped.seq, 0.8) || !self.disc_mates_ok(rb) {
+                if is_low_complexity(&rb.unclipped.seq, 0.8) {
                     continue;
                 }
-                if let Some(c) = self.find_disc_cluster(rn, CLIP_LEFT, rb.breakpoint - span, rb.breakpoint - tsd_min) {
-                    print_output(writer, Emit::Disc(c), Emit::Bp(rb))?;
+                if let Some(mb) = pick_partner(&sl, rb.breakpoint - tsd_max, rb.breakpoint - tsd_min, partner_min) {
+                    if is_low_complexity(&mb.unclipped.seq, 0.8) {
+                        continue;
+                    }
+                    print_output(writer, Emit::Bp(mb), Emit::Bp(rb))?;
                     paired += 1;
                 }
             }

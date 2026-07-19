@@ -6,6 +6,15 @@ use rustc_hash::FxHashSet;
 pub const MIN_MAPQ: u8 = 40;
 pub const MIN_CLIP_LEN: usize = 12;
 pub const MIN_EVIDENCE_READS_PER_BREAKPOINT: usize = 2;
+/// Feature A both-sided rescue: minimum clip support on the SOLID anchor junction (the
+/// side that clustered normally). Defaults to the global evidence floor (2); can be raised
+/// to demand a stronger anchor.
+pub const DISCORDANT_MIN_ANCHOR_READS: usize = 2;
+/// Feature A both-sided rescue: minimum clip support on the MISSING junction, i.e. the
+/// reciprocal clip that the normal >=2 floor would drop. 1 = a single (possibly rescued
+/// low-MAPQ) clip pinning the junction is enough, since it is corroborated by both the
+/// TSD-window pairing with the solid anchor and (for low-MAPQ clips) a uniquely-mapped mate.
+pub const DISCORDANT_PARTNER_MIN_READS: usize = 1;
 pub const MIN_ADAPTERLEN_FOR_CLIP: usize = 4;
 pub const MIN_GOOD_BASES: usize = 10;
 pub const EXCLUDE_SAME_CONTIG_SUPPLEMENTARY: i64 = 1000;
@@ -227,6 +236,15 @@ pub struct DiscoveryConfig {
     /// assembly-discordance FPs cluster in ~3-5x pileups that pass the 5x mask). `None` =
     /// fall back to `coverage_mask_multiplier`. Populates coverage even if the mask is off.
     pub discordant_coverage_max_mult: Option<f64>,
+    /// Feature A both-sided rescue: minimum clip support required on the SOLID anchor
+    /// junction. Both junctions of a discordant-rescued insertion must carry direct clip
+    /// evidence — a discordant mate cluster alone never completes a call. This is the floor
+    /// for the anchor side (defaults to the global evidence floor of 2).
+    pub discordant_min_anchor_reads: usize,
+    /// Feature A both-sided rescue: minimum clip support on the MISSING junction — the
+    /// reciprocal clip the normal >=2 floor would drop. 1 admits a single (possibly rescued
+    /// low-MAPQ) clip that pins the junction within the TSD window opposite the anchor.
+    pub discordant_partner_min_reads: usize,
     /// Pin the genome-wide coverage median to this value instead of estimating it from the
     /// BAM (`None` = estimate as usual). Set per-BAM (via `PEARTREE_COVERAGE_MEDIAN` or the
     /// config key) when running on a *region slice* of a BAM: the local bin counts near the
@@ -300,6 +318,8 @@ impl Default for DiscoveryConfig {
             discordant_rescue_span: None,
             discordant_mate_min_kmer_div: None,
             discordant_coverage_max_mult: None,
+            discordant_min_anchor_reads: DISCORDANT_MIN_ANCHOR_READS,
+            discordant_partner_min_reads: DISCORDANT_PARTNER_MIN_READS,
             coverage_median_override: None,
             splice_hallmark: false,
             exon_annotation: None,
@@ -409,6 +429,8 @@ impl DiscoveryConfig {
             "discordant_rescue_span" => self.discordant_rescue_span = Some(parse_num(val)?),
             "discordant_mate_min_kmer_div" => self.discordant_mate_min_kmer_div = Some(parse_num(val)?),
             "discordant_coverage_max_mult" => self.discordant_coverage_max_mult = Some(parse_num(val)?),
+            "discordant_min_anchor_reads" => self.discordant_min_anchor_reads = parse_num(val)?,
+            "discordant_partner_min_reads" => self.discordant_partner_min_reads = parse_num(val)?,
             "coverage_median_override" => self.coverage_median_override = Some(parse_num(val)?),
             "splice_hallmark" => self.splice_hallmark = parse_bool(val)?,
             "exon_annotation" => self.exon_annotation = Some(val.to_string()),
@@ -496,6 +518,8 @@ mod tests {
         assert!(!c.discordant_anchor);
         assert_eq!(c.discordant_max_tlen, 1000);
         assert_eq!(c.discordant_min_reads, 3);
+        assert_eq!(c.discordant_min_anchor_reads, DISCORDANT_MIN_ANCHOR_READS);
+        assert_eq!(c.discordant_partner_min_reads, DISCORDANT_PARTNER_MIN_READS);
         assert_eq!(c.discordant_window, CLUSTER_WINDOW);
         assert!(c.discordant_rte_track.is_none());
         assert!(!c.discordant_rte_only);
@@ -510,6 +534,8 @@ mod tests {
         c.set("discordant_anchor", "true").unwrap();
         c.set("discordant_max_tlen", "2500").unwrap();
         c.set("discordant_min_reads", "5").unwrap();
+        c.set("discordant_min_anchor_reads", "6").unwrap();
+        c.set("discordant_partner_min_reads", "2").unwrap();
         c.set("discordant_rte_track", "/data/rmsk.out.gz").unwrap();
         c.set("discordant_rte_only", "1").unwrap();
         c.set("discordant_rte_min", "0.75").unwrap();
@@ -519,6 +545,8 @@ mod tests {
         assert!(c.discordant_anchor);
         assert_eq!(c.discordant_max_tlen, 2500);
         assert_eq!(c.discordant_min_reads, 5);
+        assert_eq!(c.discordant_min_anchor_reads, 6);
+        assert_eq!(c.discordant_partner_min_reads, 2);
         assert_eq!(c.discordant_rte_track.as_deref(), Some("/data/rmsk.out.gz"));
         assert!(c.discordant_rte_only);
         assert!((c.discordant_rte_min - 0.75).abs() < 1e-9);
