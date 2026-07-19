@@ -39,9 +39,14 @@ cd "$REPO"
 # GUARD (hpc-sanger lesson): a stale binary silently ignores coverage_median_override and
 # the whole median-pin is a no-op. Refuse to run unless the rebuilt binary knows the step.
 # Probe with an INVALID step: the new binary lists its supported steps (incl. coverage-median)
-# in the error, whereas a valid step with no --bam only prints the generic usage line.
-"$BIN" --step __probe__ 2>&1 | grep -q "coverage-median" \
-  || { echo "FATAL: $BIN does not implement --step coverage-median -> REBUILD (module load rust/1.87.0 && bash cluster/build.sh)" >&2; exit 1; }
+# in the error, whereas a valid step with no --bam only prints the generic usage line. The
+# probe deliberately EXITS NON-ZERO (error path), so capture with `|| true` and match the
+# string — a bare `$BIN ... | grep` trips `set -o pipefail` regardless of whether grep matches.
+probe_out="$("$BIN" --step __probe__ 2>&1 || true)"
+case "$probe_out" in
+  *coverage-median*) : ;;
+  *) echo "FATAL: $BIN does not implement --step coverage-median -> REBUILD (module load rust/1.87.0 && bash cluster/build.sh)" >&2; exit 1 ;;
+esac
 
 mkdir -p "$SLICEDIR" "$MEDDIR" logs/slices
 
