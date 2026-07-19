@@ -71,15 +71,21 @@ clip_slippage_any_base = true  # count poly-A/C/G/T runs (+243 poly-C/G FP at 0 
 # Values are the operating point validated in test/fullstack/scale10k/discovery_hs.config.
 #   coverage_mask (SPEC-3)     drop breakpoints whose local coverage exceeds 5x the local
 #                              median; kills pericentromeric satellite FP at ~0 recall loss.
-#   discordant_anchor (Feat A) one-sided discordant discovery: +96 TP at 0 FP on benchmark.
-#                              Runs without an RTE track (discordant_rte_only stays false).
-#                              The three gates that hold FP at 0 are coverage_max_mult,
-#                              mate_min_kmer_div, and min_reads below.
+#   discordant_anchor (Feat A) one-sided discordant discovery: +96 TP at 0 FP on the 10k
+#                              synthetic benchmark -- BUT on the real GRCh38 9x10 germline
+#                              cohort a 12-arm ablation sweep (2026-07-19) found it COSTS
+#                              919 TP acting alone (recall 69.9%->95.5% when OFF): it is the
+#                              single dominant cause of the ~30% GRCh38 recall regression,
+#                              via combine-stage cohort-gate pollution from the ~230k injected
+#                              discordant observations (NOT the discovery output). DISABLED on
+#                              GRCh38 until that combine interaction is fixed. slippage_filter
+#                              (SPEC-8) and coverage_mask were EXONERATED by the same sweep.
+#                              See memory spec8-slippage-filter-grch38-recall.
 #   mate_anchor_rescue         recover a breakpoint from a well-anchored mate.
 coverage_mask = true
 coverage_mask_multiplier = 5.0
 mate_anchor_rescue = true
-discordant_anchor = true
+discordant_anchor = false
 discordant_min_reads = 3
 discordant_window = 50
 discordant_max_tlen = 1000
