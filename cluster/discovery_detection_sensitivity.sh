@@ -43,7 +43,8 @@ TARGETS=os.environ['TARGETS']; W=int(os.environ['WINDOW']); OUT=os.environ['OUT'
 armdirs=[a for a in sys.argv[1:] if a.strip()]
 
 # --- load targets: locus, class, expected carrier tips ---
-loc_re=re.compile(r'^([^:]+):(\d+)-(\d+)$')
+loc_re=re.compile(r'^([^:]+):(\d+)-(\d+)$')     # target locus string (anchored)
+bp_re =re.compile(r'^([^:]+):(\d+)-(\d+)')       # discovery header PREFIX: @chr:s-e:LEFT:CLIPPED ...
 targets=[]   # (chrom, mid, cls, [tips])
 tips_needed=set()
 with open(TARGETS) as f:
@@ -65,9 +66,7 @@ def load_disc(path):
         with gzip.open(path,'rt') as fh:
             for line in fh:
                 if line and line[0]=='@':
-                    h=line[1:].rstrip('\n')
-                    if h.endswith(':L') or h.endswith(':R'): h=h[:-2]
-                    m=loc_re.match(h)
+                    m=bp_re.match(line[1:])
                     if m: d[m.group(1)].append((int(m.group(2))+int(m.group(3)))//2)
     except FileNotFoundError:
         return None
