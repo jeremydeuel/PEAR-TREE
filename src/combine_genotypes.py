@@ -162,6 +162,14 @@ def mc_import(input_path, stem):
     print(f"completed {stem} with {d1.shape[0]} insertions.")
     return(d1,d2,d3,d4,d5)
 
+def unfiltered_path(output_file):
+    """`<P>.genotypes.csv.gz` -> `<P>.genotypes.unfiltered.csv.gz`."""
+    for ext in ('.csv.gz', '.csv'):
+        if output_file.endswith(ext):
+            return output_file[:-len(ext)] + '.unfiltered' + ext
+    return output_file + '.unfiltered'
+
+
 def collect_genotype(input_files, output_file, threads):
     d = None
     pool = Pool(threads)
@@ -262,6 +270,12 @@ def collect_genotype(input_files, output_file, threads):
     print(f"= removing {sum(summary_filtering)} insertions failing any of these tests.")
     print("per locus kind (TPRT pairing modes; name geometry, gap = R - L):")
     print(kind_summary(d.index, summary_filtering.reindex(d.index).values).to_string())
+    if cg.get('write_unfiltered'):
+        # every locus, before the gates: what annotate scores when the gates are being evaluated
+        # rather than applied (TPRT A/B kit, cluster/tprt/arm_config.py)
+        unf = unfiltered_path(output_file)
+        d.to_csv(unf, sep=";")
+        print(f"wrote all {d.shape[0]} insertions (before the gates) to {unf}")
     d = d.loc[~summary_filtering]
     print(f" applying score filtering")
     print(f"writing a final of {d.shape[0]} filtered insertions")

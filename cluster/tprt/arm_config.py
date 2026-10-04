@@ -27,6 +27,16 @@ changes which loci are called):
   * annotate.remap_index  hs1 minimap2 index, ONLY if present (novel-source locator; optional).
   * annotate.hmmer        the HMMER bin dir chosen by `setup.sh hmmer` ($TPRT_RES/hmmer_bin), if
                           that file exists; the bases' $JD/hmmer-3.3.2/bin no longer exists.
+  * combine_genotypes.min_wild-types = 1   the bases' 20 is "of 90 pooled colonies"; one patient
+                          has ~10, so NO locus could pass (PD37449: 5189/5189 removed). >= 1
+                          wild-type colony still removes all-colony (germline-like) loci; the
+                          dispersion gate is unchanged.
+  * combine_genotypes.write_unfiltered + annotate.genotyping_file   annotate scores EVERY locus
+                          with >= 1 carrier (<P>.genotypes.unfiltered.csv.gz), not only the
+                          gate survivors: the A/B measures how well the TPRT score and the gates
+                          separate tree-consistent from tree-violating calls, which needs both
+                          sides annotated. tree_fit still flags gate survivors from
+                          <P>.genotypes.csv.gz.
 
 Resource directory: env TPRT_RES (default /lustre/.../jd43/tprt_ab/resources), tmp root: env
 TPRT_ROOT. Missing files are NOT silently dropped here (except the optional remap_index): the
@@ -81,6 +91,10 @@ def build(arm):
     if os.path.exists(RESOURCES['remap_index']):
         ann['remap_index'] = RESOURCES['remap_index']
     # HMMER bin dir resolved by `setup.sh hmmer` (the bases' $JD/hmmer-3.3.2/bin is gone)
+    cg = cfg['combine_genotypes']
+    cg['min_wild-types'] = 1
+    cg['write_unfiltered'] = True
+    ann['genotyping_file'] = lambda sample: f'{sample}.genotypes.unfiltered.csv.gz'
     hb = os.path.join(TPRT_RES, 'hmmer_bin')
     if os.path.exists(hb):
         with open(hb) as f:
