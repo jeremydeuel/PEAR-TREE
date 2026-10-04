@@ -24,7 +24,10 @@ and L1-mediated deletions) and `contig:L-oneside_L` / `contig:oneside_R-R` (one-
 named side is real). Two two-sided loci match when BOTH breakpoints are within --tol; a one-sided
 locus matches another locus when its real side is within --tol of that side ("partial").
 
-The phylo-fit table format belongs to tools/phylo/tree_fit.py; this script only assumes a TSV with
+The phylo-fit table format belongs to tools/phylo/tree_fit.py (plans/tprt_hallmarks/PHYLO_EVAL.md):
+its real columns are `locus` and `phylo_label` (= phylo_consistent / ambiguous / phylo_violating for
+informative shared loci, noise_violating for the constant-allele-fraction class, else the class:
+private / germline / uninformative_depth), which the defaults below pick. Generically it assumes a TSV with
 a locus column (locus / insertion / insertion_id / id / name, else the first column) and a label
 column (--label-col, else the first of phylo_label / label / phylo_class / class_phylo / verdict /
 status / category / fit / consistent / phylo_consistent). Labels are reported verbatim and also

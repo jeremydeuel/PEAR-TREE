@@ -7,6 +7,7 @@ its breakpoints (order-free; a one-sided locus needs its one real breakpoint wit
 either event breakpoint), and writes `locus  truth  carriers  event_id  variant  placement`:
 
   ROOT placement           -> germline   (somatic in every colony; purity-diluted)
+  GERMLINE placement       -> germline   (germline het: VAF 0.5 in every colony)
   branch, 1 carrier        -> private
   branch, >= 2 carriers    -> clade
   NONCLADE                 -> nonclade   (real insertion sequence, carriers not a clade)
@@ -87,7 +88,7 @@ def main():
                 continue
             n_match += 1
             placement, car = pl[best[1]]
-            if placement == "ROOT":
+            if placement in ("ROOT", "GERMLINE"):
                 t = "germline"
             elif placement.startswith("NONCLADE"):
                 t = "nonclade"

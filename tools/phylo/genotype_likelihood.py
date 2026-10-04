@@ -259,7 +259,8 @@ class Params:
     rho1: float = 0.02
     lam: float = 0.01
     noise_a: float = 0.5           # locus-noise hypothesis: eps_locus ~ Beta(noise_a, noise_b)
-    noise_b: float = 2.0
+    noise_b: float = 4.0           # mean 0.11: an artefact's alt fraction is low; a constant
+                                   # het / hom fraction is the germline root hypothesis instead
     sex: str = "F"
     # bookkeeping for the report
     n_germline_het: int = 0

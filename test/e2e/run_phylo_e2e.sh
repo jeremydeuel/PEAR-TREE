@@ -18,7 +18,7 @@ export OUT="${OUT:-$SP/work/e2e_phylo}"
 export N_PER_TYPE="${N_PER_TYPE:-10}"
 export DEPTH="${DEPTH:-15}"
 export SEED="${SEED:-21}"
-export DONOR_ARGS="${DONOR_ARGS:---tree $TREE}"
+export DONOR_ARGS="${DONOR_ARGS:---tree $TREE --tree-root-frac 0.25 --tree-germline-frac 0.6}"
 ts(){ date "+%H:%M:%S"; }
 
 echo "[$(ts)] A. simulate + discovery + combine + annotate ($SAMPLES colonies, $TREE)"

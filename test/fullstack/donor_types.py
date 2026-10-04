@@ -88,6 +88,9 @@ def main(argv=None):
     p.add_argument("--tree-branch-weight", choices=["uniform", "length"], default="uniform")
     p.add_argument("--tree-nonclade-frac", type=float, default=0.15,
                    help="TP events placed on a random NON-clade subset (>= 2 carriers, >= 1 non-carrier)")
+    p.add_argument("--tree-germline-frac", type=float, default=0.5,
+                   help="of the ROOT events, the fraction that are germline het (VAF 0.5 in every "
+                        "colony, contaminating cells included) rather than somatic before the MRCA")
     p.add_argument("--purity-range", default="0.7,1.0", help="tree mode: per-colony purity U(lo,hi)")
     p.add_argument("--low-depth-frac", type=float, default=0.25, help="tree mode: low-depth colonies")
     p.add_argument("--low-depth-range", default="0.25,0.5", help="tree mode: their depth factor U(lo,hi)")
@@ -205,6 +208,8 @@ def main(argv=None):
                     else:
                         pl, s = PH.draw_branch(trng, design, a.tree_root_frac, a.tree_branch_weight)
                         present = set(s)
+                        if pl == "ROOT" and trng.random() < a.tree_germline_frac:
+                            pl, e["germline"] = "GERMLINE", True
                 placements[e["id"]] = (pl, frozenset(present))
             elif ev.role == "ARTEFACT":
                 present = {rng.randrange(nsamp)}
@@ -218,6 +223,8 @@ def main(argv=None):
                     kv.append((0, 0.0))
                 elif ev.role == "ARTEFACT":
                     kv.append((0, 1.0))
+                elif design is not None and e.get("germline"):   # in every cell: VAF 0.5
+                    kv.append((N_ALT, 0.5))
                 elif design is not None:   # clonal het in every carrier; purity dilutes it
                     kv.append((N_ALT, 0.5 * design.purity[si]))
                 else:
@@ -230,16 +237,24 @@ def main(argv=None):
     haps_rows, junc_rows, slip_rows = [], [], []
     ref_recs = {f"{r['contig']}_{r['start']}": r["seq"] for r in reg}
     write_fasta(os.path.join(a.out_dir, "ref.hap.fa"), ref_recs, width=0)
+    has_germ = any(e.get("germline") for e in events)
     for si in range(nsamp):
         pur = design.purity[si] if design is not None else 1.0
-        haps_rows.append((si + 1, "ref.hap.fa", 1.0 - 0.5 * pur))
-        for k in range(1, N_ALT + 1):
-            fname = f"S{si + 1}.hap{k}.fa"
+        # tree mode: founder-derived cells (fraction pur) carry the colony's somatic events on one
+        # haplotype (4 alt haps, 0.125 pur each); germline-het events are on one haplotype of
+        # EVERY cell, so the contaminating cells' copy is an extra "germ" hap (0.5 (1 - pur))
+        w_germ = 0.5 * (1.0 - pur) if has_germ else 0.0
+        haps_rows.append((si + 1, "ref.hap.fa", 1.0 - 0.5 * pur - w_germ))
+        hap_specs = [(f"S{si + 1}.hap{k}.fa", ALT_W * pur, (lambda e, k=k: e["kv"][si][0] >= k))
+                     for k in range(1, N_ALT + 1)]
+        if w_germ > 0:
+            hap_specs.append((f"S{si + 1}.germ.fa", w_germ, lambda e: bool(e.get("germline"))))
+        for fname, hw, pick in hap_specs:
             recs = {}
             for r in reg:
                 rname = f"{r['contig']}_{r['start']}"
                 evs = sorted((e for e in events if e["reg"] is r and e["alt"] is not None
-                              and e["ev"].render == "normal" and e["kv"][si][0] >= k),
+                              and e["ev"].render == "normal" and pick(e)),
                              key=lambda e: e["lo"])
                 chunks, prev, off = [], 0, 0
                 for e in evs:
@@ -261,7 +276,7 @@ def main(argv=None):
                         shift = sum(len(x["alt"].alt) - (x["hi"] - x["lo"]) for x in evs if x["hi"] <= t0)
                         slip_rows.append((fname, rname, t0 + shift, t1 + shift))
             write_fasta(os.path.join(a.out_dir, fname), recs)
-            haps_rows.append((si + 1, fname, ALT_W * pur))
+            haps_rows.append((si + 1, fname, hw))
         for e in events:            # slippage also shows on the reference haplotype
             if e["ev"].render == "slippage" and si in e["present"]:
                 rname = f"{e['reg']['contig']}_{e['reg']['start']}"

@@ -79,11 +79,16 @@ def branch_log_prior(br: T.Branches, mode: str, root_prior: float, floor_frac: f
     return np.log(pr)
 
 
-def root_scores(cl: G.CellLik, haploid: np.ndarray):
+HOM_PRIOR = (8.0, 1.0)     # germline hom / hemizygous: one shared fraction ~ Beta(8, 1) (mean 0.89)
+
+
+def root_scores(cl: G.CellLik, haploid: np.ndarray, alt=None, n=None):
     """log L_root per locus and its components (germline het, germline hom, somatic in all
-    colonies), equal weights; het is impossible on haploid loci."""
+    colonies), equal weights; het is impossible on haploid loci. The hom component is a shared
+    alt fraction ~ Beta(8, 1) across colonies (closed form): a hom locus reads 0.85-0.98, not
+    1 - eps, because some reference-configuration reads survive (mismaps, the other junction)."""
     het = cl.lhet.sum(1)
-    hom = cl.lhom.sum(1)
+    hom = log_noise(alt, n, cl.mask, *HOM_PRIOR) if alt is not None else cl.lhom.sum(1)
     soma = cl.l1.sum(1)
     comps = np.vstack([het, hom, soma]).T
     w = np.where(haploid[:, None], np.array([[-np.inf, math.log(0.5), math.log(0.5)]]),
@@ -93,11 +98,11 @@ def root_scores(cl: G.CellLik, haploid: np.ndarray):
     return tot, comps
 
 
-def branch_scores(cl: G.CellLik, br: T.Branches, haploid: np.ndarray):
+def branch_scores(cl: G.CellLik, br: T.Branches, haploid: np.ndarray, alt=None, n=None):
     D = cl.l1 - cl.l0
     S = np.empty((D.shape[0], len(br.ids)))
     S[:, 1:] = D @ br.mask[1:].T.astype(float) + cl.l0.sum(1)[:, None]
-    S[:, 0], comps = root_scores(cl, haploid)
+    S[:, 0], comps = root_scores(cl, haploid, alt, n)
     return S, comps
 
 
@@ -144,7 +149,7 @@ class Fit:
 def fit_all(alt, ref, kinds, haploid, P: G.Params, br: T.Branches, opt: Options) -> Fit:
     n = alt + ref
     cl = G.cell_likelihoods(alt, ref, kinds, haploid, P, opt.min_depth)
-    S, comps = branch_scores(cl, br, haploid)
+    S, comps = branch_scores(cl, br, haploid, alt, n)
     lp = branch_log_prior(br, opt.branch_prior, opt.root_prior, opt.floor_frac)
     J = S + lp[None, :]
     log_tree = logsumexp(J, axis=1)
@@ -274,7 +279,9 @@ def bootstrap_pvalues(idx, fit: Fit, alt, ref, kinds, haploid, P: G.Params, br: 
             a_pres = np.where(sub, a_sub, a_pres)
         a_abs = draw(eps, s0, n, shape)
         a_het = draw(fg, s1, n, shape)
-        a_hom = draw(1 - eps, s1, n, shape)
+        A_i, N_i = alt[ii].sum(1), n_all[ii].sum(1)
+        f_hom = ((A_i + HOM_PRIOR[0]) / (N_i + sum(HOM_PRIOR)))[:, None, None]
+        a_hom = draw(np.broadcast_to(f_hom, shape), s1, n, shape)
         a_root = np.where((comp == 0)[:, None, None], a_het,
                           np.where((comp == 1)[:, None, None], a_hom, a_pres))
         a_sim = np.where(root, a_root, np.where(inc, a_pres, a_abs))
@@ -283,7 +290,7 @@ def bootstrap_pvalues(idx, fit: Fit, alt, ref, kinds, haploid, P: G.Params, br: 
         k2 = np.repeat(kinds[ii], B)
         h2 = np.repeat(haploid[ii], B)
         cls = G.cell_likelihoods(a2, n2 - a2, k2, h2, P, opt.min_depth)
-        Ss, _ = branch_scores(cls, br, h2)
+        Ss, _ = branch_scores(cls, br, h2, a2, n2)
         gs = gstat(cls, Ss).reshape(Lc, B)
         clo = G.CellLik(*(x[ii] for x in (fit.cl.l1, fit.cl.l0, fit.cl.lhet, fit.cl.lhom,
                                          fit.cl.f1, fit.cl.fg, fit.cl.mask)))
@@ -332,7 +339,13 @@ def load_samples(path: Optional[str]) -> Optional[List[str]]:
 def load_annotation(path: Optional[str]) -> Optional[pd.DataFrame]:
     if not path:
         return None
-    df = pd.read_csv(path, sep="\t", dtype=str, compression="infer")
+    # annotate_v2 writes TAB-separated text even when named `.annotated.csv.gz` (pipeline.sh);
+    # sniff the header so a real comma-separated table also works
+    import gzip
+    with (gzip.open(path, "rt") if path.endswith(".gz") else open(path)) as fh:
+        head = fh.readline()
+    sep = "\t" if "\t" in head or "," not in head else ","
+    df = pd.read_csv(path, sep=sep, dtype=str, compression="infer")
     key = "locus" if "locus" in df.columns else df.columns[0]
     return df.drop_duplicates(key).set_index(key)
 
@@ -456,6 +469,11 @@ def run(args) -> Dict[str, object]:
         "p_locus": pboot,
         "class": cls,
         "label": lab,
+        # one verdict per locus for downstream tools (cluster/tprt/compare_arms.py picks this
+        # column first): the BF label where the tree can judge (informative_shared), the
+        # constant-fraction artefact as `noise_violating`, else the class itself
+        "phylo_label": np.where(cls == "informative_shared", lab,
+                                np.where(cls == "noise", "noise_violating", cls)),
     })
     if csv_loci is not None:
         df["passes_combine_genotypes"] = [x in csv_loci for x in loci]
