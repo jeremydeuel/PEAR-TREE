@@ -173,6 +173,72 @@ def load_evidence(input_files: List[str], wanted_loci) -> (Dict, set):
     return rows, have
 
 
+def prefilter_fragments(insertions, input_files, min_ind: int, far_pair: bool, cfg=None):
+    """Drop insertions that cannot pass the independent-fragment gate, from one streaming pass
+    over the sidecars that keeps at most `min_ind` distinct fragment ids per (file, locus,
+    side). The pooled count of distinct (file, frag) over an insertion's member loci is an
+    upper bound on `n_independent` (dedup only merges fragments; SHORT rows are counted, so a
+    junction rescued by SHORT reads is kept). Without `far_pair` an insertion goes when ANY
+    gated junction is below `min_ind`; with it, a far-geometry pair only when ALL are (it may
+    still be split into a one-sided call on its good side). Insertions with a file lacking a sidecar are never
+    gated, so they are kept. Returns (kept insertions, number dropped)."""
+    if min_ind <= 1:
+        return insertions, 0
+    seen = {}
+    have = set()
+    for f in input_files:
+        sp = sidecar_path(f)
+        if not os.path.exists(sp):
+            continue
+        fb = os.path.basename(f)
+        have.add(fb)
+        with gzip.open(sp, "rt") as fh:
+            header = fh.readline().rstrip("\n").split("\t")
+            li, si, fi = header.index("locus"), header.index("side"), header.index("frag")
+            mx = max(li, si, fi) + 1
+            for line in fh:
+                p = line.split("\t", mx)
+                if len(p) < mx:
+                    continue
+                key = (fb, p[li], p[si])
+                cur = seen.get(key)
+                if cur is None:
+                    seen[key] = (p[fi],)
+                elif len(cur) < min_ind and p[fi] not in cur:
+                    seen[key] = cur + (p[fi],)
+    if not have:
+        return insertions, 0
+    kept, n_drop = [], 0
+    for ins in insertions:
+        if not all(f in have for f in ins.files):
+            kept.append(ins)
+            continue
+        open_side = _open_side(ins)
+        allowed = getattr(ins, "member_sides", None) or {}
+        ms = _member_loci(ins)
+        ups = []
+        for side in SIDES:
+            if side == open_side:
+                continue
+            fr = set()
+            for m in ms:
+                if side in allowed.get(m, SIDES):
+                    for x in seen.get((m[0], m[1], side), ()):
+                        fr.add((m[0], x))
+                if len(fr) >= min_ind:
+                    break
+            ups.append(len(fr))
+        far = False
+        if far_pair and len(ups) == 2:
+            from combine_insertions_tprt_filters import far_geometry
+            far = far_geometry(ins.right_pos - ins.left_pos, cfg or {})
+        if ups and (max(ups) if far else min(ups)) < min_ind:
+            n_drop += 1
+        else:
+            kept.append(ins)
+    return kept, n_drop
+
+
 # ------------------------------------------------------------------ fragments
 
 class Fragment:
@@ -774,13 +840,21 @@ def apply_evidence(insertions, input_files, cfg, ref_fetch=None, breakpoints=Non
     # intersect_insertions merged into this Insertion (Insertion.member_loci, one
     # (file, locus) per contributing record) contributes its sidecar rows, so colony A's
     # chr1:100-115 and colony B's chr1:101-115 pool when combine merged them.
+    gate = bool(cfg.get("require_independent_fragments", False))
+    min_ind = cfg.get("min_independent_fragments", 2)
+    n_pre = 0
+    if gate and cfg.get("evidence_prefilter", True):
+        # cheap streaming upper bound first: with a 1-fragment discovery floor most loci are
+        # single-read noise that cannot reach min_ind, and loading + evaluating their rows
+        # dominated combine (PD37449 arm B: >2 h, 58 GB). Dropped loci are not written to the
+        # evidence diagnostics; every survivor is evaluated exactly as before.
+        far_pre = bool(cfg.get("far_pair_strict", False))
+        insertions, n_pre = prefilter_fragments(insertions, input_files, min_ind, far_pre, cfg)
     members = {i.name: _member_loci(i) for i in insertions}
     wanted = {m for ms in members.values() for m in ms}
     rows, have = load_evidence(input_files, wanted)
     if not have:
         return None
-    gate = bool(cfg.get("require_independent_fragments", False))
-    min_ind = cfg.get("min_independent_fragments", 2)
     use_cons = bool(cfg.get("indel_aware_consensus", False))
     missing = [os.path.basename(f) for f in input_files if os.path.basename(f) not in have]
     if missing:
@@ -903,6 +977,8 @@ def apply_evidence(insertions, input_files, cfg, ref_fetch=None, breakpoints=Non
     if gate:
         print(f"independent-fragment gate (>= {min_ind} per junction, pooled over samples): "
               f"kept {len(kept)}, dropped {len(failed)}")
+        if n_pre:
+            print(f"  dropped before loading (pooled distinct fragments < {min_ind}, upper bound): {n_pre}")
         for reason, n in sorted(reasons.items()):
             print(f"  dropped: failing junction(s) {reason}: {n}")
     if use_cons:
