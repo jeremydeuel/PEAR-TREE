@@ -70,3 +70,43 @@ bash test/fullstack/run_fullstack.sh          # env: HS1= HG38= OUT= THREADS= DE
 > `truth_hg38.tsv` junctions are ±TSD-precise; score with a small window. The `lift_method`
 > column records how each row was placed (chain vs flank). SVA_E/F were added after this run
 > (build_donor now implants 42); rerun `run_fullstack.sh` to fold them in.
+
+## Insertion-type catalogue, multi-sample (`build_donor.py --types`, `run_multisample.sh`)
+
+One patient, n colonies. `build_donor.py --types ...` (dispatches to `donor_types.py`; the
+legacy invocation above is unchanged) implants every catalogue type from `test/simlib/`
+(see `../val1/README.md` and `../simlib/TRUTH_SCHEMA.md`) into real hs1 window(s), at real
+sites whose 6-mer matches the EN motif `TT|AAAA` with the sampled mismatch count, using real
+young elements and their real source flanks (`--rte-library resources/rte_library`, or the
+hs1 + RepeatMasker fallback). Per sample it writes haplotype FASTAs (reference weight 0.5 +
+four alt haplotypes of 0.125, so VAF = k/8), presence in k of n samples, single-molecule
+library artefacts, a junction table, and `truth_types_hs1.tsv`.
+
+| script | does |
+|---|---|
+| `donor_types.py` | the `--types` donor builder (flags: `--types --n-per-type --samples --region --rte-library --hs1 (.fa/.2bit) --hs1-rmsk --gene-model --present-all-frac --vaf-clonal-frac --max-l1-deletion/duplication`) |
+| `simulate_reads.py` | reads for one sample: poly-A/homopolymer jitter, phasing loss, unflagged PCR duplicates (`--pcr-dup-unflagged-frac`), per-junction fragment counts (`<prefix>.support.tsv`) |
+| `run_multisample.sh` | donor → reads → bwa-mem → fixmate/sort (**no markdup** unless `MARKDUP=1`) → discovery per sample → `score_types.py` |
+| `score_types.py` | lifts truth by flank mapping, per-variant recall pooled across samples + per sample, artefact calls, unexplained calls |
+
+```bash
+# whole-genome reference:
+HS1=hs1.2bit HS1_RMSK=hs1.repeatMasker.out.gz HG38=hg38.fa OUT=out bash test/fullstack/run_multisample.sh
+# smoke mode, no whole-genome bwa index: reduced reference = hg38 chr22 + hs1 source loci as decoys
+HS1=hs1.2bit HS1_RMSK=hs1.repeatMasker.out.gz HG38_2BIT=hg38.2bit OUT=out bash test/fullstack/run_multisample.sh
+```
+Env: `SAMPLES` (2), `DEPTH` (15), `TYPES` (all), `N_PER_TYPE` (3), `REGION`
+(`chr22:26000000-30000000`, space-separated list ok), `PCR_DUP`, `POLYA_JITTER`, `DISC_CONFIG`.
+Not simulated here: `ART_SUBFAMILY_MISMAP` (it arises organically — reads from the inserted
+young L1s mismap onto reference copies). Pre-mRNA co-inserts copy local unspliced sequence
+0.4-2.4 kb from the site (no expression model); pseudogene parents come from `--gene-model`
+when given, else from gene models built on the window's real sequence with GT..AG introns.
+
+### Baseline (seed 1, 2 samples x 15x, hs1 chr22:19-33 Mb, 8 per type, reduced ref = hg38 chr22 + decoys, default rust discovery, 4 min)
+
+Pooled TP recall 100/168 lifted (59.5 %), 61 unexplained calls. Found/lifted per type:
+L1 full 7/8, 5'-trunc 7/8, 5'-inv 5/6, inv+switch 6/7, TD3P 6/8, orphan TD 6/8, AluYa5 7/8,
+AluYb8 4/8, SVA_E 5/7, SVA_F 8/8, SVA TD5P 5/8, SVA TD3P 5/8, pseudogene 5/8, decoy 4/7,
+templated 4/7, pre-mRNA 8/8, fold-back 7/7; **0** for TSD-deletion, poly(A)-only,
+L1-mediated deletion/duplication, 1/8 EN-independent (discovery pairs only 2..40 bp TSDs).
+Artefacts called: chimeric ends 3/8, all others 0.

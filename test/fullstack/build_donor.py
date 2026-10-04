@@ -114,7 +114,16 @@ def find_motif_sites(seq, motif="TTAAAA", n=None, rng=None, margin=5000):
 
 
 def main():
-    p = argparse.ArgumentParser(description=__doc__)
+    import sys
+    if any(x == "--types" or x.startswith("--types=") for x in sys.argv[1:]):
+        # insertion-type catalogue, multi-sample mode (test/fullstack/donor_types.py);
+        # the legacy single-donor behaviour below is unchanged
+        import os
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import donor_types
+        return donor_types.main(sys.argv[1:])
+    p = argparse.ArgumentParser(description=__doc__ + "\nCatalogue / multi-sample mode: pass --types "
+                                "(see `donor_types.py --help`).")
     p.add_argument("--hs1", default="/Users/jeremy/Downloads/hs1.fa")
     p.add_argument("--out-donor", required=True)
     p.add_argument("--out-truth", required=True)
