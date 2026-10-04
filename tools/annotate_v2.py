@@ -25,6 +25,7 @@ import os
 import pysam
 from math import floor, log2
 import re
+import subprocess
 import sys
 from src.config import CONFIG
 
@@ -1321,11 +1322,17 @@ class VariantAnnotationContainer:
             os.environ["PATH"] = hmmer + ":" + os.environ["PATH"]
         assert 0 == os.system("nhmmscan -h > /dev/null 2>&1"), "nhmmscan not found on PATH"
         dfamscan = CONFIG['annotate'].get('dfamscan')
+        # cores this job owns (LSF), not the whole node's
+        cpu = int(os.environ.get("LSB_DJOB_NUMPROC") or os.cpu_count() or 1)
         if dfamscan and os.path.exists(dfamscan):
             assert os.access(dfamscan, os.X_OK)
-            assert 0 == os.system(
-                f"{dfamscan} --fastafile {self.fasta_file} --hmmfile {hmm} "
-                f"--cpu {os.cpu_count()} --dfam_outfile {self.dfam_file}")
+            # a PERL5LIB/PERL_* inherited from the submitting shell's modules points this perl at
+            # another perl's XS modules ("ListUtil.c: loadable library and perl binaries are
+            # mismatched", PD37449 farm run) -> run dfamscan.pl with the perl variables removed
+            env = {k: v for k, v in os.environ.items() if not k.startswith("PERL")}
+            rc = subprocess.call([dfamscan, "--fastafile", self.fasta_file, "--hmmfile", hmm,
+                                  "--cpu", str(cpu), "--dfam_outfile", self.dfam_file], env=env)
+            assert rc == 0, f"dfamscan.pl failed (exit {rc})"
         else:
             # nhmmscan cannot read gzip; decompress the clip fasta to a temp file first.
             fa = self.fasta_file
@@ -1336,7 +1343,7 @@ class VariantAnnotationContainer:
                     o.write(i.read())
                 fa = tmp_fa
             rc = os.system(
-                f"nhmmscan --cpu {os.cpu_count()} --dfamtblout {self.dfam_file} {hmm} {fa} "
+                f"nhmmscan --cpu {cpu} --dfamtblout {self.dfam_file} {hmm} {fa} "
                 f"> /dev/null 2>&1")
             if tmp_fa and os.path.exists(tmp_fa):
                 os.remove(tmp_fa)

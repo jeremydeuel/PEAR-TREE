@@ -640,6 +640,8 @@ cmd_annotate() {
     log "annotating $PATIENT_ID"
     # annotate_v2 imports `src.config` and `tools.rte` -> the repo root must be importable; run
     # from $RUNDIR, sys.path[0] is tools/ only (ModuleNotFoundError: src, PD37449 arm A 2026-10-04)
+    # perl modules leaked from the submitting shell break dfamscan.pl (ListUtil.c mismatch)
+    unset PERL5LIB PERLLIB PERL_LOCAL_LIB_ROOT PERL_MB_OPT PERL_MM_OPT
     PYTHONPATH="$PT_ROOT${PYTHONPATH:+:$PYTHONPATH}" \
         "$VENV/bin/python" "$PT_ROOT/tools/annotate_v2.py" "$PATIENT_ID" "$PATIENT_ID.annotated.csv.gz"
     if [ -s "$PATIENT_ID.annotated.csv.gz" ]; then
