@@ -25,33 +25,36 @@ from .seqs import (EN_NICK_OFFSET, degenerate_en_motif, en_mismatches, lognormal
                    make_polya, revcomp, rnd_seq, sample_deletion_len, sample_en_mismatches,
                    sample_l1_truncated_len, sample_polya_len, sample_tsd_len, sample_twin_priming)
 
-# literature catalogue numbering (docs/insertion_types.html). 9-11 are the out-of-scope
-# translocation bridge / chimeric bridge / complex reciprocal inversion types; 12 is used
-# here for EN-independent insertion. Artefacts carry type_id 0.
+# literature catalogue numbering = section ids of docs/insertion_types.html: 1-16 plus
+# "A" (target-site deletion) and "B" (EN-independent). 10-12 are out of scope this round;
+# 9 (RT-mediated rearrangements) is covered only via its deletion/duplication-like forms
+# (types 7/8). Artefacts carry type_id "0". Ids are strings because of A/B.
 TYPE_IDS = {
-    1: "solo L1 (full-length / 5'-truncated / 5'-inverted twin priming / TSD deletion)",
-    2: "partnered 3' transduction",
-    3: "orphan 3' transduction",
-    4: "Alu / SVA insertion (incl. SVA 5' and 3' transduction)",
-    5: "processed pseudogene (+ no-junction decoy)",
-    6: "solitary poly(A/T) insertion",
-    7: "L1-mediated deletion",
-    8: "L1-mediated tandem duplication",
-    9: "translocation bridge (OUT OF SCOPE)",
-    10: "chimeric bridge (OUT OF SCOPE)",
-    11: "complex reciprocal inversion (OUT OF SCOPE)",
-    12: "EN-independent insertion",
-    13: "twin priming + 5' switching",
-    14: "templated local insertion",
-    15: "co-inserted local pre-mRNA",
-    16: "fold-back inverted duplication 5' of the target site",
+    "1": "solo L1 (full-length / 5'-truncated / 5'-inverted twin priming)",
+    "2": "partnered 3' transduction",
+    "3": "orphan 3' transduction",
+    "4": "Alu / SVA insertion (incl. SVA 5' and 3' transduction)",
+    "5": "processed pseudogene (+ no-junction decoy)",
+    "6": "solitary poly(A/T) insertion",
+    "7": "L1-mediated deletion",
+    "8": "L1-mediated tandem duplication",
+    "9": "RT-mediated rearrangement (only deletion/duplication-like, simulated as 7/8)",
+    "10": "reciprocal translocation bridge (OUT OF SCOPE)",
+    "11": "chimeric bridge (OUT OF SCOPE)",
+    "12": "reciprocal inversion / complex (OUT OF SCOPE)",
+    "13": "twin priming + 5' switching",
+    "14": "templated local insertion",
+    "15": "co-inserted local pre-mRNA",
+    "16": "fold-back inverted duplication 5' of the target site",
+    "A": "target-site deletion instead of a TSD",
+    "B": "EN-independent insertion",
 }
 
 
 @dataclass
 class Event:
     key: str
-    type_id: int
+    type_id: str
     role: str                       # TP | ARTEFACT
     element: str
     structure: str
@@ -143,23 +146,23 @@ def _l1_event(rng, ctx, key, type_id, structure, tags=(), elem=None):
 
 
 def b_l1_full(rng, ctx):
-    return _l1_event(rng, ctx, "L1_FULL", 1, "FULL_LENGTH")
+    return _l1_event(rng, ctx, "L1_FULL", "1", "FULL_LENGTH")
 
 
 def b_l1_trunc(rng, ctx):
-    return _l1_event(rng, ctx, "L1_TRUNC", 1, "TRUNCATED_5P")
+    return _l1_event(rng, ctx, "L1_TRUNC", "1", "TRUNCATED_5P")
 
 
 def b_l1_inv(rng, ctx):
-    return _l1_event(rng, ctx, "L1_INV", 1, "INVERTED_5P")
+    return _l1_event(rng, ctx, "L1_INV", "1", "INVERTED_5P")
 
 
 def b_l1_inv_switch(rng, ctx):
-    return _l1_event(rng, ctx, "L1_INV_SWITCH", 13, "INVERTED_5P_SWITCH")
+    return _l1_event(rng, ctx, "L1_INV_SWITCH", "13", "INVERTED_5P_SWITCH")
 
 
 def b_l1_tsd_deletion(rng, ctx):
-    ev = _l1_event(rng, ctx, "L1_TSD_DELETION", 1, "TRUNCATED_5P", ["TSD_DELETION"])
+    ev = _l1_event(rng, ctx, "L1_TSD_DELETION", "A", "TRUNCATED_5P", ["TSD_DELETION"])
     ev.target, ev.target_len = "DEL", lognormal_int(rng, 8, 0.7, 1, 30)   # Nam 2023 negative TSDs
     return ev
 
@@ -184,7 +187,7 @@ def b_l1_td3p(rng, ctx):
     ins, parts, pa = _with_polya(rng, body + pre + tag, parts, "L1", ctx.polya_scale)
     target, tl = _tsd_target(rng)
     info.update({"td_len": len(tag), "td_end": end})
-    return Event("L1_TD3P", 2, "TP", "L1", structure, ["TD3P", f"TD3P_SOURCE={src.id}"], ins, parts,
+    return Event("L1_TD3P", "2", "TP", "L1", structure, ["TD3P", f"TD3P_SOURCE={src.id}"], ins, parts,
                  target, tl, polya_len=pa, element_id=src.id, source_id=src.id,
                  subfamily=src.subfamily, info=info, en_mm=sample_en_mismatches(rng))
 
@@ -199,7 +202,7 @@ def b_orphan_td3p(rng, ctx):
     parts = [("TD3P", 0, len(body), f"{src.id}:{cut}-{end}")]
     ins, parts, pa = _with_polya(rng, body, parts, "ORPHAN_TD", ctx.polya_scale)
     target, tl = _tsd_target(rng)
-    return Event("ORPHAN_TD3P", 3, "TP", "ORPHAN_TD", "5P_UNRESOLVED",
+    return Event("ORPHAN_TD3P", "3", "TP", "ORPHAN_TD", "5P_UNRESOLVED",
                  ["TD3P", f"TD3P_SOURCE={src.id}"], ins, parts, target, tl, polya_len=pa,
                  source_id=src.id, subfamily=src.subfamily,
                  info={"td_len": len(body), "td_start": cut, "td_end": end},
@@ -263,7 +266,7 @@ def b_sva_td5p(rng, ctx):
     parts = [("TD5P", 0, n5, f"{src.id}:-{n5}-0"), ("SVA", n5, len(body), f"0-{len(src.element_seq)}+")]
     ins, parts, pa = _with_polya(rng, body, parts, "SVA", ctx.polya_scale)
     target, tl = _tsd_target(rng)
-    return Event("SVA_TD5P", 4, "TP", "SVA", "FULL_LENGTH", ["TD5P", f"TD5P_SOURCE={src.id}"], ins,
+    return Event("SVA_TD5P", "4", "TP", "SVA", "FULL_LENGTH", ["TD5P", f"TD5P_SOURCE={src.id}"], ins,
                  parts, target, tl, polya_len=pa, element_id=src.id, source_id=src.id,
                  subfamily=src.subfamily, info={"td5_len": n5}, en_mm=sample_en_mismatches(rng))
 
@@ -278,7 +281,7 @@ def b_sva_td3p(rng, ctx):
         [("TD3P", p0 + len(pre), p0 + len(pre) + len(tag), f"{src.id}:0-{end}")]
     ins, parts, pa = _with_polya(rng, body + pre + tag, parts, "SVA", ctx.polya_scale)
     target, tl = _tsd_target(rng)
-    return Event("SVA_TD3P", 4, "TP", "SVA", structure, ["TD3P", f"TD3P_SOURCE={src.id}"], ins,
+    return Event("SVA_TD3P", "4", "TP", "SVA", structure, ["TD3P", f"TD3P_SOURCE={src.id}"], ins,
                  parts, target, tl, polya_len=pa, element_id=src.id, source_id=src.id,
                  subfamily=src.subfamily, info={"td_len": len(tag), "td_end": end},
                  en_mm=sample_en_mismatches(rng))
@@ -310,7 +313,7 @@ def b_pseudogene(rng, ctx):
     ins, parts, pa = _with_polya(rng, body, parts, "PSEUDOGENE", ctx.polya_scale)
     target, tl = _tsd_target(rng)
     structure = "FULL_LENGTH" if first == 0 else "TRUNCATED_5P"
-    return Event("PSEUDOGENE", 5, "TP", "PSEUDOGENE", structure, ["EXON_JUNCTION"], ins, parts,
+    return Event("PSEUDOGENE", "5", "TP", "PSEUDOGENE", structure, ["EXON_JUNCTION"], ins, parts,
                  target, tl, polya_len=pa, element_id=g.id,
                  info={"gene": g.id, "exon_junctions": ",".join(map(str, junctions)),
                        "gene_loc": f"{g.contig}:{g.exons[0][0]}-{g.exons[-1][1]}:{g.strand}"},
@@ -333,7 +336,7 @@ def b_pseudogene_decoy(rng, ctx):
     parts = [(f"EXON{i + 1}", 0, elen, g.id), ("INTRON", elen, len(body), g.id)]
     ins, parts, pa = _with_polya(rng, body, parts, "PSEUDOGENE", ctx.polya_scale)
     target, tl = _tsd_target(rng)
-    return Event("PSEUDOGENE_DECOY", 5, "TP", "UNKNOWN", "5P_UNRESOLVED", [], ins, parts, target,
+    return Event("PSEUDOGENE_DECOY", "5", "TP", "UNKNOWN", "5P_UNRESOLVED", [], ins, parts, target,
                  tl, polya_len=pa, element_id=g.id, info={"gene": g.id, "decoy": "no_exon_junction"},
                  en_mm=sample_en_mismatches(rng))
 
@@ -342,7 +345,7 @@ def b_polya_only(rng, ctx):
     pa = sample_polya_len(rng, "POLYA_ONLY", ctx.polya_scale)
     ins = make_polya(rng, pa)
     target, tl = _tsd_target(rng)
-    return Event("POLYA_ONLY", 6, "TP", "POLYA_ONLY", "5P_UNRESOLVED", [], ins,
+    return Event("POLYA_ONLY", "6", "TP", "POLYA_ONLY", "5P_UNRESOLVED", [], ins,
                  [("POLYA", 0, pa, str(pa))], target, tl, polya_len=pa,
                  en_mm=sample_en_mismatches(rng))
 
@@ -351,14 +354,14 @@ def b_l1_med_deletion(rng, ctx):
     """L1-mediated deletion: 3' end by TPRT (poly-A, EN nick), 5' end joined upstream with
     1-5 bp microhomology, the segment between deleted, no TSD (Gilbert 2002;
     Rodriguez-Martin 2020)."""
-    ev = _l1_event(rng, ctx, "L1_MED_DELETION", 7, "TRUNCATED_5P", ["L1_MED_DELETION"])
+    ev = _l1_event(rng, ctx, "L1_MED_DELETION", "7", "TRUNCATED_5P", ["L1_MED_DELETION"])
     ev.target, ev.target_len = "L1DEL", sample_deletion_len(rng, 100, ctx.max_del)
     ev.mh = rng.randint(1, 5)
     return ev
 
 
 def b_l1_med_duplication(rng, ctx):
-    ev = _l1_event(rng, ctx, "L1_MED_DUPLICATION", 8, "TRUNCATED_5P", ["L1_MED_DUPLICATION"])
+    ev = _l1_event(rng, ctx, "L1_MED_DUPLICATION", "8", "TRUNCATED_5P", ["L1_MED_DUPLICATION"])
     ev.target, ev.target_len = "TSD", sample_deletion_len(rng, 50, ctx.max_dup)
     return ev
 
@@ -371,7 +374,7 @@ def b_en_independent(rng, ctx):
     b = rng.randint(n - 1500 if n > 1600 else k, n - 30)   # 3' truncated: ends before the 3' end
     a = max(0, b - k)
     ins = el.seq[a:b]
-    ev = Event("EN_INDEPENDENT", 12, "TP", "L1", "TRUNCATED_5P", ["EN_INDEPENDENT"], ins,
+    ev = Event("EN_INDEPENDENT", "B", "TP", "L1", "TRUNCATED_5P", ["EN_INDEPENDENT"], ins,
                [("L1", 0, len(ins), f"{a}-{b}+")], "NONE", 0, polya_len=0, plant_en=False,
                element_id=el.id, subfamily=el.subfamily, info={"l1_a": a, "l1_b": b})
     if rng.random() < 0.4:
@@ -382,7 +385,7 @@ def b_en_independent(rng, ctx):
 def b_templated_local(rng, ctx):
     """<250 bp copied from within 15 bp of the target site, embedded 5' of the L1 body
     (Zumalave 2026 'templated insertions'; Nam 2023)."""
-    ev = _l1_event(rng, ctx, "TEMPLATED_LOCAL", 14, "TRUNCATED_5P", ["TEMPLATED_LOCAL"])
+    ev = _l1_event(rng, ctx, "TEMPLATED_LOCAL", "14", "TRUNCATED_5P", ["TEMPLATED_LOCAL"])
     n = lognormal_int(rng, 60, 0.6, 20, 249)
     off = rng.randint(-15, 15)               # template start relative to the 5'-junction
     ev.extras5.append(("REFCOPY", "TEMPLATED", off, n, rng.choice("+-")))
@@ -393,7 +396,7 @@ def b_templated_local(rng, ctx):
 def b_premrna(rng, ctx):
     """Co-inserted local pre-mRNA: a template switch to an unspliced transcript of a nearby
     gene, inserted 5' of the L1 body (Nam 2023 Fig. 4g)."""
-    ev = _l1_event(rng, ctx, "PREMRNA_COINSERT", 15, "TRUNCATED_5P", ["PREMRNA_COINSERT"])
+    ev = _l1_event(rng, ctx, "PREMRNA_COINSERT", "15", "TRUNCATED_5P", ["PREMRNA_COINSERT"])
     n = lognormal_int(rng, 300, 0.5, 120, 900)
     off = rng.choice([-1, 1]) * rng.randint(400, 2400)
     ev.extras5.append(("REFCOPY", "PREMRNA", off, n, "+"))
@@ -404,7 +407,7 @@ def b_premrna(rng, ctx):
 def b_foldback(rng, ctx):
     """Fold-back inverted duplication of the sequence immediately 5' (upstream) of the
     target site, between the flank and the element's 5' end (Nam 2023: 0.3%)."""
-    ev = _l1_event(rng, ctx, "FOLDBACK_INVDUP_5P", 16, "TRUNCATED_5P", ["FOLDBACK_INVDUP_5P"])
+    ev = _l1_event(rng, ctx, "FOLDBACK_INVDUP_5P", "16", "TRUNCATED_5P", ["FOLDBACK_INVDUP_5P"])
     f = lognormal_int(rng, 60, 0.6, 15, 400)
     g = rng.randint(0, 10)
     ev.extras5.append(("FOLDBACK", f, g))
@@ -414,7 +417,7 @@ def b_foldback(rng, ctx):
 
 # ----------------------------------------------------------------- artefacts (role=ARTEFACT)
 def _art(ev, kind):
-    ev.role, ev.type_id = "ARTEFACT", 0
+    ev.role, ev.type_id = "ARTEFACT", "0"
     ev.info["artefact"] = kind
     return ev
 
@@ -440,7 +443,7 @@ def b_art_ligation_pcr(rng, ctx):
 def b_art_long_tsd(rng, ctx):
     """Two chimeric molecules overlapping by > 50 bp: looks like an insertion with a
     TSD > 50 bp; one fragment per junction."""
-    ev = _l1_event(rng, ctx, "ART_LONG_TSD", 0, "TRUNCATED_5P")
+    ev = _l1_event(rng, ctx, "ART_LONG_TSD", "0", "TRUNCATED_5P")
     ev.target, ev.target_len = "TSD", rng.randint(51, 150)
     ev.render, ev.plant_en = "single_fragment", False
     ev.info.update({"sides": "BOTH", "pcr_copies": rng.randint(0, 2)})
@@ -457,7 +460,7 @@ def b_art_chimeric_ends(rng, ctx):
     body = other.seq[:n5] + l1.seq[-n3:]
     parts = [(other.cls, 0, n5, f"0-{n5}+"), ("L1", n5, n5 + n3, f"{len(l1.seq) - n3}-{len(l1.seq)}+")]
     ins, parts, pa = _with_polya(rng, body, parts, "L1", ctx.polya_scale)
-    ev = Event("ART_CHIMERIC_ENDS", 0, "ARTEFACT", "L1", "TRUNCATED_5P", ["CHIMERIC_ENDS"], ins,
+    ev = Event("ART_CHIMERIC_ENDS", "0", "ARTEFACT", "L1", "TRUNCATED_5P", ["CHIMERIC_ENDS"], ins,
                parts, "TSD", sample_tsd_len(rng), polya_len=pa, plant_en=False,
                element_id=f"{other.id}+{l1.id}", subfamily=f"{other.subfamily}+{l1.subfamily}",
                render="single_fragment")
@@ -469,7 +472,7 @@ def b_art_polya_slippage(rng, ctx):
     """Poly-A slippage at a reference A-tract (e.g. an Alu tail): no insertion; reads
     crossing the tract carry exaggerated homopolymer slippage and are soft-clipped there."""
     n = rng.randint(18, 40)
-    ev = Event("ART_POLYA_SLIPPAGE", 0, "ARTEFACT", "POLYA_ONLY", "5P_UNRESOLVED", [], "", [],
+    ev = Event("ART_POLYA_SLIPPAGE", "0", "ARTEFACT", "POLYA_ONLY", "5P_UNRESOLVED", [], "", [],
                "NONE", 0, plant_en=False, render="slippage")
     ev.info.update({"tract_len": n})
     return _art(ev, "polya_slippage")
@@ -480,7 +483,7 @@ def b_art_subfamily_mismap(rng, ctx):
     THAT copy's unique 3' flank but align onto a reference L1 copy here -> clip = foreign
     flank at the reference element's 3' end; mostly MAPQ 0, a minority confident."""
     src = ctx.lib.source(rng, "L1")
-    ev = Event("ART_SUBFAMILY_MISMAP", 0, "ARTEFACT", "L1", "5P_UNRESOLVED", [], "", [], "NONE", 0,
+    ev = Event("ART_SUBFAMILY_MISMAP", "0", "ARTEFACT", "L1", "5P_UNRESOLVED", [], "", [], "NONE", 0,
                plant_en=False, render="mismap", source_id=src.id, subfamily=src.subfamily)
     ev.info.update({"paralog": src.id, "ref_elem_len": rng.randint(400, 900)})
     return _art(ev, "subfamily_mismap")
@@ -489,7 +492,7 @@ def b_art_subfamily_mismap(rng, ctx):
 def b_art_foldback(rng, ctx):
     """Library fold-back palindrome: read = genomic + reverse complement of the adjacent
     genomic sequence (a hairpin molecule). 1-3 molecules."""
-    ev = Event("ART_FOLDBACK_PALINDROME", 0, "ARTEFACT", "UNKNOWN", "5P_UNRESOLVED", [], "", [],
+    ev = Event("ART_FOLDBACK_PALINDROME", "0", "ARTEFACT", "UNKNOWN", "5P_UNRESOLVED", [], "", [],
                "NONE", 0, plant_en=False, render="foldback_reads")
     ev.info.update({"n_molecules": rng.randint(1, 3), "pcr_copies": rng.randint(0, 3)})
     return _art(ev, "foldback_palindrome")
@@ -513,12 +516,12 @@ CATALOGUE = {
 }
 TP_TYPES = [k for k in CATALOGUE if not k.startswith("ART_")]
 ART_TYPES = [k for k in CATALOGUE if k.startswith("ART_")]
-_KEY_TYPE_ID = {"L1_FULL": 1, "L1_TRUNC": 1, "L1_INV": 1, "L1_INV_SWITCH": 13,
-                "L1_TSD_DELETION": 1, "L1_TD3P": 2, "ORPHAN_TD3P": 3, "ALU_YA5": 4,
-                "ALU_YB8": 4, "SVA_E": 4, "SVA_F": 4, "SVA_TD5P": 4, "SVA_TD3P": 4,
-                "PSEUDOGENE": 5, "PSEUDOGENE_DECOY": 5, "POLYA_ONLY": 6, "L1_MED_DELETION": 7,
-                "L1_MED_DUPLICATION": 8, "EN_INDEPENDENT": 12, "TEMPLATED_LOCAL": 14,
-                "PREMRNA_COINSERT": 15, "FOLDBACK_INVDUP_5P": 16}
+_KEY_TYPE_ID = {"L1_FULL": "1", "L1_TRUNC": "1", "L1_INV": "1", "L1_INV_SWITCH": "13",
+                "L1_TSD_DELETION": "A", "L1_TD3P": "2", "ORPHAN_TD3P": "3", "ALU_YA5": "4",
+                "ALU_YB8": "4", "SVA_E": "4", "SVA_F": "4", "SVA_TD5P": "4", "SVA_TD3P": "4",
+                "PSEUDOGENE": "5", "PSEUDOGENE_DECOY": "5", "POLYA_ONLY": "6", "L1_MED_DELETION": "7",
+                "L1_MED_DUPLICATION": "8", "EN_INDEPENDENT": "B", "TEMPLATED_LOCAL": "14",
+                "PREMRNA_COINSERT": "15", "FOLDBACK_INVDUP_5P": "16"}
 
 
 def parse_types(spec):
@@ -537,8 +540,8 @@ def parse_types(spec):
             out += TP_TYPES
         elif low in ("art", "artefact", "artefacts", "artifact", "artifacts"):
             out += ART_TYPES
-        elif tok.isdigit():
-            out += [k for k, v in _KEY_TYPE_ID.items() if v == int(tok)]
+        elif tok.upper() in TYPE_IDS:
+            out += [k for k, v in _KEY_TYPE_ID.items() if v == tok.upper()]
         elif tok.upper() in CATALOGUE:
             out.append(tok.upper())
         else:

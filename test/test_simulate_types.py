@@ -116,7 +116,7 @@ def test_twin_priming_switch(ctx, lib):
     rng = random.Random(5)
     for _ in range(50):
         ev = M.build_event("L1_INV_SWITCH", rng, ctx)
-        assert ev.structure == "INVERTED_5P_SWITCH" and ev.type_id == 13
+        assert ev.structure == "INVERTED_5P_SWITCH" and ev.type_id == "13"
         labels = [p[0] for p in ev.parts]
         assert labels[:3] == ["L1_SWITCH", "L1_INV", "L1"]
         el = next(e for e in lib.elements["L1"] if e.id == ev.element_id)

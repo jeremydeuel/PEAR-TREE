@@ -58,7 +58,7 @@ Matching is order-free on the two breakpoints (deletions have `left > right`).
 
 | id | type | keys |
 |---|---|---|
-| 1 | solo L1 | `L1_FULL`, `L1_TRUNC`, `L1_INV`, `L1_TSD_DELETION` |
+| 1 | solo L1 | `L1_FULL`, `L1_TRUNC`, `L1_INV` |
 | 2 | partnered 3' transduction | `L1_TD3P` |
 | 3 | orphan 3' transduction | `ORPHAN_TD3P` |
 | 4 | Alu / SVA (incl. SVA TDs) | `ALU_YA5`, `ALU_YB8`, `SVA_E`, `SVA_F`, `SVA_TD5P`, `SVA_TD3P` |
@@ -66,13 +66,15 @@ Matching is order-free on the two breakpoints (deletions have `left > right`).
 | 6 | solitary poly(A/T) | `POLYA_ONLY` |
 | 7 | L1-mediated deletion | `L1_MED_DELETION` |
 | 8 | L1-mediated tandem duplication | `L1_MED_DUPLICATION` |
-| 9-11 | translocation bridge / chimeric bridge / complex reciprocal inversion | out of scope (not simulated) |
-| 12 | EN-independent insertion | `EN_INDEPENDENT` |
+| 9 | RT-mediated rearrangement | only its deletion/duplication-like forms, as 7/8 |
+| 10-12 | reciprocal translocation bridge / chimeric bridge / reciprocal inversion-complex | out of scope (not simulated) |
 | 13 | twin priming + 5' switching | `L1_INV_SWITCH` |
 | 14 | templated local insertion | `TEMPLATED_LOCAL` |
 | 15 | co-inserted local pre-mRNA | `PREMRNA_COINSERT` |
 | 16 | fold-back inverted duplication 5' of the site | `FOLDBACK_INVDUP_5P` |
+| A | target-site deletion instead of a TSD | `L1_TSD_DELETION` |
+| B | EN-independent insertion | `EN_INDEPENDENT` |
 | 0 | artefacts | `ART_LIGATION_CHIMERA`, `ART_LIGATION_PCR`, `ART_LONG_TSD`, `ART_CHIMERIC_ENDS`, `ART_POLYA_SLIPPAGE`, `ART_SUBFAMILY_MISMAP` (val1 only), `ART_FOLDBACK_PALINDROME` |
 
-If `docs/insertion_types.html` numbers 9-12 differently, change `TYPE_IDS`/`_KEY_TYPE_ID` in
-`test/simlib/models.py` (single place).
+Ids match the section ids of `docs/insertion_types.html` (1-16, A, B); `TYPE_IDS`/`_KEY_TYPE_ID`
+in `test/simlib/models.py` are the single place to change them.
