@@ -79,6 +79,8 @@ def main(argv=None):
     ap.add_argument("--element-class", default="L1", choices=["L1", "SVA"])
     ap.add_argument("--evidence", required=True)
     ap.add_argument("--n-daughters", type=int, default=1)
+    ap.add_argument("--origin", default="germline", choices=["germline", "somatic"],
+                    help="somatic = the source is itself a tumour-acquired insertion (patient-specific)")
     ap.add_argument("--flank", type=int, default=FLANK)
     ap.add_argument("--id", default=None)
     ap.add_argument("--force", action="store_true", help="append even if criteria fail")
@@ -156,7 +158,7 @@ def main(argv=None):
         n_daughters=str(a.n_daughters), daughters_by_study="cohort:%d" % a.n_daughters,
         hotness="strong" if a.n_daughters >= 5 else "active", flank_3p=sid,
         flank_3p_len=str(a.flank), flank_3p_genome="hs1", pas_hexamers_3p=pas_hexamers(seq),
-        flank_5p=".", notes="NOVEL_SOURCE;tier=%s" % tier + (";forced: " + "; ".join(fails) if fails else "")))
+        flank_5p=".", origin=a.origin, notes="NOVEL_SOURCE;tier=%s" % tier + (";forced: " + "; ".join(fails) if fails else "")))
     if not point:
         from build import ta_status
         t = ta_status(el)

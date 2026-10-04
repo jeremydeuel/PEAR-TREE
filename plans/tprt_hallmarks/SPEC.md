@@ -190,10 +190,11 @@ orientation. Mates included. annotate builds the covered-element consensus from 
 | `consensus.fa` | per-class consensus built from the intact sets (`L1HS`, `L1PA2`, `L1PA3`, `ALU_Y`, `ALU_YA5`, `ALU_YB8`, `SVA_D`, `SVA_E`, `SVA_F`), sense, poly-A stripped; Dfam identities in `consensus_crosscheck.tsv`, Dfam sequences in `dfam_young.fa` |
 | `consensus_landmarks.tsv` | `consensus feature start end note` (1-based incl.): L1 `5UTR ORF1 INTER_ORF ORF2 ORF2_EN ORF2_RT 3UTR POLYA_SIGNAL TA_DIAGNOSTIC`; Alu `A_BOX B_BOX LEFT_MONOMER A_RICH_LINKER RIGHT_MONOMER`; SVA `HEXAMER SINE_R POLYA_SIGNAL` |
 | `active.tsv` | subset regarded as active/hot (L1HS-Ta, known hot sources) + per-element identity to class consensus |
-| `transduction_sources.tsv` | source elements: id, class, hs1+hg38 coords, strand, reference/non-reference, evidence (paper), hotness |
+| `transduction_sources.tsv` | source elements: id, class, hs1+hg38 coords, strand, reference/non-reference, evidence (paper), hotness, `origin` (last column: germline / somatic = a tumour-acquired insertion that became a source, Tubio 2014) |
 | `flanks_3p.fa.gz` (+`.fai`/`.gzi`, bgzip) | 0–15 kb (L1) / 0–5 kb (SVA) downstream of each source (sense of the element), repeats soft-masked; record name = source id (`<id>/+`, `<id>/-` when the strand is unknown), description `hs1:chr:start-end(strand)` |
 | `flanks_5p_sva.fa.gz` (+`.fai`/`.gzi`) | 5 kb upstream flanks of SVA sources (SVA 5' transductions), sense, ending at the SVA 5' end |
-| `transduction_stats.tsv`, `manifest.tsv` | published transduction length distribution; file sizes/md5 |
+| `transduction_stats.tsv`, `manifest.tsv` | published transduction length distribution (+ Tubio 2014 S3 flank-validation hit rate); file sizes/md5 |
+| `polymorphic_l1_candidates.tsv` | Tubio 2014 S7 TraFiC polymorphic L1 positions (hg19/hg38/hs1, carriers, status) — not sources; novel-source rule tier B input only |
 | `README.md` | provenance, licences, rebuild command |
 
 Documentation: `docs/transduction_sources.html` — includes how **novel sources** are accepted.
