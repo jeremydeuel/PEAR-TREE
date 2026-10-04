@@ -261,7 +261,12 @@ def classify(res, lib, ctx=None, cfg=None, novel_finder=None, premrna=None,
                 break
 
     # ---------------------------------------------------------------- chimeric ends
-    if call.j5_class and call.j3_class and call.j5_class != call.j3_class:
+    # SVA carries an Alu-like domain right after its 5' hexamer, so an SVA whose 5' junction
+    # piece lands there reads ALU/SVA: compatible, not a chimera (E2E: 4/8 SVA_TD5P/TD3P TPs
+    # were tagged CHIMERIC_ENDS before this)
+    compatible = {("ALU", "SVA")}
+    if (call.j5_class and call.j3_class and call.j5_class != call.j3_class
+            and (call.j5_class, call.j3_class) not in compatible):
         call.add("CHIMERIC_ENDS")
         call.detail["ends"] = f"{call.j5_class}/{call.j3_class}"
 

@@ -220,7 +220,21 @@ class Fragment:
         return p.seq.upper()
 
     def mate_seq(self):
-        return self.mate.seq.upper() if self.mate is not None else ""
+        """Mate sequence in allele-forward orientation (a multi-mapped mate is stored relative
+        to whatever paralog it landed on; two copies of one molecule can land on opposite
+        strands)."""
+        return allele_forward_seq(self.mate).upper() if self.mate is not None else ""
+
+    def swapped(self):
+        """The same template seen from its other read (mate as primary), or None. Two PCR
+        copies of one molecule can have different junction reads (one copy's CLIP read is the
+        other copy's DISC/MATE read), so the dedup also compares across that pairing."""
+        if self.mate is None or self.primary is None:
+            return None
+        f = Fragment.__new__(Fragment)
+        f.sample, f.frag, f.rows = self.sample, self.frag, self.rows
+        f.primary, f.mate = self.mate, self.primary
+        return f
 
 
 def collapse_fragments(rows: List[EvidenceRow]) -> List[Fragment]:
@@ -282,28 +296,66 @@ def _hp_compress_cut(seq: str, polya_min: int) -> str:
     return "".join(out)
 
 
+def _raw_cut(seq: str, polya_min: int) -> str:
+    """Raw sequence cut right after the first A/T run >= polya_min (run kept, capped at
+    polya_min bases so its length jitter does not count)."""
+    i, n = 0, len(seq)
+    while i < n:
+        j = i
+        while j < n and seq[j] == seq[i]:
+            j += 1
+        if seq[i] in "AT" and j - i >= polya_min:
+            return seq[:i + polya_min]
+        i = j
+    return seq
+
+
+def _semi_close(a: str, b: str, budget_fn) -> bool:
+    if len(a) > len(b):
+        a, b = b, a
+    m = len(a)
+    if m == 0 or b.startswith(a):
+        return True
+    # semi-global: the shorter string is aligned entirely to a PREFIX of the longer one (its
+    # end is free), so a read truncated earlier does not pay for the missing tail
+    return edlib.align(a, b, mode="SHW", task="distance", k=budget_fn(m))["editDistance"] != -1
+
+
 def _prefix_close(a: str, b: str, p: DedupParams) -> bool:
-    """Homopolymer-compressed, poly-A-cut, common-prefix comparison within the edit budget."""
-    a = _hp_compress_cut(a, p.polya_min)
-    b = _hp_compress_cut(b, p.polya_min)
-    m = min(len(a), len(b))
-    if m == 0:
+    """Lenient prefix comparison within the edit budget, two ways: homopolymer-compressed (run
+    length jitter is free; a substitution may cost 2-3 RLE edits) OR raw (a substitution costs
+    1; homopolymer jitter costs). Both cut after the first long A/T run."""
+    if _semi_close(_hp_compress_cut(a, p.polya_min), _hp_compress_cut(b, p.polya_min), p.budget):
         return True
-    a, b = a[:m], b[:m]
-    if a == b:
-        return True
-    return edlib.align(a, b, mode="NW", task="distance", k=p.budget(m))["editDistance"] != -1
+    return _semi_close(_raw_cut(a, p.polya_min), _raw_cut(b, p.polya_min), p.budget)
 
 
-def _seq_close(a: str, b: str, p: DedupParams, shift: int = 0) -> bool:
-    """Lenient sequence identity. `shift` > 0: the two reads may start up to `shift` bases
-    apart (unanchored reads, e.g. an unmapped mate of a duplicate); each offset 0..shift of
-    either read is tried, the comparison itself stays strict (edit budget)."""
+def _seq_close_from_start(a: str, b: str, p: DedupParams, shift: int = 0) -> bool:
     if not shift:            # anchored at the junction
         return _prefix_close(a, b, p)
     for k in range(shift + 1):
         if _prefix_close(a[k:], b, p) or (k and _prefix_close(a, b[k:], p)):
             return True
+    return False
+
+
+def _has_long_run(x: str, n: int) -> bool:
+    return any(run in x for run in ("A" * n, "T" * n))
+
+
+def _seq_close(a: str, b: str, p: DedupParams, shift: int = 0) -> bool:
+    """Lenient sequence identity. `shift` > 0: the two reads may start up to `shift` bases
+    apart (unanchored reads, e.g. an unmapped mate of a duplicate); each offset 0..shift of
+    either read is tried, the comparison itself stays strict (edit budget).
+
+    The low-quality sequence after a long poly-A lies on whichever side the SEQUENCER reached
+    last, which in reference-forward / allele-forward strings can be either end. So when a long
+    A/T run is present the comparison is also made from the other end (strings reversed, cut at
+    the run nearest that end); the pair is close when either clean side agrees."""
+    if _seq_close_from_start(a, b, p, shift):
+        return True
+    if _has_long_run(a, p.polya_min) or _has_long_run(b, p.polya_min):
+        return _seq_close_from_start(a[::-1], b[::-1], p, shift)
     return False
 
 
@@ -325,7 +377,7 @@ def _dup_seqs(a: Fragment, b: Fragment):
     SHORT read against a CLIP read of the same molecule)."""
     if a.primary.role == "CLIP" and b.primary.role == "CLIP":
         return a.clip_seq(), b.clip_seq()
-    return a.primary.seq.upper(), b.primary.seq.upper()
+    return allele_forward_seq(a.primary).upper(), allele_forward_seq(b.primary).upper()
 
 
 def _clip_shift(a: Fragment, b: Fragment, p: DedupParams) -> int:
@@ -350,14 +402,32 @@ def _mate_unreliable(f: Fragment, p: DedupParams) -> bool:
 def _is_dup(a: Fragment, b: Fragment, p: DedupParams):
     """SPEC rule 2 (same sample only). Returns '' (not a duplicate), 'coord' (mate placed on
     both: coordinates within tol + lenient clip sequence) or 'seq' (mate unplaced on both:
-    read outer within tol + lenient clip AND mate sequence)."""
+    read outer within tol + lenient clip AND mate sequence). Also tried with b seen from its
+    other read (b.swapped()): copies of one molecule may carry the evidence on different reads."""
+    k = _is_dup_oriented(a, b, p)
+    if k or a.strand == b.strand:
+        return k
+    for x, y in ((a, b.swapped()), (a.swapped(), b)):
+        if x is None or y is None or not x.primary.mapped or not y.primary.mapped:
+            continue
+        k = _is_dup_oriented(x, y, p)
+        if k:
+            return k
+    return ""
+
+
+def _is_dup_oriented(a: Fragment, b: Fragment, p: DedupParams):
     tol = p.tol
     if a.strand != b.strand:
         return ""
     ja, jb = _junction_pos(a), _junction_pos(b)
     if ja is not None and jb is not None and abs(ja - jb) > tol:
         return ""
-    if not (_outer_in_clip(a) and _outer_in_clip(b)) and abs(a.outer - b.outer) > tol:
+    # a 5' end inside the junction clip moves with homopolymer jitter as well as with the
+    # fragment end: allow twice the tolerance there instead of ignoring the coordinate
+    # (ignoring it merged 182 independent poly-A junction fragments in the E2E)
+    otol = 2 * tol if (_outer_in_clip(a) and _outer_in_clip(b)) else tol
+    if abs(a.outer - b.outer) > otol:
         return ""
     if _mate_unreliable(a, p) or _mate_unreliable(b, p):
         am = bm = None              # multi-mapped mate: decide by sequence
@@ -419,8 +489,9 @@ def independent_clusters(frags: List[Fragment], params: Optional[DedupParams] = 
         idx.sort(key=lambda i: frags[i].outer)
         for a_pos, i in enumerate(idx):
             for j in idx[a_pos + 1:]:
-                if frags[j].outer - frags[i].outer > tol:
-                    break
+                # no pruning by the primary's outer coordinate: copies of one molecule may carry
+                # the evidence on different reads (Fragment.swapped) or have a jittering outer
+                # (_outer_in_clip); per junction and sample the fragment count is capped (200)
                 if find(i) == find(j):
                     continue
                 kind = _is_dup(frags[i], frags[j], p)
@@ -619,20 +690,31 @@ def _short_overhang_check(r: EvidenceRow, side: str, cons: str, has_clip: bool, 
     over = over[:n]
     if ref_fetch is None:
         return "no_reference"
+    # reference the overhang would read if it were reference: indel-aware (edlib infix in a
+    # window), because a slipped homopolymer next to the junction shows up as a deletion in
+    # an unclipped SHORT read, which shifts a per-position comparison (E2E: 156 poly-A
+    # slippage junctions were rescued by exactly that before this was indel-aware)
+    import re as _re
+    ref_len = sum(int(k) for k, op in _re.findall(r"(\d+)([MDN=X])", r.cigar or ""))
+    pad = 8
     if side == "RIGHT":
-        ref_out = ref_fetch(r.ref, j, j + n).upper()
+        lo, hi = j, max(j + n, r.pos + ref_len) + pad
+        ref_win = ref_fetch(r.ref, lo, hi).upper()
         ref_in = ref_fetch(r.ref, max(0, j - 6), j).upper()[::-1]
     else:
-        ref_out = revcomp(ref_fetch(r.ref, max(0, j - n), j).upper())
+        lo, hi = max(0, min(r.pos, j - n) - pad), j
+        ref_win = revcomp(ref_fetch(r.ref, lo, hi).upper())
         ref_in = revcomp(ref_fetch(r.ref, j, j + 6).upper())[::-1]
-    if len(ref_out) < n:
+    if len(ref_win) < n:
         return "no_reference"
-    c = cons[:n].upper()
-    m_cons = sum(1 for a, b in zip(over, c) if a == b)
-    m_ref = sum(1 for a, b in zip(over, ref_out) if a == b)
+    ref_out = ref_win[:n]
+    c = cons[:n + pad].upper()
+    ed_ref = edlib.align(over, ref_win, mode="HW", task="distance")["editDistance"]
+    ed_cons = edlib.align(over, c, mode="SHW", task="distance")["editDistance"]
+    m_cons = n - ed_cons
     if m_cons < min_b:
         return "consensus_mismatch"
-    if n - m_ref < min_mm or m_cons <= m_ref:
+    if ed_ref < min_mm or ed_cons >= ed_ref:
         return "matches_reference"
     top = max("ACGT", key=over.count)
     if over.count(top) >= 0.8 * n:

@@ -194,12 +194,14 @@ configs, incl. the evidence sidecar).
   one representative per name (longest real clip) with mates/files of all samples pooled; the
   real side goes through the clean-remap and clipped-remap filters and into combined.txt.gz; not
   genotyped yet (like Feature-A calls). Legacy Bp+polyA records stay parked unless
-  `CONFIG['combine_insertions']['keep_polya_one_sided']` (False). **Open item (evidence module,
-  integration worker):** `apply_evidence` evaluates both sides and gates on each, so a one-sided
-  locus always fails `require_independent_fragments` on its open side — it must skip
-  `ins.open_side` (and Feature-A disc ends). Short inserts (solitary poly-A, short TDs): the clip
-  runs through the insert into the far TSD/flank, so the clipped-remap filter ("clip maps within
-  1 kb") may remove them; trimming the clip at the end of the poly-A run is the fix there.
+  `CONFIG['combine_insertions']['keep_polya_one_sided']` (False; can be switched on now that the gate
+  skips the open side). **Done (integration worker):** `apply_evidence` skips `ins.open_side` (and
+  Feature-A `TYPE_*_DISC` ends): only the real side is evaluated / written to the evidence TSV and
+  it still needs ≥ `min_independent_fragments`. Short inserts: with
+  `trim_far_flank_before_remap` (True in .tprt) the clip sent to the clipped-remap filter is cut
+  where it runs into the OTHER junction's reference flank (RIGHT clip: first 20 bp of the LEFT
+  record's aligned part; LEFT clip: rc of the last 20 bp of the RIGHT record's aligned part; cut
+  only if ≥ 10 inserted bases precede it) — general, not only after a poly-A.
 
 ### Independence rule (combine)
 
@@ -240,6 +242,19 @@ pool when combine merged them):
    (≥ 80 % one base and ≥ 4 of the 6 adjacent reference bases on either side are that base).
    Used SHORT fragments then go through rules 1–3 like every fragment. SHORT reads never feed
    the consensus. Rejected SHORT fragments (and their mates) are dropped from all outputs.
+6. Dedup refinements found in the E2E (`test/e2e`): a mate record with MAPQ < `dup_mate_min_mapq`
+   (20) — a mate inside the element, multi-mapped onto a random paralog — is not a placement (the
+   pair is judged by mate sequence); a read whose 5' end lies in the junction soft clip (LEFT clip on
+   `+`, RIGHT clip on `-`) has a jittering `outer`, so 2 x tol applies there; a pair is also
+   compared with one fragment seen from its other read (`Fragment.swapped`: one copy's CLIP read is
+   the other copy's DISC/MATE read), so the within-sample loop no longer prunes by the primary's
+   outer; full-read / mate sequences are compared allele-forward, the poly-A cut is tried from both
+   ends (the junk after a long poly-A lies where the sequencer ended), and a pair is close when
+   either the homopolymer-compressed OR the raw semi-global edit distance is within budget.
+   E2E (qname truth): 14 duplicates missed, 217 false merges of 11,210 fragments, 0 artefacts kept.
+7. SHORT reference test is indel-aware (edlib infix of the overhang in a reference window): a
+   slipped homopolymer shows up as a deletion in an unclipped SHORT read and fooled the
+   per-position test (157 SHORT-only junctions before, 18 after, in the E2E).
 
 ### `<patient>.insertions.evidence.tsv.gz` (combine → annotate)
 
@@ -273,7 +288,8 @@ Implementation notes (combine worker; `src/combine_insertions_evidence.py`, `src
   `cluster/config.py.grch38.tprt`), `min_independent_fragments` (2), `indel_aware_consensus`
   (False; True in .tprt), `dup_coord_tolerance` (5), `dup_max_edit` (3), `dup_max_edit_frac`
   (0.02), `polya_min_len` (8), `count_short_overhang` (False; True in .tprt),
-  `short_overhang_min_bases` (5), `short_overhang_min_ref_mismatch` (2).
+  `short_overhang_min_bases` (5), `short_overhang_min_ref_mismatch` (2), `dup_mate_min_mapq` (20),
+  `trim_far_flank_before_remap` (False; True in .tprt).
 
 ### `<patient>.insertions.reads.fa.gz` (combine → annotate)
 
@@ -359,8 +375,15 @@ are documented in `tools/rte/annotator.py`.
   matching flank's strand is reported as `td_flank=source_strand=<s>` in rte_detail.
 - `CONFIG['annotate']['rte_library']` may be relative (`resources/rte_library`): resolved against
   the working directory, else the repository root.
-- Novel sources: tier A (≥ 0.98) scores `novel_source` (+1), tier B (0.95–0.98)
-  `novel_source_tier_b` (+0.5); tier in rte_detail `novel_tier`.
+- Novel sources: tier A (≥ 0.98) scores `novel_source` (+1), tier B (0.95–0.98, or a
+  `polymorphic_l1_candidates.tsv` position upstream, either orientation, when no reference L1
+  qualifies) `novel_source_tier_b` (+0.5); tier in rte_detail `novel_tier`.
+- Locus geometry → tags (gap = R − L of the numeric locus name, or the genome-located TSD):
+  `[-rte_max_target_site_deletion (30), -1]` → `TSD_DELETION`; `< -30` → `L1_MED_DELETION`
+  (element calls); `> 40` with an element + strand-consistent poly-A ≥ 10 (not both-sided, not
+  chimeric) → `L1_MED_DUPLICATION`. Score: `tsd_gt50` is waived for `L1_MED_DUPLICATION` only with an
+  EN motif ≤ 2 mismatches, no slippage and (gap > 150 or ≥ 2 colonies) — a long-TSD chimera
+  (single molecule, modest overlap) keeps the penalty and the UNCERTAIN cap.
 - evidence TSV: optional extra column `cross_sample_identical` (0/1); a `POLYA` side row is
   accepted and counted for `supported`.
 - reads FASTA: every sequence, mates included, is in allele-forward (= reference-forward)

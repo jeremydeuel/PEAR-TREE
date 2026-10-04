@@ -156,6 +156,25 @@ def test_lenient_dup_real_clip_difference_is_independent():
     assert n_ind(rows) == 2
 
 
+def test_pcr_copies_with_evidence_on_different_reads_collapse():
+    """Copy 1: R2 is the junction CLIP read, its mate R1 lies in the flank. Copy 2 (jittered
+    ends): R2 fell short of the junction, so R1 is the evidence (DISC) and R2's mate record is
+    multi-mapped onto a paralog (MAPQ 0, opposite strand). Same molecule -> one fragment
+    (E2E finding: an ART_LONG_TSD chimera survived the gate this way)."""
+    r1 = "TGGGGCCCAATGGCCAAGCCTTTTCTTCCCAAATGTCAGGGTCCTGGCACCACAAGG"
+    r2 = "GAGGTACAACTAGCATACAGTAAAGTGCATAAATCTTAAGTGCATAGCTTGATGATT"
+    copy1 = [row(frag="c1", r12=2, flag=147, strand="-", pos=572, outer=630, cigar="40M17S", clip_at=40,
+                 seq=r2, mref="chr1", mpos=505, mstrand="+"),
+             row(frag="c1", r12=1, role="MATE", flag=99, strand="+", pos=505, outer=505, cigar="57M",
+                 seq=r1, mref="chr1", mpos=572, mstrand="-")]
+    copy2 = [row(frag="c2", r12=1, role="DISC", flag=65, strand="+", pos=506, outer=506, cigar="57M",
+                 seq=r1, mref="chr9", mpos=900, mstrand="+"),
+             row(frag="c2", r12=2, role="MATE", flag=129, ref="chr9", strand="+", pos=900, outer=900,
+                 mapq=0, cigar="57M", seq=revcomp(r2[2:]) , mref="chr1", mpos=506, mstrand="+")]
+    clusters, n_dup, _ = independent_clusters(collapse_fragments(copy1 + copy2))
+    assert len(clusters) == 1 and n_dup == 1
+
+
 def test_allele_forward_orientation_of_mates():
     """reads.fa promises allele-forward sequence: a MATE stored on the same strand as its
     partner (placed on a paralog in the opposite orientation) is reverse-complemented."""
@@ -272,6 +291,17 @@ def test_short_polya_overhang_next_to_reference_a_tract_not_counted():
     rec = evaluate_junction("chr1:990-1000", "RIGHT",
                             [_clip_frag(j=1000, clip=clip), _short_frag("A" * 8, j=1000)], SHORT_CFG, _sfetch)
     assert rec.n_short_used == 0 and rec.short_reasons == {"ref_homopolymer": 1}
+
+
+def test_short_read_through_slipped_reference_not_counted():
+    """Slippage: the CLIP reads' clip is shifted reference (a slipped homopolymer); an unclipped
+    SHORT read carries the slip as a deletion next to the junction. Its overhang IS reference
+    (only shifted by the deletion) and must not rescue the junction (E2E finding)."""
+    slipped = SREF[SJ + 3:SJ + 43]
+    short = row(frag="s1", role="SHORT", ref="chr1", pos=SJ - 90, outer=SJ - 90, cigar="90M3D10M",
+                clip_at=90, seq=SREF[SJ - 90:SJ] + SREF[SJ + 3:SJ + 13])
+    rec = _short_junction([_clip_frag(clip=slipped), short])
+    assert rec.n_short_used == 0 and rec.short_reasons == {"matches_reference": 1}
 
 
 def test_short_only_junction_not_supported():
