@@ -87,6 +87,18 @@ QUEUE="${QUEUE:-normal}"                  # tier1 wall: 12 h
 RETRY_QUEUE="${RETRY_QUEUE:-long}"        # tier2 wall: 48 h
 CTRL_QUEUE="${CTRL_QUEUE:-week}"          # controller waits out the tier2 array (up to 48 h)
 
+# --- optional hooks for wrappers (cluster/tprt/run_ab.sh); all unset = default behaviour ---
+#   PT_JOB_PREFIX   LSF job-name prefix (default: the patient id). Two runs of one patient
+#                   (A/B arms) otherwise share job names, so bjobs/status cannot tell them apart.
+#   PT_SD_WAIT      extra LSF dependency for the stage+discover array, e.g. "ended(123[*])"
+#                   (a same-size array dependency is element-wise in LSF: element i waits for i).
+#   PT_NO_CLEANUP=1 do not submit phase 5 (staged-BAM cleanup); the wrapper owns cleanup
+#                   because another run still reads the same staged BAMs.
+#   PT_JOBIDS_FILE  append "<phase><TAB><jobid>" for every submitted job (for dependencies).
+PT_SD_WAIT="${PT_SD_WAIT:-}"
+PT_NO_CLEANUP="${PT_NO_CLEANUP:-0}"
+PT_JOBIDS_FILE="${PT_JOBIDS_FILE:-}"
+
 log() { echo "[$(date +%H:%M:%S)] $*"; }
 
 bam_path() { echo "$STAGING_ROOT/$1/$2/mapped_sample/$2.sample.dupmarked.bam"; }  # proj sample
@@ -113,6 +125,12 @@ load_env() {
     : "${PT_RUNDIR:?internal subcommands need PT_RUNDIR}"
     # shellcheck disable=SC1091
     source "$PT_RUNDIR/run.env"
+    JOB_PREFIX="${JOB_PREFIX:-$PATIENT_ID}"   # run.env written before the hook existed has none
+}
+
+record_jobid() {   # record_jobid <phase> <jobid>  (PT_JOBIDS_FILE hook; no-op when unset)
+    [ -n "$PT_JOBIDS_FILE" ] && printf '%s\t%s\n' "$1" "$2" >> "$PT_JOBIDS_FILE"
+    return 0
 }
 
 # =============================================================================
@@ -124,6 +142,7 @@ freeze_env() {
     local RUNDIR="$1"
     cat > "$RUNDIR/run.env" <<EOF
 PATIENT_ID='$PATIENT_ID'
+JOB_PREFIX='$JOB_PREFIX'
 RUNDIR='$RUNDIR'
 SAMPLES='$RUNDIR/samples.tsv'
 PT_ROOT='$PT_ROOT'
@@ -184,6 +203,7 @@ preflight_binaries() {
 finish_submit() {
     local RUNDIR="$1"
     SAMPLES="$RUNDIR/samples.tsv"
+    JOB_PREFIX="${PT_JOB_PREFIX:-$PATIENT_ID}"
     local N; N="$(wc -l < "$SAMPLES" | tr -d ' ')"
     [ "$N" -gt 0 ] || { echo "no samples for $PATIENT_ID" >&2; exit 1; }
     rm -f "$RUNDIR"/FLEET_FATAL.* "$RUNDIR"/*_excluded.tsv 2>/dev/null || true
@@ -201,53 +221,58 @@ submit_dag() {
     local W="PT_RUNDIR='$RUNDIR' bash '$SELF'"
     local jid_sd jid_sdr jid_ci jid_gt jid_gtr jid_cg jid_cu jid_an
 
-    jid_sd=$(submit_job -J "${PATIENT_ID}_sd[1-$N]%$STAGE_THROTTLE" \
+    local SD_WAIT=(); [ -n "$PT_SD_WAIT" ] && SD_WAIT=(-w "$PT_SD_WAIT")
+    jid_sd=$(submit_job -J "${JOB_PREFIX}_sd[1-$N]%$STAGE_THROTTLE" ${SD_WAIT[@]+"${SD_WAIT[@]}"} \
         -o "$RUNDIR/logs/sd.%I.log" -e "$RUNDIR/logs/sd.%I.err" \
         -n 1 -q "$QUEUE" -M "$SD_MEM_T1" -R "select[mem>$SD_MEM_T1] rusage[mem=$SD_MEM_T1] $R" \
         "$W stage-discover \$LSB_JOBINDEX")
-    log "phase 1 stage+discover : $jid_sd  (tier1 ${SD_MEM_T1}MB/$QUEUE)"
+    log "phase 1 stage+discover : $jid_sd  (tier1 ${SD_MEM_T1}MB/$QUEUE)${PT_SD_WAIT:+  waits: $PT_SD_WAIT}"; record_jobid sd "$jid_sd"
 
-    jid_sdr=$(submit_job -J "${PATIENT_ID}_sdr" -w "ended($jid_sd)" \
+    jid_sdr=$(submit_job -J "${JOB_PREFIX}_sdr" -w "ended($jid_sd)" \
         -o "$RUNDIR/logs/sd_retry.%J.log" -e "$RUNDIR/logs/sd_retry.%J.err" \
         -n 1 -q "$CTRL_QUEUE" -M 1000 -R "select[mem>1000] rusage[mem=1000]" \
         "$W retry discover")
-    log "phase 1r retry(disc)   : $jid_sdr  (tier2 ${SD_MEM_T2}MB/$RETRY_QUEUE, oom/timeout only)"
+    log "phase 1r retry(disc)   : $jid_sdr  (tier2 ${SD_MEM_T2}MB/$RETRY_QUEUE, oom/timeout only)"; record_jobid sdr "$jid_sdr"
 
-    jid_ci=$(submit_job -J "${PATIENT_ID}_ci" -w "done($jid_sdr)" \
+    jid_ci=$(submit_job -J "${JOB_PREFIX}_ci" -w "done($jid_sdr)" \
         -o "$RUNDIR/logs/combine.%J.log" -e "$RUNDIR/logs/combine.%J.err" \
         -n "$CI_CORES" -q "$QUEUE" -M "$CI_MEM" -R "select[mem>$CI_MEM] rusage[mem=$CI_MEM] $R" \
         "$W combine")
-    log "phase 2 combine        : $jid_ci"
+    log "phase 2 combine        : $jid_ci"; record_jobid ci "$jid_ci"
 
-    jid_gt=$(submit_job -J "${PATIENT_ID}_gt[1-$N]%$GT_THROTTLE" -w "done($jid_ci)" \
+    jid_gt=$(submit_job -J "${JOB_PREFIX}_gt[1-$N]%$GT_THROTTLE" -w "done($jid_ci)" \
         -o "$RUNDIR/logs/gt.%I.log" -e "$RUNDIR/logs/gt.%I.err" \
         -n 1 -q "$QUEUE" -M "$GT_MEM_T1" -R "select[mem>$GT_MEM_T1] rusage[mem=$GT_MEM_T1] $R" \
         "$W genotype \$LSB_JOBINDEX")
-    log "phase 3 genotype       : $jid_gt  (tier1 ${GT_MEM_T1}MB/$QUEUE)"
+    log "phase 3 genotype       : $jid_gt  (tier1 ${GT_MEM_T1}MB/$QUEUE)"; record_jobid gt "$jid_gt"
 
-    jid_gtr=$(submit_job -J "${PATIENT_ID}_gtr" -w "ended($jid_gt)" \
+    jid_gtr=$(submit_job -J "${JOB_PREFIX}_gtr" -w "ended($jid_gt)" \
         -o "$RUNDIR/logs/gt_retry.%J.log" -e "$RUNDIR/logs/gt_retry.%J.err" \
         -n 1 -q "$CTRL_QUEUE" -M 1000 -R "select[mem>1000] rusage[mem=1000]" \
         "$W retry genotype")
-    log "phase 3r retry(geno)   : $jid_gtr  (tier2 ${GT_MEM_T2}MB/$RETRY_QUEUE, oom/timeout only)"
+    log "phase 3r retry(geno)   : $jid_gtr  (tier2 ${GT_MEM_T2}MB/$RETRY_QUEUE, oom/timeout only)"; record_jobid gtr "$jid_gtr"
 
-    jid_cg=$(submit_job -J "${PATIENT_ID}_cg" -w "done($jid_gtr)" \
+    jid_cg=$(submit_job -J "${JOB_PREFIX}_cg" -w "done($jid_gtr)" \
         -o "$RUNDIR/logs/combine_gt.%J.log" -e "$RUNDIR/logs/combine_gt.%J.err" \
         -n "$CG_CORES" -q "$QUEUE" -M "$CG_MEM" -R "select[mem>$CG_MEM] rusage[mem=$CG_MEM] $R" \
         "$W combine-genotypes")
-    log "phase 4 combine_gt     : $jid_cg"
+    log "phase 4 combine_gt     : $jid_cg"; record_jobid cg "$jid_cg"
 
-    jid_cu=$(submit_job -J "${PATIENT_ID}_cleanup" -w "done($jid_cg)" \
-        -o "$RUNDIR/logs/cleanup.%J.log" -e "$RUNDIR/logs/cleanup.%J.err" \
-        -n 1 -q "$QUEUE" -M 1000 -R "select[mem>1000] rusage[mem=1000]" \
-        "$W cleanup")
-    log "phase 5 cleanup        : $jid_cu  (only on success)"
+    if [ "$PT_NO_CLEANUP" = 1 ]; then
+        log "phase 5 cleanup        : NOT submitted (PT_NO_CLEANUP=1; the caller owns cleanup)"
+    else
+        jid_cu=$(submit_job -J "${JOB_PREFIX}_cleanup" -w "done($jid_cg)" \
+            -o "$RUNDIR/logs/cleanup.%J.log" -e "$RUNDIR/logs/cleanup.%J.err" \
+            -n 1 -q "$QUEUE" -M 1000 -R "select[mem>1000] rusage[mem=1000]" \
+            "$W cleanup")
+        log "phase 5 cleanup        : $jid_cu  (only on success)"; record_jobid cu "$jid_cu"
+    fi
 
-    jid_an=$(submit_job -J "${PATIENT_ID}_annotate" -w "done($jid_cg)" \
+    jid_an=$(submit_job -J "${JOB_PREFIX}_annotate" -w "done($jid_cg)" \
         -o "$RUNDIR/logs/annotate.%J.log" -e "$RUNDIR/logs/annotate.%J.err" \
         -n "$AN_CORES" -q "$QUEUE" -M "$AN_MEM" -R "select[mem>$AN_MEM] rusage[mem=$AN_MEM] $R" \
         "$W annotate")
-    log "phase 6 annotate       : $jid_an"
+    log "phase 6 annotate       : $jid_an"; record_jobid an "$jid_an"
 }
 
 # =============================================================================
@@ -337,7 +362,7 @@ cmd_retry() {
         if [ -n "$retry_idx" ]; then
             log "$PHASE: tier2 escalation (${MEM_T2}MB / $RETRY_QUEUE) for indices [$retry_idx]"
             local R="span[hosts=1]" jid
-            jid=$(submit_job -J "${PATIENT_ID}_${PREFIX}_r2[$retry_idx]%$THROT" \
+            jid=$(submit_job -J "${JOB_PREFIX}_${PREFIX}_r2[$retry_idx]%$THROT" \
                 -o "$RUNDIR/logs/${PREFIX}_r2.%I.log" -e "$RUNDIR/logs/${PREFIX}_r2.%I.err" \
                 -n 1 -q "$RETRY_QUEUE" -M "$MEM_T2" -R "select[mem>$MEM_T2] rusage[mem=$MEM_T2] $R" \
                 "PT_RUNDIR='$RUNDIR' bash '$SELF' $WORKCMD \$LSB_JOBINDEX")
@@ -583,7 +608,7 @@ cmd_status() {
     [ -s "$RUNDIR/insertions/$PATIENT_ID.genotyping.txt.gz" ] && echo "contract  : yes" || echo "contract  : no"
     [ -s "$RUNDIR/insertions/$PATIENT_ID.genotyping.tprt.txt.gz" ] && echo "contract+1: yes (one-sided loci appended)"
     [ -s "$RUNDIR/$PATIENT_ID.genotypes.csv.gz" ] && echo "calls     : yes" || echo "calls     : no"
-    bjobs -J "${PATIENT_ID}_*" -A 2>/dev/null || true
+    bjobs -J "${PT_JOB_PREFIX:-$PATIENT_ID}_*" -A 2>/dev/null || true
 }
 
 # --- dispatch -----------------------------------------------------------------
