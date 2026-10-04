@@ -103,6 +103,31 @@ patient_samples() {
 staged_bam() { echo "$STAGING_ROOT/$2/$1/mapped_sample/$1.sample.dupmarked.bam"; }   # <sample> <proj>
 nst_bam()    { echo "$NST/$2/$1/$1.sample.dupmarked.bam"; }                          # <sample> <proj>
 
+# iRODS (cgp zone) is the authority for what exists; nst_links may be absent on a node
+# (it was gone from farm22-head2 by 2026-10). DATA_PATH is the physical replica path,
+# printed WITHOUT the /nfs prefix (e.g. /irods-cgp-sr13-sdf/intproj/...); one line per replica.
+load_irods() {
+    command -v iquest >/dev/null 2>&1 && return 0
+    # shellcheck disable=SC1091
+    [ -n "${MODULESHOME:-}" ] && [ -f "$MODULESHOME/init/bash" ] && . "$MODULESHOME/init/bash" 2>/dev/null
+    module load IRODS >/dev/null 2>&1 || true   # CAPITALISED; lowercase `irods` does not exist
+    command -v iquest >/dev/null 2>&1
+}
+irods_replicas() {   # <sample> <proj> -> physical replica paths of the dupmarked BAM (may be empty)
+    iquest --no-page "%s" "select DATA_PATH where COLL_NAME = '/cgp/intproj/$2/sample/$1' and DATA_NAME like '$1.%sample.dupmarked.bam'" 2>/dev/null \
+        | grep -v -e CAT_NO_ROWS -e '^$' || true
+}
+# first header-readable physical replica (tries the path as printed and under /nfs), else empty
+irods_readable_bam() {   # <sample> <proj>
+    local r c
+    while IFS= read -r r; do
+        for c in "$r" "/nfs$r"; do
+            samtools view -H "$c" >/dev/null 2>&1 && { echo "$c"; return 0; }
+        done
+    done < <(irods_replicas "$1" "$2")
+    return 1
+}
+
 load_samtools() {
     command -v samtools >/dev/null 2>&1 && return 0
     # shellcheck disable=SC1091

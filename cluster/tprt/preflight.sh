@@ -223,7 +223,9 @@ GATE_BAM=""
 if [ "$QUICK" = 0 ] && [ -n "$SAMP" ]; then
     hdr "BAMs ($ns colonies; staged -> quickcheck + index, else nst_links header)"
     if load_samtools; then
-        n_st=0; n_nst=0; n_none=0; n_noidx=0
+        n_st=0; n_irr=0; n_iro=0; n_nst=0; n_none=0; n_noidx=0
+        have_irods=0; load_irods && have_irods=1
+        [ "$have_irods" = 1 ] || warn "iquest not available (module load IRODS) — falling back to nst_links header reads"
         while IFS=$'\t' read -r s pj; do
             b="$(staged_bam "$s" "$pj")"
             if [ -s "$b" ]; then
@@ -231,13 +233,18 @@ if [ "$QUICK" = 0 ] && [ -n "$SAMP" ]; then
                     n_st=$((n_st+1)); GATE_BAM="${GATE_BAM:-$b}"
                     [ -s "$b.bai" ] || [ -s "${b%.bam}.bai" ] || n_noidx=$((n_noidx+1))
                 else fail "$s: staged BAM fails samtools quickcheck (truncated?): $b — delete it so the run re-stages"; fi
-            elif samtools view -H "$(nst_bam "$s" "$pj")" >/dev/null 2>&1; then
+            elif [ "$have_irods" = 1 ] && rb="$(irods_readable_bam "$s" "$pj")"; then
+                n_irr=$((n_irr+1)); GATE_BAM="${GATE_BAM:-$rb}"
+            elif [ "$have_irods" = 1 ] && [ -n "$(irods_replicas "$s" "$pj")" ]; then
+                n_iro=$((n_iro+1))   # in iRODS but no replica header-readable from this node: stageBam.pl still works
+            elif [ -d "$NST" ] && samtools view -H "$(nst_bam "$s" "$pj")" >/dev/null 2>&1; then
                 n_nst=$((n_nst+1)); GATE_BAM="${GATE_BAM:-$(nst_bam "$s" "$pj")}"
             else
-                n_none=$((n_none+1)); warn "$s: not staged and no readable $(nst_bam "$s" "$pj") (stageBam.pl may still find it in iRODS; else the colony is skipped)"
+                n_none=$((n_none+1)); fail "$s: not staged and not found in iRODS as /cgp/intproj/$pj/sample/$s/$s.*sample.dupmarked.bam — check colonies.tsv project id"
             fi
         done <<<"$SAMP"
-        ok "$n_st staged (quickcheck OK; $n_noidx without .bai — genotype indexes on demand), $n_nst only in nst_links (the run stages them), $n_none unreachable"
+        ok "$n_st staged (quickcheck OK; $n_noidx without .bai — genotype indexes on demand), $n_irr in iRODS with a readable replica, $n_iro in iRODS (no replica readable here; staging still works), $n_nst via nst_links, $n_none missing"
+        n_nst=$((n_nst + n_irr + n_iro))   # everything not yet staged, for the footprint note
         [ "$n_st" -gt 0 ] && [ "$n_nst" -eq 0 ] || note "staging footprint: ~$(( (n_nst + n_none) * 45 )) GB to stage into $STAGING_ROOT (45 GB/BAM estimate)"
     else
         fail "samtools not available (module load $SAMTOOLS_MODULE)"
@@ -252,6 +259,8 @@ if [ "$QUICK" = 0 ] && [ -n "$SAMP" ]; then
                 fail "arm $ARM check-config:"; printf '%s\n' "$out" | sed 's/^/        /'
             fi
         done
+    elif [ "${n_iro:-0}" -gt 0 ]; then
+        warn "assembly gate deferred: colonies are in iRODS but no replica is header-readable from $(hostname) — re-run preflight after the first BAM is staged (run_ab.sh stages them)"
     else
         fail "no readable BAM to run the assembly gate against"
     fi
