@@ -1292,7 +1292,7 @@ impl Discovery {
                 i < v.len() && v[i] <= hi
             })
         };
-        let (mut tmin, mut tmax, far) = (self.config.tsd_min, self.config.tsd_max, self.config.polya_far_dist);
+        let (mut tmin, tmax, far) = (self.config.tsd_min, self.config.tsd_max, self.config.polya_far_dist);
         // post-TSD pairing modes widen the partner window (a conservative superset of
         // `extra_pairs`); one-sided loci need no partner at all.
         let c = &self.config;
@@ -1302,24 +1302,68 @@ impl Discovery {
         if c.allow_blunt_pairs {
             tmin = tmin.min(0);
         }
-        if c.max_l1_mediated_span > 0 {
-            tmin = tmin.min(-c.max_l1_mediated_span);
-            tmax = tmax.max(c.max_l1_mediated_span);
-        }
+        // L1-mediated far pairs (`pair_mode`) need TPRT polarity: one side a poly-A/T
+        // tail, the other a complex clip. Widening the plain partner window to the full
+        // span instead kept practically every breakpoint at 30x (a partner of either
+        // kind lies within 50 kb almost everywhere) and blew the mate pass up to 20-37M
+        // requests / 17-30 GB. Test polarity per side: tail <-> complex partners only.
+        let span = c.max_l1_mediated_span;
+        let n_pa = c.l1_mediated_min_polya;
+        let polar = |bps: &[Breakpoint]| {
+            let (mut tail, mut cx): (FxHashMap<String, Vec<i64>>, FxHashMap<String, Vec<i64>>) = Default::default();
+            if span > 0 {
+                for b in bps {
+                    if leading_polyt(&b.clipped.seq, n_pa) {
+                        tail.entry(b.reference_name.clone()).or_default().push(b.breakpoint);
+                    } else if complex_clip(&b.clipped.seq, n_pa) {
+                        cx.entry(b.reference_name.clone()).or_default().push(b.breakpoint);
+                    }
+                }
+            }
+            for v in tail.values_mut().chain(cx.values_mut()) {
+                v.sort_unstable();
+            }
+            (tail, cx)
+        };
+        let (l_tail, l_cx) = polar(&self.final_left_breakpoints);
+        let (r_tail, r_cx) = polar(&self.final_right_breakpoints);
+        let far_partner = |b: &Breakpoint, tail: &FxHashMap<String, Vec<i64>>, cx: &FxHashMap<String, Vec<i64>>| {
+            if span <= 0 {
+                return false;
+            }
+            let (rn, p) = (b.reference_name.as_str(), b.breakpoint);
+            (leading_polyt(&b.clipped.seq, n_pa) && any_in(cx.get(rn), p - span, p + span))
+                || (complex_clip(&b.clipped.seq, n_pa) && any_in(tail.get(rn), p - span, p + span))
+        };
         let lone_ok = |b: &Breakpoint| c.one_sided_loci && one_sided_ok(c, b);
         let mut keep_l = vec![false; self.final_left_breakpoints.len()];
         for (i, b) in self.final_left_breakpoints.iter().enumerate() {
             let (rn, p) = (b.reference_name.as_str(), b.breakpoint);
             keep_l[i] = b.ev.is_some()
                 && self.bp_visible(rn, p)
-                && (any_in(rpos.get(rn), p + tmin, p + tmax) || any_in(pa_pos.get(rn), p - slack, p + far + slack) || lone_ok(b));
+                && (any_in(rpos.get(rn), p + tmin, p + tmax)
+                    || any_in(pa_pos.get(rn), p - slack, p + far + slack)
+                    || far_partner(b, &r_tail, &r_cx)
+                    || lone_ok(b));
         }
         let mut keep_r = vec![false; self.final_right_breakpoints.len()];
         for (i, b) in self.final_right_breakpoints.iter().enumerate() {
             let (rn, p) = (b.reference_name.as_str(), b.breakpoint);
             keep_r[i] = b.ev.is_some()
                 && self.bp_visible(rn, p)
-                && (any_in(lpos.get(rn), p - tmax, p - tmin) || any_in(pa_pos.get(rn), p - far - slack, p + slack) || lone_ok(b));
+                && (any_in(lpos.get(rn), p - tmax, p - tmin)
+                    || any_in(pa_pos.get(rn), p - far - slack, p + slack)
+                    || far_partner(b, &l_tail, &l_cx)
+                    || lone_ok(b));
+        }
+        if self.config.evidence_sidecar {
+            let kl = keep_l.iter().filter(|&&k| k).count();
+            let kr = keep_r.iter().filter(|&&k| k).count();
+            eprintln!(
+                "evidence sidecar: kept {kl}/{} LEFT and {kr}/{} RIGHT breakpoints for the mate pass",
+                keep_l.len(),
+                keep_r.len()
+            );
         }
         // poly-A reads that may pair with a kept breakpoint (on the mate's contig)
         let klpos = positions(&self.final_left_breakpoints, Some(&keep_l));
