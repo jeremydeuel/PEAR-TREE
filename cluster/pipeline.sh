@@ -386,9 +386,13 @@ cmd_retry() {
         rm -f "$exf"
     fi
 
-    local succ; succ="$(ls "$OUTDIR"/*.txt.gz 2>/dev/null | wc -l | tr -d ' ')"
+    # find, not ls: under `set -o pipefail` an empty glob made `ls` fail and killed this
+    # controller with exit 2 BEFORE the FATAL message below (PD37449 pilot, 2026-10-04).
+    local succ; succ="$(find "$OUTDIR" -maxdepth 1 -name '*.txt.gz' 2>/dev/null | wc -l | tr -d ' ')"
     if [ "$succ" -eq 0 ]; then
+        local nmiss; nmiss="$(find missing -maxdepth 1 -type f 2>/dev/null | wc -l | tr -d ' ')"
         { echo "FATAL: $PHASE produced ZERO outputs for $PATIENT_ID — all samples failed."
+          [ "$nmiss" -gt 0 ] && echo "  $nmiss sample(s) have a missing/ marker = no BAM after staging; check logs/${PREFIX}.<i>.log for the stageBam.pl error"
           [ -n "$fails" ] && awk -F'\t' '{print $2"\t"$3}' <<<"$fails"; } | tee "$RUNDIR/FLEET_FATAL.$PHASE" >&2
         exit 1
     fi
