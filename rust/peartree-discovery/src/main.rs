@@ -5,6 +5,7 @@
 mod config;
 mod coverage;
 mod discovery;
+mod evidence;
 mod exons;
 mod filters;
 mod intervals;
@@ -16,7 +17,7 @@ mod read;
 mod stats;
 
 use std::fs::File;
-use std::io::{self, BufWriter};
+use std::io::{self, BufWriter, Write};
 
 use flate2::write::GzEncoder;
 use flate2::Compression;
@@ -252,6 +253,24 @@ fn main() -> io::Result<()> {
         std::process::exit(1);
     }
 
+    // TPRT-hallmark keys: report the effective state (every emission-changing key must be
+    // visible in the banner).
+    let sidecar_on = config.evidence_sidecar;
+    if config.ignore_dup_flag {
+        eprintln!("dup flag: IGNORED (0x400 reads kept in clip path, mate pass and sidecar)");
+    }
+    if let Some(n) = config.min_evidence_fragments_per_sample {
+        eprintln!("evidence floor: {n} distinct fragment(s) per breakpoint (fragment mode)");
+    }
+    if sidecar_on {
+        eprintln!(
+            "evidence sidecar: ON (fetch_all_mates {}, caps: {} reads / {} mates per breakpoint side, disc span {} bp)",
+            config.fetch_all_mates, config.max_evidence_reads_per_breakpoint, config.max_mates_per_breakpoint, config.sidecar_disc_span
+        );
+    } else if config.fetch_all_mates {
+        eprintln!("warning: fetch_all_mates has no effect without evidence_sidecar");
+    }
+
     let mut d = Discovery::new(bam, threads, config, exclude, rm_mask);
     d.set_discordant_rte(discordant_rte);
     d.set_exon_model(exon_model);
@@ -263,12 +282,34 @@ fn main() -> io::Result<()> {
     let encoder = GzEncoder::new(BufWriter::new(file), Compression::default());
     let mut writer = BufWriter::new(encoder);
     let mut hallmarks: Vec<u8> = Vec::new();
-    d.output(&mut writer, &mut hallmarks)?;
+    // TPRT: per-read evidence sidecar `<out>.evidence.tsv.gz` (only when enabled). The
+    // `.txt.gz` writer above is untouched by it.
+    let ev_path = format!("{out}.evidence.tsv.gz");
+    let mut ev_writer = if sidecar_on {
+        let f = File::create(&ev_path)?;
+        let mut w = BufWriter::new(GzEncoder::new(BufWriter::new(f), Compression::default()));
+        w.write_all(evidence::HEADER.as_bytes())?;
+        Some(w)
+    } else {
+        None
+    };
+    let names = if sidecar_on { d.reference_names()? } else { Vec::new() };
+    let mut sidecar = ev_writer
+        .as_mut()
+        .map(|w| evidence::Sidecar { w, names, stats: Default::default() });
+    d.output(&mut writer, &mut hallmarks, sidecar.as_mut())?;
     mem::phase("after output");
     // Feature A: append discordant-anchored calls (no-op unless discordant_anchor).
-    d.discordant_rescue(&mut writer)?;
+    d.discordant_rescue(&mut writer, sidecar.as_mut())?;
     writer.into_inner()?.finish()?;
     mem::phase("after rescue+flush");
+    if let Some(mut sc) = sidecar {
+        eprintln!("{}", sc.stats.summary());
+    }
+    if let Some(w) = ev_writer {
+        w.into_inner()?.finish()?.flush()?;
+        eprintln!("evidence: {ev_path}");
+    }
 
     // OBS-1: reject-counter sidecar next to the output.
     let stats_path = format!("{out}.stats.json");

@@ -54,9 +54,9 @@ echo "[$IDX] $ID: discovering $BAM"
 "$BIN" --step discover --bam "$BAM" --out "$TMP" --threads 1 --config "$CFG"
 mv -f "$TMP" "$OUT"
 # The binary writes sidecars next to --out ({out}.stats.json, and — when enabled —
-# {out}.splice.tsv / {out}.hallmarks.tsv). Carry them through the atomic rename so
+# {out}.splice.tsv / {out}.hallmarks.tsv / {out}.evidence.tsv.gz). Carry them through the atomic rename so
 # they end up as $OUT.<ext>, not orphaned under the .tmp name.
-for ext in stats.json splice.tsv hallmarks.tsv; do
+for ext in stats.json splice.tsv hallmarks.tsv evidence.tsv.gz; do
     [ -e "$TMP.$ext" ] && mv -f "$TMP.$ext" "$OUT.$ext"
 done
 echo "[$IDX] $ID: done -> $OUT"

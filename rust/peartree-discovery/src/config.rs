@@ -263,6 +263,32 @@ pub struct DiscoveryConfig {
     pub exon_annotation: Option<String>,
     /// Distinct same-gene exons a candidate's mates must hit to be flagged.
     pub splice_min_exons: usize,
+    // --- TPRT-hallmark overhaul (plans/tprt_hallmarks/SPEC.md); all default-off ---
+    /// Write `<out>.evidence.tsv.gz`: one row per read record (CLIP/POLYA/DISC/MATE) of
+    /// every emitted locus. Non-gating: the `.txt.gz` output is unchanged by this key.
+    pub evidence_sidecar: bool,
+    /// Sidecar only: request the mate of EVERY evidence read (CLIP incl. supplementary,
+    /// DISC), not only the `has_mate` orientation (LEFT reverse / RIGHT forward) that feeds
+    /// the FASTQ :MATE records. The extra mates go to the sidecar only, so the FASTQ is
+    /// unchanged. No effect unless `evidence_sidecar` is on.
+    pub fetch_all_mates: bool,
+    /// Keep 0x400 (duplicate-flagged) reads everywhere in discovery: clip path, mate pass,
+    /// sidecar capture. Independence is decided downstream from the reads, never from the
+    /// flag. Off = legacy: dups dropped in the clip path and mate pass, while the low-MAPQ
+    /// poly-A path never checked the flag (kept as-is for byte-identity).
+    pub ignore_dup_flag: bool,
+    /// When set, the per-breakpoint evidence floor counts DISTINCT FRAGMENTS (qname hash:
+    /// both mates and primary+supplementary of one template count once) instead of reads,
+    /// and a single-fragment cluster goes through the normal consensus path when the floor
+    /// is <= 1. `adaptive_evidence` scales this base like the read floor. `None` = the
+    /// legacy read floor `min_evidence_reads_per_breakpoint`.
+    pub min_evidence_fragments_per_sample: Option<usize>,
+    /// Sidecar caps per breakpoint side; deterministic subset (lowest fragment hash).
+    pub max_mates_per_breakpoint: usize,
+    pub max_evidence_reads_per_breakpoint: usize,
+    /// Sidecar DISC rows: a non-proper high-MAPQ anchor (mate unmapped / other contig /
+    /// far / same strand) pointing at the junction from within this many bp.
+    pub sidecar_disc_span: i64,
 }
 
 impl Default for DiscoveryConfig {
@@ -324,6 +350,13 @@ impl Default for DiscoveryConfig {
             splice_hallmark: false,
             exon_annotation: None,
             splice_min_exons: 2,
+            evidence_sidecar: false,
+            fetch_all_mates: false,
+            ignore_dup_flag: false,
+            min_evidence_fragments_per_sample: None,
+            max_mates_per_breakpoint: 50,
+            max_evidence_reads_per_breakpoint: 200,
+            sidecar_disc_span: 500,
         }
     }
 }
@@ -435,6 +468,13 @@ impl DiscoveryConfig {
             "splice_hallmark" => self.splice_hallmark = parse_bool(val)?,
             "exon_annotation" => self.exon_annotation = Some(val.to_string()),
             "splice_min_exons" => self.splice_min_exons = parse_num(val)?,
+            "evidence_sidecar" => self.evidence_sidecar = parse_bool(val)?,
+            "fetch_all_mates" => self.fetch_all_mates = parse_bool(val)?,
+            "ignore_dup_flag" => self.ignore_dup_flag = parse_bool(val)?,
+            "min_evidence_fragments_per_sample" => self.min_evidence_fragments_per_sample = Some(parse_num(val)?),
+            "max_mates_per_breakpoint" => self.max_mates_per_breakpoint = parse_num(val)?,
+            "max_evidence_reads_per_breakpoint" => self.max_evidence_reads_per_breakpoint = parse_num(val)?,
+            "sidecar_disc_span" => self.sidecar_disc_span = parse_num(val)?,
             other => eprintln!("warning: ignoring unknown config key '{other}'"),
         }
         Ok(())
@@ -553,6 +593,21 @@ mod tests {
         assert!(c.splice_hallmark);
         assert_eq!(c.exon_annotation.as_deref(), Some("/data/exons.bed"));
         assert_eq!(c.splice_min_exons, 3);
+    }
+
+    #[test]
+    fn tprt_keys_default_off_and_parse() {
+        let c = DiscoveryConfig::default();
+        assert!(!c.evidence_sidecar && !c.fetch_all_mates && !c.ignore_dup_flag);
+        assert!(c.min_evidence_fragments_per_sample.is_none());
+        assert_eq!((c.max_mates_per_breakpoint, c.max_evidence_reads_per_breakpoint), (50, 200));
+        let mut c = c;
+        c.set("evidence_sidecar", "true").unwrap();
+        c.set("fetch_all_mates", "true").unwrap();
+        c.set("ignore_dup_flag", "true").unwrap();
+        c.set("min_evidence_fragments_per_sample", "1").unwrap();
+        assert!(c.evidence_sidecar && c.fetch_all_mates && c.ignore_dup_flag);
+        assert_eq!(c.min_evidence_fragments_per_sample, Some(1));
     }
 
     #[test]
