@@ -1,0 +1,55 @@
+consensus	feature	start	end	note
+L1HS	5UTR	1	906	consensus start .. base before ORF1 ATG
+L1HS	ORF1	907	1923	longest 900-1300 nt ORF in first 1.5 kb (incl. stop)
+L1HS	INTER_ORF	1924	1986	ORF1 stop .. ORF2 ATG
+L1HS	ORF2	1987	5814	longest >=3 kb ORF (incl. stop)
+L1HS	ORF2_EN	1987	2703	approx.: ORF2p aa 1-239 endonuclease domain (Feng et al. 1996; Weichenrieder et al. 2004)
+L1HS	ORF2_RT	3478	4305	approx.: ORF2p aa 498-773 reverse-transcriptase domain (Mathias et al. 1991)
+L1HS	3UTR	5815	6019	ORF2 stop .. consensus end (= poly-A start)
+L1HS	POLYA_SIGNAL	6017	6019	AATAAA spanning the element/poly-A boundary (last bases are the poly-A itself)
+L1HS	TA_DIAGNOSTIC	5928	5928	Ta/pre-Ta site (L1.3 5931): A = Ta, G = pre-Ta/older; this consensus carries A
+L1HS	TA_DIAGNOSTIC	5709	5709	Ta/pre-Ta site (L1.3 5712): A = Ta, G = pre-Ta/older; this consensus carries A
+L1PA2	5UTR	1	1026	consensus start .. base before ORF1 ATG
+L1PA2	ORF1	1027	2043	no intact ORF1 in this consensus; ORF1 span transferred from L1HS by alignment
+L1PA2	INTER_ORF	2044	2106	ORF1 stop .. ORF2 ATG
+L1PA2	ORF2	2107	5934	longest >=3 kb ORF (incl. stop)
+L1PA2	ORF2_EN	2107	2823	approx.: ORF2p aa 1-239 endonuclease domain (Feng et al. 1996; Weichenrieder et al. 2004)
+L1PA2	ORF2_RT	3598	4425	approx.: ORF2p aa 498-773 reverse-transcriptase domain (Mathias et al. 1991)
+L1PA2	3UTR	5935	6139	ORF2 stop .. consensus end (= poly-A start)
+L1PA2	POLYA_SIGNAL	6137	6139	AATAAA spanning the element/poly-A boundary (last bases are the poly-A itself)
+L1PA2	TA_DIAGNOSTIC	6048	6048	Ta/pre-Ta site (L1.3 5931): A = Ta, G = pre-Ta/older; this consensus carries G
+L1PA2	TA_DIAGNOSTIC	5829	5829	Ta/pre-Ta site (L1.3 5712): A = Ta, G = pre-Ta/older; this consensus carries G
+L1PA3	5UTR	1	1035	consensus start .. base before ORF1 ATG
+L1PA3	ORF1	1036	2052	longest 900-1300 nt ORF in first 1.5 kb (incl. stop)
+L1PA3	INTER_ORF	2053	2115	ORF1 stop .. ORF2 ATG
+L1PA3	ORF2	2116	5943	longest >=3 kb ORF (incl. stop)
+L1PA3	ORF2_EN	2116	2832	approx.: ORF2p aa 1-239 endonuclease domain (Feng et al. 1996; Weichenrieder et al. 2004)
+L1PA3	ORF2_RT	3607	4434	approx.: ORF2p aa 498-773 reverse-transcriptase domain (Mathias et al. 1991)
+L1PA3	3UTR	5944	6154	ORF2 stop .. consensus end (= poly-A start)
+L1PA3	POLYA_SIGNAL	6152	6154	AATAAA spanning the element/poly-A boundary (last bases are the poly-A itself)
+L1PA3	TA_DIAGNOSTIC	6057	6057	Ta/pre-Ta site (L1.3 5931): A = Ta, G = pre-Ta/older; this consensus carries G
+L1PA3	TA_DIAGNOSTIC	5838	5838	Ta/pre-Ta site (L1.3 5712): A = Ta, G = pre-Ta/older; this consensus carries G
+ALU_Y	A_BOX	14	23	Pol III promoter A box (left monomer)
+ALU_Y	B_BOX	73	83	Pol III promoter B box
+ALU_Y	LEFT_MONOMER	1	117	left (FLAM-C derived) monomer
+ALU_Y	A_RICH_LINKER	118	132	middle A-rich linker
+ALU_Y	RIGHT_MONOMER	133	281	right monomer (ends at the poly-A)
+ALU_YA5	A_BOX	14	23	Pol III promoter A box (left monomer)
+ALU_YA5	B_BOX	73	83	Pol III promoter B box
+ALU_YA5	LEFT_MONOMER	1	117	left (FLAM-C derived) monomer
+ALU_YA5	A_RICH_LINKER	118	132	middle A-rich linker
+ALU_YA5	RIGHT_MONOMER	133	281	right monomer (ends at the poly-A)
+ALU_YB8	A_BOX	14	23	Pol III promoter A box (left monomer)
+ALU_YB8	B_BOX	73	83	Pol III promoter B box
+ALU_YB8	LEFT_MONOMER	1	117	left (FLAM-C derived) monomer
+ALU_YB8	A_RICH_LINKER	118	132	middle A-rich linker
+ALU_YB8	RIGHT_MONOMER	133	288	right monomer (ends at the poly-A)
+SVA_D	HEXAMER	4	40	(CCCTCT)n hexamer repeat at the SVA 5' end (C/T-rich run)
+SVA_D	POLYA_SIGNAL	1832	1834	AATAAA in SINE-R (spans the element/poly-A boundary)
+SVA_D	SINE_R	1345	1834	approx.: last ~490 bp = HERV-K10 LTR-derived SINE-R (Wang et al. 2005)
+SVA_E	HEXAMER	3	53	(CCCTCT)n hexamer repeat at the SVA 5' end (C/T-rich run)
+SVA_E	POLYA_SIGNAL	2040	2042	AATAAA in SINE-R (spans the element/poly-A boundary)
+SVA_E	SINE_R	1553	2042	approx.: last ~490 bp = HERV-K10 LTR-derived SINE-R (Wang et al. 2005)
+SVA_F	HEXAMER	5	59	(CCCTCT)n hexamer repeat at the SVA 5' end (C/T-rich run)
+SVA_F	POLYA_SIGNAL	1832	1837	AATAAA in SINE-R
+SVA_F	SINE_R	1350	1839	approx.: last ~490 bp = HERV-K10 LTR-derived SINE-R (Wang et al. 2005)

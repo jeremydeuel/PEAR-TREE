@@ -122,23 +122,34 @@ orientation. Mates included. annotate builds the covered-element consensus from 
 | `l1_intact.fa` / `.tsv` | L1Base hsflil1_8438 (146, GRCh38), oriented sense, with subfamily (rmsk), Ta/pre-Ta, hs1+hg38 coords |
 | `alu_y_intact.fa` / `.tsv` | young near-full-length AluY* elements (rmsk filtered), sense |
 | `sva_intact.fa` / `.tsv` | near-full-length SVA_A..F, sense |
-| `consensus.fa` | per-class consensus built from the intact sets (`L1HS`, `L1PA2`, `ALU_Y`, `ALU_YA5`, `ALU_YB8`, `SVA_E`, `SVA_F`, …), Dfam consensus as cross-check |
+| `consensus.fa` | per-class consensus built from the intact sets (`L1HS`, `L1PA2`, `L1PA3`, `ALU_Y`, `ALU_YA5`, `ALU_YB8`, `SVA_D`, `SVA_E`, `SVA_F`), sense, poly-A stripped; Dfam identities in `consensus_crosscheck.tsv`, Dfam sequences in `dfam_young.fa` |
+| `consensus_landmarks.tsv` | `consensus feature start end note` (1-based incl.): L1 `5UTR ORF1 INTER_ORF ORF2 ORF2_EN ORF2_RT 3UTR POLYA_SIGNAL TA_DIAGNOSTIC`; Alu `A_BOX B_BOX LEFT_MONOMER A_RICH_LINKER RIGHT_MONOMER`; SVA `HEXAMER SINE_R POLYA_SIGNAL` |
 | `active.tsv` | subset regarded as active/hot (L1HS-Ta, known hot sources) + per-element identity to class consensus |
 | `transduction_sources.tsv` | source elements: id, class, hs1+hg38 coords, strand, reference/non-reference, evidence (paper), hotness |
-| `flanks_3p.fa` | 0–15 kb downstream of each source (sense of the element), repeats soft-masked |
-| `flanks_5p_sva.fa` | upstream flanks of SVA sources (SVA 5' transductions) |
+| `flanks_3p.fa.gz` (+`.fai`/`.gzi`, bgzip) | 0–15 kb (L1) / 0–5 kb (SVA) downstream of each source (sense of the element), repeats soft-masked; record name = source id (`<id>/+`, `<id>/-` when the strand is unknown), description `hs1:chr:start-end(strand)` |
+| `flanks_5p_sva.fa.gz` (+`.fai`/`.gzi`) | 5 kb upstream flanks of SVA sources (SVA 5' transductions), sense, ending at the SVA 5' end |
+| `transduction_stats.tsv`, `manifest.tsv` | published transduction length distribution; file sizes/md5 |
 | `README.md` | provenance, licences, rebuild command |
 
 Documentation: `docs/transduction_sources.html` — includes how **novel sources** are accepted.
 
 ### Novel source rule (annotate)
 
-A unique (non-repeat, MAPQ≥20 on hs1) inserted segment not in `flanks_3p.fa` is a *credible
+A unique (non-repeat, MAPQ≥20 on hs1) inserted segment not in `flanks_3p.fa.gz` is a *credible
 novel 3' transduction source* if, on hs1, it lies within 15 kb **downstream** (strand-aware)
 of a reference L1 that is ≥5.5 kb and ≥ 95 % identical to the L1HS consensus (or of an L1
 insertion called elsewhere in the same cohort), and the insertion carries TPRT hallmarks
 (poly-A after the tag, TSD/EN). Report `TD3P_SOURCE=novel:<hs1 coords>` + `NOVEL_SOURCE` and the
 source element's identity to consensus.
+
+Refinement (rte_library worker, calibrated in `docs/transduction_sources.html`): identity =
+`tools/rte_library/common.cons_identity(element, L1HS consensus)`. **Tier A** (credible) ≥ 0.98
+(95 % of full-length L1HS ≥ 0.989; 95 % of published sources with daughters ≥ 0.991);
+**tier B** (reasonably similar) 0.95–0.98 (L1PA2/young L1PA3; published minimum 0.966) — report,
+but append to the library only with ≥ 2 independent daughters; < 0.95 → not a source. The tag
+must be in source sense (poly-A after its distal end) and start within the window (flank offset
+≥ 0); a distal end 10–35 bp past an AATAAA/ATTAAA in the flank (`pas_hexamers_3p`) is supporting.
+Accepted sources are appended with `tools/rte_library/add_source.py`.
 
 ### annotate output — new columns
 
