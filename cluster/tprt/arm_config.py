@@ -84,7 +84,9 @@ def build(arm):
         tprt_ann = _load(BASES['B'], '_pt_base_config_B_annotate')['annotate']
         for k in ANNOTATE_FROM_TPRT:
             ann[k] = tprt_ann[k]
-    tdir = tmp_dir(arm)
+    # run_ab.sh exports TPRT_ANNOT_TMP=$TPRT_ROOT/tmp/<arm> into each arm's jobs: arm C runs from
+    # arm B's checkout (same stub, TPRT_AB_ARM='B') and must not share B's dfam/sam scratch files
+    tdir = os.environ.get('TPRT_ANNOT_TMP') or tmp_dir(arm)
     ann['tmp'] = lambda extension: lambda sample: os.path.join(tdir, f'{sample}.{extension}')
     ann['exon_annotation'] = RESOURCES['exon_annotation']
     ann['remap_2bit'] = RESOURCES['remap_2bit']

@@ -49,10 +49,13 @@ GENOTYPE_BIN="${GENOTYPE_BIN:-$PT_ROOT_B/rust/peartree-genotype/target/release/p
 BUILD_STAMP="$TPRT_ROOT/build.stamp"
 
 # --- per-arm configs -------------------------------------------------------------
-arm_root()     { case "$1" in A) echo "$PT_ROOT_A" ;; B) echo "$PT_ROOT_B" ;; *) return 1 ;; esac; }
-arm_disc_cfg() { case "$1" in A) echo "$PT_ROOT_A/cluster/config.discovery.grch38" ;; B) echo "$PT_ROOT_B/cluster/config.discovery.grch38.tprt" ;; esac; }
-arm_geno_cfg() { case "$1" in A) echo "$PT_ROOT_A/cluster/config.genotype.grch38" ;; B) echo "$PT_ROOT_B/cluster/config.genotype.grch38.tprt" ;; esac; }
-arm_py_base()  { case "$1" in A) echo "cluster/config.py.grch38" ;; B) echo "cluster/config.py.grch38.tprt" ;; esac; }
+# arm C = arm B with >= 2 distinct fragments per junction WITHIN each colony at discovery
+# (config.discovery.grch38.tprt2frag); same checkout, combine/genotype/annotate configs as B.
+ALL_ARMS=(A B C)
+arm_root()     { case "$1" in A) echo "$PT_ROOT_A" ;; B|C) echo "$PT_ROOT_B" ;; *) return 1 ;; esac; }
+arm_disc_cfg() { case "$1" in A) echo "$PT_ROOT_A/cluster/config.discovery.grch38" ;; B) echo "$PT_ROOT_B/cluster/config.discovery.grch38.tprt" ;; C) echo "$PT_ROOT_B/cluster/config.discovery.grch38.tprt2frag" ;; esac; }
+arm_geno_cfg() { case "$1" in A) echo "$PT_ROOT_A/cluster/config.genotype.grch38" ;; B|C) echo "$PT_ROOT_B/cluster/config.genotype.grch38.tprt" ;; esac; }
+arm_py_base()  { case "$1" in A) echo "cluster/config.py.grch38" ;; B|C) echo "cluster/config.py.grch38.tprt" ;; esac; }
 
 # --- per-patient layout ------------------------------------------------------------
 #   $TPRT_ROOT/<P>/samples.tsv            sample<TAB>proj (fleet.sh samples <P>)

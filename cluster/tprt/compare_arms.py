@@ -433,11 +433,13 @@ def main():
     ap.add_argument('--threads', type=int, default=int(os.environ.get('LSB_DJOB_NUMPROC', '2')))
     ap.add_argument('--skip-discovery-scan', action='store_true', help='do not parse discovery FASTQs')
     ap.add_argument('--top', type=int, default=30, help='rows of A-only / B-only shown in the report')
+    ap.add_argument('--label-b', default='B', help="name of the second arm in the report (e.g. C); report file a<label>_report.md")
     args = ap.parse_args()
 
     os.makedirs(args.out_dir, exist_ok=True)
     A = Arm('A', args.rundir_a, args.eval_a, args.patient, args)
-    B = Arm('B', args.rundir_b, args.eval_b, args.patient, args)
+    B = Arm(args.label_b, args.rundir_b, args.eval_b, args.patient, args)
+    LB = args.label_b
     arms = [x for x in (A, B) if x.present]
     if not arms:
         sys.exit('neither run dir exists')
@@ -464,8 +466,8 @@ def main():
                 keys.insert(keys.index(prev) + 1 if prev in keys else len(keys), k)
             prev = k
     rows = [[k, A.stage.get(k, ''), B.stage.get(k, '')] for k in keys]
-    write_tsv(os.path.join(args.out_dir, 'stage_counts.tsv'), ['stage', 'A', 'B'], rows)
-    md += ['## Loci per stage', '', md_table(['stage', 'A', 'B'], rows), '']
+    write_tsv(os.path.join(args.out_dir, 'stage_counts.tsv'), ['stage', 'A', LB], rows)
+    md += ['## Loci per stage', '', md_table(['stage', 'A', LB], rows), '']
     if B.present and B.fail_reasons:
         md += ['B combine gate (`insertions.evidence.tsv.gz` fail_reason, junction rows):', '',
                md_table(['fail_reason', 'rows'], B.fail_reasons.most_common()), '']
@@ -479,8 +481,8 @@ def main():
         cb = Counter(Locus(n).kind for n in getter(B)) if B.present else Counter()
         for k in sorted(set(ca) | set(cb)):
             kind_rows.append([label, k, ca.get(k, 0), cb.get(k, 0)])
-    write_tsv(os.path.join(args.out_dir, 'kind_counts.tsv'), ['level', 'kind', 'A', 'B'], kind_rows)
-    md += ['## Locus kinds (from the locus name geometry)', '', md_table(['level', 'kind', 'A', 'B'], kind_rows), '']
+    write_tsv(os.path.join(args.out_dir, 'kind_counts.tsv'), ['level', 'kind', 'A', LB], kind_rows)
+    md += ['## Locus kinds (from the locus name geometry)', '', md_table(['level', 'kind', 'A', LB], kind_rows), '']
 
     # ---- classes
     class_rows = []
@@ -489,8 +491,8 @@ def main():
         cb = Counter(r.get(col, '') for r in B.ann.values() if col in r)
         for k in sorted(set(ca) | set(cb), key=lambda k: -(ca.get(k, 0) + cb.get(k, 0))):
             class_rows.append([col, k, ca.get(k, 0), cb.get(k, 0)])
-    write_tsv(os.path.join(args.out_dir, 'class_counts.tsv'), ['column', 'value', 'A', 'B'], class_rows)
-    md += ['## Annotation of the final calls', '', md_table(['column', 'value', 'A', 'B'], class_rows), '']
+    write_tsv(os.path.join(args.out_dir, 'class_counts.tsv'), ['column', 'value', 'A', LB], class_rows)
+    md += ['## Annotation of the final calls', '', md_table(['column', 'value', 'A', LB], class_rows), '']
 
     # ---- carriers x phylo
     md += [f'## Carriers and phylogeny', '',
@@ -541,7 +543,7 @@ def main():
 
     # ---- overlap
     if A.present and B.present:
-        md += [f'## Overlap A vs B (fuzzy, +-{args.tol} bp, one-to-one)', '']
+        md += [f'## Overlap A vs {LB} (fuzzy, +-{args.tol} bp, one-to-one)', '']
         ov = []
         for level, la, lb, fn in (('contract', A.contract or [], B.contract or [], 'matched_contract.tsv'),
                                   ('final calls', list(A.calls or {}), list(B.calls or {}), 'matched_calls.tsv')):
@@ -559,10 +561,10 @@ def main():
                        'phylo_a', 'phylo_b', 'tprt_score_a', 'tprt_score_b'], rows)
             if level == 'final calls':
                 a_only, b_only, call_pairs = ao, bo, rows
-        md += [md_table(['level', 'A', 'B', 'matched', 'identical name', 'full', 'partial (one-sided)', 'A-only', 'B-only'], ov), '']
+        md += [md_table(['level', 'A', LB, 'matched', 'identical name', 'full', 'partial (one-sided)', 'A-only', f'{LB}-only'], ov), '']
         cols = ['locus', 'kind', 'class', 'element', 'structure', 'tags', 'tprt_score', 'tprt_call',
                 'carriers', 'informative', 'carrier_class', 'phylo_label', 'phylo_bucket']
-        for nm, arm, lst in (('B-only', B, b_only), ('A-only', A, a_only)):
+        for nm, arm, lst in ((f'{LB}-only', B, b_only), ('A-only', A, a_only)):
             rows = sorted((arm.row_for(l) for l in lst), key=score_key)
             write_tsv(os.path.join(args.out_dir, f'{nm[0].lower()}_only.tsv'), cols, [[r[c] for c in cols] for r in rows])
             pb = Counter(r['phylo_bucket'] or 'no label' for r in rows)
@@ -605,7 +607,7 @@ def main():
            'arm B reuses). A stage absent here has no finished LSF report yet.', '',
            md_table(hdr, lrows) if lrows else '(no LSF job reports found)', '']
 
-    out = os.path.join(args.out_dir, 'ab_report.md')
+    out = os.path.join(args.out_dir, f'a{LB.lower()}_report.md')
     with open(out, 'w') as fh:
         fh.write('\n'.join(md) + '\n')
     print(f'wrote {out}')

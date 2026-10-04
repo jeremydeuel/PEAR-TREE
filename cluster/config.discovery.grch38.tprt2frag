@@ -1,0 +1,165 @@
+# COPY of config.discovery.grch38.tprt for TPRT A/B arm C. The ONLY setting that differs:
+# min_evidence_fragments_per_sample = 2 (>= 2 distinct fragments per junction WITHIN one colony,
+# Jeremy 2026-10-04) instead of 1 (pooled >= 2 enforced in combine only). Keep the rest in sync
+# with the .tprt file.
+# PEAR-TREE Rust discovery config -- TPRT-hallmark pipeline mode, GRCh38 BAMs.
+#
+# = config.discovery.grch38 (everything below the TPRT block is a verbatim copy of it; keep
+#   them in sync) + the four TPRT keys of plans/tprt_hallmarks/SPEC.md:
+#
+#   evidence_sidecar = true     write <out>.evidence.tsv.gz (= <sample>.txt.gz.evidence.tsv.gz):
+#                               one row per read record (CLIP/POLYA/DISC/MATE) of every emitted
+#                               locus, for combine's pooled >=2-independent-fragment rule.
+#   fetch_all_mates = true      sidecar MATE rows for EVERY evidence read (CLIP incl.
+#                               supplementary, DISC), not only the legacy has_mate orientation.
+#                               The FASTQ :MATE records are unchanged by this key.
+#   ignore_dup_flag = false     0x400-marked duplicates are DROPPED (clip path, mate pass, sidecar)
+#                               as before; combine adds a second, more lenient dedup for the
+#                               duplicates markdup missed (from the reads). Key kept, default false.
+#   drop_dup_in_polya_path = true  the low-MAPQ poly-A path (find_polya), which historically never
+#                               checked 0x400, now drops marked duplicates too (consistent rule).
+#   min_evidence_fragments_per_sample = 1
+#                               per-sample floor counts distinct fragments and admits ONE: single-
+#                               fragment per-colony evidence passes through; combine pools across a
+#                               patient's colonies and enforces >= 2 independent fragments per
+#                               junction (incl. the poly-A end). CHANGES the .txt.gz (many more loci).
+#
+# Caps (defaults, shown for the record): <= 200 CLIP+DISC reads and <= 50 mates per breakpoint
+# side, deterministic subset (lowest qname hash). Memory: the sidecar keeps full records only
+# for breakpoints that can still be emitted; budget stays well inside the 8 GB discovery MEM.
+#
+# The wrappers (cluster/discover_one.sh, cluster/pipeline.sh) carry <out>.evidence.tsv.gz
+# through their tmp->final rename like the other sidecars.
+#
+# Same mode for the other discovery assemblies: append exactly these six lines to a copy of
+# cluster/config.discovery.grch37 (hs37d5/hg19; contigs 1..Y) or of an hs1 config (T2T
+# chr1..chrY, same allowlist as GRCh38 plus a CHM13 exon track for splice_hallmark), e.g.
+#   cp cluster/config.discovery.grch37 cluster/config.discovery.grch37.tprt
+#   then append the TPRT block below. Nothing in these keys is assembly-specific.
+
+# --- TPRT-hallmark keys ---
+evidence_sidecar = true
+fetch_all_mates = true
+ignore_dup_flag = false
+drop_dup_in_polya_path = true
+min_evidence_fragments_per_sample = 2
+max_mates_per_breakpoint = 50
+max_evidence_reads_per_breakpoint = 200
+
+# --- TPRT pairing modes (plans/tprt_hallmarks/SPEC.md, "Pairing modes and locus names") ---
+# Run AFTER the legacy TSD pairing, on breakpoints it left unpaired (a Bp+Bp pair supersedes a
+# Bp+polyA emission). Measured on test/val1 --types all --samples 2 (seed 7, pooled): TSD
+# deletion 0->10/10, EN-independent 0->10/10, L1-mediated deletion 0->10/10, duplication
+# 0->10/10, orphan TD 8->9/10, solitary poly(A) 0->1/10 (+9 one-sided). Stray calls (not at a
+# TP junction) 15 -> 25, all at simulator artefact loci (ART_LONG_TSD paired as L1DUP,
+# ART_LIGATION_PCR as one-sided poly-A) that combine's independence rule / annotate score.
+max_target_site_deletion = 30      # RIGHT up to 30 bp LEFT of LEFT (negative TSD), name L-R with L > R
+allow_blunt_pairs = true           # TSD 0..1 (EN-independent / blunt joins)
+max_l1_mediated_span = 50000       # polarised (poly-A tail + complex clip) far pairs: L1-mediated del/dup
+l1_mediated_min_polya = 10
+one_sided_loci = true              # unpaired poly-A/T-tail junctions -> contig:L-oneside_L / contig:oneside_R-R
+one_sided_min_fragments = 2        # per sample; SPEC-8 reference-tract test always applied
+one_sided_require_polya = true
+one_sided_min_polya = 10
+clip_slippage_junction_spare = 20  # SPEC-8b never rejects a pair whose clip starts with 20 bp of structure
+short_polya_clip = true            # SENS-8: poly-A clip consensus truncated by SBS jitter may be < 12 bp
+short_overhang_evidence = true     # sidecar SHORT rows (reads crossing a junction by 1..20 bp)
+short_overhang_window = 3
+short_overhang_max = 20
+max_short_per_breakpoint = 100
+
+# --- verbatim copy of config.discovery.grch38 follows ---
+# PEAR-TREE Rust discovery config for GRCh38 BAMs (Sanger canpipe output).
+#
+# For the 9x10 blood/HSPC benchmark cohort: bwa-mem mapped to
+# GRCh38_full_analysis_set_plus_decoy_hla (AS reads "NCBI38", NOT "GRCh38"), 3,366 contigs,
+# total reference length 3,217,346,917, chr1 LN 248,956,422.
+#
+# Discovery itself is assembly-agnostic. Only two things matter here:
+#   - min_mapq 60: bwa-mem caps MAPQ at 60; 60 keeps uniquely-placed reads only.
+#   - contig_allowlist: process the primary assembly and nothing else.
+#
+# *** THE ALLOWLIST IS THE WHOLE POINT OF THIS FILE. *** GRCh38 names contigs chr1..chrY;
+# GRCh37/hs37d5 names them 1..Y. Running config.discovery.grch37 against these BAMs matches
+# ZERO contigs and yields an EMPTY discovery file per colony -- with no error, because "no
+# reads on the allowlisted contigs" is indistinguishable from "no evidence found". 90 empty
+# files that look like a clean run is exactly the failure mode this cohort exists to avoid.
+# Check the allowlist against the BAM's @SQ names before every new cohort.
+#
+# The allowlist also drops, by omission: chrM (circular, high coverage), the ~2,800 alt/HLA
+# contigs, chrUn_*/random decoys, and chrEBV. Alts matter more on GRCh38 than the hs37d5
+# decoys did -- a read pair spanning an alt and its primary looks like a structural junction.
+#
+# key = value, '#' starts a comment.
+
+min_mapq = 60
+contig_allowlist = chr1,chr2,chr3,chr4,chr5,chr6,chr7,chr8,chr9,chr10,chr11,chr12,chr13,chr14,chr15,chr16,chr17,chr18,chr19,chr20,chr21,chr22,chrX,chrY
+
+# Feature B -- processed-pseudogene (splice) annotation. ON by default (matches the grch37
+# config). It is non-gating (it only writes a per-colony <out>.splice.tsv; the breakpoint
+# output is unchanged), and exon_annotation MUST match the BAM assembly AND contig naming.
+# The GRCh38 exon model below is Ensembl GRCh38 (chr-prefixed, protein_coding + lncRNA,
+# per-gene merged exons, contig/begin/end/gene, 0-based half-open), built with
+# tools/build_grch38_exon_track.py and staged to the path below. It is REQUIRED when
+# splice_hallmark is on: the discovery binary exits(1) if it is missing or unreadable
+# (see main.rs D5), so a wrong/absent track fails loudly rather than silently annotating
+# nothing -- which is why this can be a safe default. This supersedes the old
+# config.discovery.grch38.splice variant (now identical to this file).
+splice_hallmark = true
+exon_annotation = /lustre/scratch126/casm/teams/team273/users/jd43/grch38.exons.bed.gz
+splice_min_exons = 2
+
+# SPEC-8 -- homopolymer-slippage gate. See config.discovery.grch37 for the full rationale and
+# the measured recall table; the mechanism is reference-sequence-local and carries over
+# unchanged to GRCh38. It needs no reference file -- the aligned part of the read IS the
+# reference -- so nothing here is assembly-specific.
+#
+# CAVEAT, and it is a real one: every number in the grch37 file's recall table was measured on
+# PD44579 hs37d5 against 1kG MEIs called on hs37d5. Those measurements do NOT transfer to this
+# cohort. They were taken on a different donor, a different reference, and a different cohort
+# size, and the 1kG truth set itself has to be lifted to GRCh38 before it can score anything
+# here. Treat these settings as the inherited default, not as validated-for-GRCh38.
+slippage_filter = true
+slippage_min_ref_run = 8      # >= 8 stays clear of the 4 bp TTTT/AA L1-endonuclease motif
+slippage_min_clip_frac = 0.6  # the only real lever: 0.6 -> 41% of band, 0.9 -> 9% (on hs37d5)
+slippage_max_period = 6       # 1 = poly-A only; <=6 also allows (CA)n/(TG)n/(TAAAA)n
+
+# SPEC-8b -- bilateral clip-consensus homopolymer/entropy slippage gate (distinct from SPEC-8:
+# it inspects the two breakpoint CLIP consensuses, not the aligned side). Rejects a paired
+# insertion only when BOTH clips are homopolymer + low-entropy; a real MEI keeps a structured
+# element body on one side, so one-sidedness spares it. Now the shipped DEFAULT (these lines
+# make it explicit). Validated on analysis/mei9x10: 64.3% of phylogeny-breaking FP at 0.45%
+# germline-TP loss. See analysis/mei9x10/SPEC8b_operating_point.md.
+clip_slippage_filter = true
+clip_slippage_min_run = 11
+clip_slippage_max_entropy = 1.95
+clip_slippage_any_base = true  # count poly-A/C/G/T runs (+243 poly-C/G FP at 0 extra TP loss)
+
+# SPEC-3 coverage mask + Feature A discordant anchoring + mate-anchor rescue.
+# Enabled 2026-07-18 to bring this config to the full validated feature set. These were
+# previously left at their default-OFF, so any 9x10 run predating this date did NOT have
+# them -- a rerun with these on is therefore NOT comparable to the slippage-only baseline.
+# Values are the operating point validated in test/fullstack/scale10k/discovery_hs.config.
+#   coverage_mask (SPEC-3)     drop breakpoints whose local coverage exceeds 5x the local
+#                              median; kills pericentromeric satellite FP at ~0 recall loss.
+#   discordant_anchor (Feat A) one-sided discordant discovery: +96 TP at 0 FP on the 10k
+#                              synthetic benchmark -- BUT on the real GRCh38 9x10 germline
+#                              cohort a 12-arm ablation sweep (2026-07-19) found it COSTS
+#                              919 TP acting alone (recall 69.9%->95.5% when OFF): it is the
+#                              single dominant cause of the ~30% GRCh38 recall regression,
+#                              via combine-stage cohort-gate pollution from the ~230k injected
+#                              discordant observations (NOT the discovery output). DISABLED on
+#                              GRCh38 until that combine interaction is fixed. slippage_filter
+#                              (SPEC-8) and coverage_mask were EXONERATED by the same sweep.
+#                              See memory spec8-slippage-filter-grch38-recall.
+#   mate_anchor_rescue         recover a breakpoint from a well-anchored mate.
+coverage_mask = true
+coverage_mask_multiplier = 5.0
+mate_anchor_rescue = true
+discordant_anchor = false
+discordant_min_reads = 3
+discordant_window = 50
+discordant_max_tlen = 1000
+discordant_rescue_span = 300
+discordant_coverage_max_mult = 3.0
+discordant_mate_min_kmer_div = 0.5

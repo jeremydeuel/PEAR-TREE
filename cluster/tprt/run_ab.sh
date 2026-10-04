@@ -7,7 +7,8 @@
 #   bash cluster/tprt/run_ab.sh PD37449 --arm B         # one arm only (the other from an earlier run)
 #   bash cluster/tprt/run_ab.sh PD37449 --cleanup       # also delete the staged BAMs when both arms are done
 #
-# Options: --arm A|B|both (default both)   --dry-run   --cleanup   --no-eval
+# Options: --arm A|B|C|both|all or a list like A,C (default both = A,B; C = B with a 2-fragment
+#          per-colony discovery floor)   --dry-run   --cleanup   --no-eval
 #          --skip-preflight (skip the quick preflight)   --force (resubmit although jobs of the
 #          last submission of that arm are still pending/running)
 #
@@ -40,7 +41,7 @@ usage() { sed -n '2,34p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit "${1:-
 P=""; ARMS="both"; DRY=0; CLEANUP=0; EVAL=1; SKIP_PRE=0; FORCE=0
 while [ $# -gt 0 ]; do
     case "$1" in
-        --arm) ARMS="${2:?--arm needs A|B|both}"; shift 2 ;;
+        --arm) ARMS="${2:?--arm needs A|B|C|both|all or a list like A,C}"; shift 2 ;;
         --arm=*) ARMS="${1#--arm=}"; shift ;;
         --dry-run) DRY=1; shift ;;
         --cleanup) CLEANUP=1; shift ;;
@@ -53,7 +54,12 @@ while [ $# -gt 0 ]; do
     esac
 done
 [ -n "$P" ] || usage
-case "$ARMS" in A) RUN_ARMS=(A) ;; B) RUN_ARMS=(B) ;; both) RUN_ARMS=(A B) ;; *) die "--arm must be A, B or both" ;; esac
+case "$ARMS" in
+    both) RUN_ARMS=(A B) ;;
+    all)  RUN_ARMS=(A B C) ;;
+    *)    IFS=',' read -r -a RUN_ARMS <<<"$ARMS"
+          for a in "${RUN_ARMS[@]}"; do case "$a" in A|B|C) ;; *) die "--arm: unknown arm '$a' (A, B, C, both, all)" ;; esac; done ;;
+esac
 
 # --- per-arm resources (MB) -----------------------------------------------------
 # discovery: post-jemalloc PD44579 cohort peak max 3.1 GB / p95 2.1 GB (job 954062) -> 8 GB for
@@ -150,8 +156,8 @@ for ARM in "${RUN_ARMS[@]}"; do
     fi
     : > "$JF"
     if [ "$ARM" = A ]; then SDM="$A_SD_MEM"; CIM="$A_CI_MEM"; else SDM="$B_SD_MEM"; CIM="$B_CI_MEM"; fi
-    WAIT=""
-    if [ "$ARM" = B ] && [ -n "${JID_SD[A]:-}" ]; then WAIT="ended(${JID_SD[A]}[*])"; fi
+    WAIT=""   # B/C stage nothing new: wait for arm A's stage+discover when A is submitted too
+    if [ "$ARM" != A ] && [ -n "${JID_SD[A]:-}" ]; then WAIT="ended(${JID_SD[A]}[*])"; fi
 
     note "=== arm $ARM: $(arm_disc_cfg "$ARM" | xargs basename) + $(arm_geno_cfg "$ARM" | xargs basename) + src/config.py <- $(arm_py_base "$ARM")"
     env WORKROOT="$WR" \
@@ -164,6 +170,7 @@ for ARM in "${RUN_ARMS[@]}"; do
         STAGE_THROTTLE="$STAGE_THROTTLE" GT_THROTTLE="$GT_THROTTLE" \
         SD_MEM_T1="$SDM" SD_MEM_T2="$SD_MEM_T2" GT_MEM_T1="$GT_MEM_T1" GT_MEM_T2="$GT_MEM_T2" \
         CI_MEM="$CIM" CI_CORES="$CI_CORES" AN_MEM="$AN_MEM" AN_CORES="$AN_CORES" QUEUE="$QUEUE" \
+        TPRT_ANNOT_TMP="$TPRT_ROOT/tmp/$ARM" \
         PT_JOB_PREFIX="${P}_${ARM}" PT_NO_CLEANUP=1 PT_JOBIDS_FILE="$JF" PT_SD_WAIT="$WAIT" \
         bash "$ROOT/cluster/pipeline.sh" submit-list "$P" "$SAMPLES_TSV"
     JID_SD[$ARM]="$(jobid_of "$JF" sd)"
