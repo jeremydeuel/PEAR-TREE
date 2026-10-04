@@ -163,7 +163,11 @@ done
 # ---------------------------------------------------------------- 6 resources
 hdr "reference resources"
 gm="$TPRT_RES/hs1.gene_model.tsv.gz"
-if [ -s "$gm" ]; then ok "hs1 gene model $gm ($(gzip -dc "$gm" | wc -l | tr -d ' ') rows)"
+if [ -s "$gm" ] && gzip -t "$gm" 2>/dev/null; then
+    gmrows="$(gzip -dc "$gm" | wc -l | tr -d ' ')"
+    if [ "$gmrows" -gt 1000 ]; then ok "hs1 gene model $gm ($gmrows rows)"
+    else fail "hs1 gene model $gm has only $gmrows rows — run: bash $TPRT_KIT_DIR/setup.sh resources"; fi
+elif [ -e "$gm" ]; then fail "hs1 gene model $gm is not valid gzip — run: bash $TPRT_KIT_DIR/setup.sh resources (rebuilds it)"
 else fail "no hs1 gene model $gm — run: bash $TPRT_KIT_DIR/setup.sh resources"; fi
 [ -s "$TPRT_RES/hs1.2bit" ] && ok "hs1.2bit $TPRT_RES/hs1.2bit" || fail "no $TPRT_RES/hs1.2bit — run: bash $TPRT_KIT_DIR/setup.sh resources"
 [ -s "$TPRT_RES/hs1.sr.mmi" ] && ok "hs1 minimap2 index $TPRT_RES/hs1.sr.mmi" \

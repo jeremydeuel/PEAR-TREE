@@ -8,6 +8,7 @@
 #   bash cluster/tprt/setup.sh venv         # $VENV: requirements.txt (+edlib, mappy) + scipy, matplotlib
 #   bash cluster/tprt/setup.sh minimap2     # module, else the official static release binary
 #   bash cluster/tprt/setup.sh resources    # hs1.2bit (link existing / download) + hs1 RefSeq gene model
+#   bash cluster/tprt/setup.sh hmmer        # nhmmscan for annotate: old dir / module / PATH / build from source
 #   bash cluster/tprt/setup.sh index        # bsub: hs1 minimap2 sr index (optional; novel-source locator)
 #   bash cluster/tprt/setup.sh configs      # src/config.py stubs in both checkouts + tmp dirs
 #
@@ -108,14 +109,51 @@ step_resources() {
         else fetch "$UCSC/hs1/bigZips/hs1.2bit" "$TPRT_RES/hs1.2bit"; fi
     fi
     # hs1 RefSeq gene model (pseudogene exons for annotate; E2E_REPORT "Annotate round 2")
-    if [ ! -s "$TPRT_RES/hs1.gene_model.tsv.gz" ]; then
-        [ -s "$TPRT_RES/hs1.ncbiRefSeq.gtf.gz" ] || fetch "$UCSC/hs1/bigZips/genes/hs1.ncbiRefSeq.gtf.gz" "$TPRT_RES/hs1.ncbiRefSeq.gtf.gz"
+    # valid = gzip-intact AND non-empty (an earlier kit wrote it uncompressed via a .gz.part name)
+    local gm="$TPRT_RES/hs1.gene_model.tsv.gz"
+    if ! { [ -s "$gm" ] && gzip -t "$gm" 2>/dev/null && [ "$(gzip -dc "$gm" | head -2 | wc -l)" -gt 1 ]; }; then
+        [ -e "$gm" ] && { note "rebuilding invalid/empty gene model $gm"; rm -f "$gm"; }
+        [ -s "$TPRT_RES/hs1.ncbiRefSeq.gtf.gz" ] && gzip -t "$TPRT_RES/hs1.ncbiRefSeq.gtf.gz" 2>/dev/null \
+            || fetch "$UCSC/hs1/bigZips/genes/hs1.ncbiRefSeq.gtf.gz" "$TPRT_RES/hs1.ncbiRefSeq.gtf.gz"
         [ -x "$VENV/bin/python" ] || die "venv first: bash $TPRT_KIT_DIR/setup.sh venv"
+        # the temp name must END in .gz: build_gene_model.py chooses gzip by the output extension
         "$VENV/bin/python" "$PT_ROOT_B/tools/build_gene_model.py" --curated \
-            "$TPRT_RES/hs1.ncbiRefSeq.gtf.gz" "$TPRT_RES/hs1.gene_model.tsv.gz.part"
-        mv -f "$TPRT_RES/hs1.gene_model.tsv.gz.part" "$TPRT_RES/hs1.gene_model.tsv.gz"
+            "$TPRT_RES/hs1.ncbiRefSeq.gtf.gz" "$TPRT_RES/hs1.gene_model.part.tsv.gz"
+        gzip -t "$TPRT_RES/hs1.gene_model.part.tsv.gz" || die "gene model build produced an invalid gzip"
+        mv -f "$TPRT_RES/hs1.gene_model.part.tsv.gz" "$gm"
     fi
     note "hs1 gene model: $TPRT_RES/hs1.gene_model.tsv.gz ($(gzip -dc "$TPRT_RES/hs1.gene_model.tsv.gz" | wc -l) rows; ~252,903 expected)"
+}
+
+# HMMER (nhmmscan, used by annotate's Dfam scan). The base configs point at
+# $JD/hmmer-3.3.2/bin, which no longer exists. Resolve, in order: that dir if it has nhmmscan;
+# ~/.local/bin (where jd43's HMMER lives); an `hmmer` module; nhmmscan already on PATH; else build HMMER from source on the head node.
+# The chosen bin dir is written to $TPRT_RES/hmmer_bin, which arm_config.py uses for both arms.
+HMMER_VERSION="${HMMER_VERSION:-3.4}"
+step_hmmer() {
+    mkdir -p "$TPRT_RES"
+    local d="" m
+    if [ -x "$JD/hmmer-3.3.2/bin/nhmmscan" ]; then d="$JD/hmmer-3.3.2/bin"
+    elif [ -x "$HOME/.local/bin/nhmmscan" ]; then d="$HOME/.local/bin"        # jd43's existing install
+    elif [ -x "$TPRT_ROOT/hmmer-$HMMER_VERSION/bin/nhmmscan" ]; then d="$TPRT_ROOT/hmmer-$HMMER_VERSION/bin"
+    else
+        modinit
+        for m in hmmer "hmmer/$HMMER_VERSION" hmmer-3.4 hmmer-3.3.2; do
+            module load "$m" >/dev/null 2>&1 && command -v nhmmscan >/dev/null 2>&1 && break
+        done
+        command -v nhmmscan >/dev/null 2>&1 && d="$(dirname "$(command -v nhmmscan)")"
+    fi
+    if [ -z "$d" ]; then
+        local src="$TPRT_ROOT/src/hmmer-$HMMER_VERSION"
+        [ -d "$src" ] || { fetch "http://eddylab.org/software/hmmer/hmmer-$HMMER_VERSION.tar.gz" "$TPRT_ROOT/src/hmmer-$HMMER_VERSION.tar.gz"
+                           tar -xzf "$TPRT_ROOT/src/hmmer-$HMMER_VERSION.tar.gz" -C "$TPRT_ROOT/src"; }
+        note "building HMMER $HMMER_VERSION from source (~5 min)"
+        ( cd "$src" && ./configure --prefix="$TPRT_ROOT/hmmer-$HMMER_VERSION" >/dev/null && make -j4 >/dev/null && make install >/dev/null )
+        d="$TPRT_ROOT/hmmer-$HMMER_VERSION/bin"
+    fi
+    [ -x "$d/nhmmscan" ] || die "no usable nhmmscan (tried $d)"
+    printf '%s\n' "$d" > "$TPRT_RES/hmmer_bin"
+    note "HMMER: $d ($("$d/nhmmscan" -h | sed -n 2p | sed 's/^# *//'))"
 }
 
 step_index() {
@@ -158,12 +196,13 @@ EOF
 }
 
 case "${1:-}" in
-    all)       step_worktree; step_build; step_venv; step_minimap2; step_resources; step_configs; step_index ;;
+    all)       step_worktree; step_build; step_venv; step_minimap2; step_resources; step_hmmer; step_configs; step_index ;;
     worktree)  step_worktree ;;
     build)     step_build ;;
     venv)      step_venv ;;
     minimap2)  step_minimap2 ;;
     resources) step_resources ;;
+    hmmer)     step_hmmer ;;
     index)     step_index ;;
     configs)   step_configs ;;
     *) sed -n '2,20p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 1 ;;

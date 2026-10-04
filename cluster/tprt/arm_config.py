@@ -25,6 +25,8 @@ changes which loci are called):
                           both bases ship None (pseudogenes then cannot be proven).
   * annotate.remap_2bit   hs1.2bit (exon-junction cores, novel-source identity).
   * annotate.remap_index  hs1 minimap2 index, ONLY if present (novel-source locator; optional).
+  * annotate.hmmer        the HMMER bin dir chosen by `setup.sh hmmer` ($TPRT_RES/hmmer_bin), if
+                          that file exists; the bases' $JD/hmmer-3.3.2/bin no longer exists.
 
 Resource directory: env TPRT_RES (default /lustre/.../jd43/tprt_ab/resources), tmp root: env
 TPRT_ROOT. Missing files are NOT silently dropped here (except the optional remap_index): the
@@ -78,6 +80,13 @@ def build(arm):
     ann['remap_2bit'] = RESOURCES['remap_2bit']
     if os.path.exists(RESOURCES['remap_index']):
         ann['remap_index'] = RESOURCES['remap_index']
+    # HMMER bin dir resolved by `setup.sh hmmer` (the bases' $JD/hmmer-3.3.2/bin is gone)
+    hb = os.path.join(TPRT_RES, 'hmmer_bin')
+    if os.path.exists(hb):
+        with open(hb) as f:
+            d = f.read().strip()
+        if d:
+            ann['hmmer'] = d
     return cfg
 
 
