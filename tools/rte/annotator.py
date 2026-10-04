@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 from .assembly import Assembler, SiteContext
 from .genome import open_genome
 from .hallmarks import (split_junction, polya_info, locate_site, target_site, en_motif,
-                        slippage_context, foldback)
+                        slippage_context, foldback, parse_locus)
 from .inputs import read_evidence_tsv, read_reads_fa, InsertionEvidence
 from .library import RteLibrary
 from .pseudogene import ExonJunctionIndex, load_exons_by_gene
@@ -63,6 +63,12 @@ class InsertionInput:
         except Exception:
             sv = None
         return cls(ins.title, ins.left_seq or "", ins.right_seq or "", genes, legacy_class, sv)
+
+
+def title_gap(title):
+    """R - L from a numeric locus name `contig:L-R` (None for polyA_/oneside_/disc_ tokens)."""
+    loc = parse_locus(title)
+    return None if loc is None else loc[2] - loc[1]
 
 
 def _resolve_path(spec, sample):
@@ -179,14 +185,22 @@ class RteAnnotator:
         call = classify(asm, self.lib, ctx, self.cfg.get("rte_structure"), self.novel,
                         self._premrna_fn(site), (inp.pseudogene_genes, pg_hits), inp.legacy_class)
         rte_elem = call.element in ("L1", "ALU", "SVA")
-        # ---- site-level tags
-        if site.tsd_len is not None and site.tsd_len < 0:
+        # ---- site-level tags. Discovery pairing modes (SPEC "Pairing modes and locus names")
+        # are recoverable from the locus-name geometry gap = R - L: [-30, -1] target-site
+        # deletion, < -30 L1-mediated deletion, {0, 1} blunt, > 40 L1-mediated duplication OR a
+        # long-TSD chimera (same geometry; decided here from element + poly-A polarity).
+        gap = site.tsd_len if site.tsd_len is not None else title_gap(inp.title)
+        if gap is not None and site.tsd_len is None:
+            site.tsd_len = gap                    # genome-free fallback: the locus geometry
+        md = self.cfg.get("rte_max_target_site_deletion", 30)
+        if gap is not None and -md <= gap < 0:
             call.add("TSD_DELETION")
         if rte_elem:
             sv_intra = inp.sv is not None and inp.sv[0] == 2
-            if (site.tsd_len is not None and site.tsd_len < -100) or (sv_intra and (site.tsd_len or 0) <= 0):
+            polarised = pa.length >= 10 and not pa.both_sided and "CHIMERIC_ENDS" not in call.tags
+            if (gap is not None and gap < -md) or (sv_intra and (gap or 0) <= 0):
                 call.add("L1_MED_DELETION")
-            elif sv_intra and (site.tsd_len or 0) > 0:
+            elif (sv_intra and (gap or 0) > 0) or (gap is not None and gap > 40 and polarised):
                 call.add("L1_MED_DUPLICATION")
             if (pa.length < 10 and (site.tsd_len is None or site.tsd_len <= 0)
                     and call.three_prime_truncated and call.structure != "FULL_LENGTH"):

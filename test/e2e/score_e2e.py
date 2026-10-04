@@ -36,7 +36,7 @@ sys.path.insert(0, REPO)
 from score_types import lift  # noqa: E402
 from tools.rte.calibrate import auc  # noqa: E402
 
-NAME_RE = re.compile(r"^([^:]+):(?:polyA_|disc_)?(\d+)-(?:polyA_|disc_)?(\d+)$")
+NAME_RE = re.compile(r"^([^:]+):(polyA_|disc_|oneside_)?(\d+)-(polyA_|disc_|oneside_)?(\d+)$")
 EV_ROLES = ("CLIP", "POLYA", "DISC", "SPAN", "SHORT")
 
 
@@ -49,8 +49,12 @@ def fnv1a(s: bytes) -> int:
 
 
 def parse_name(n):
+    """(contig, a, b, one_sided). One-sided loci (`oneside_`/`polyA_`/`disc_` token) carry one
+    real breakpoint."""
     m = NAME_RE.match(n)
-    return (m.group(1), int(m.group(2)), int(m.group(3))) if m else None
+    if not m:
+        return None
+    return (m.group(1), int(m.group(3)), int(m.group(5)), bool(m.group(2) or m.group(4)))
 
 
 def read_tsv(path):
@@ -125,10 +129,14 @@ def main():
         r["strand_ref"] = st
 
     def match(name_tuple, r):
+        """True when both breakpoints agree; for a one-sided locus its one real breakpoint
+        must agree with either truth breakpoint."""
         if name_tuple is None or r["c"] is None or name_tuple[0] != r["c"]:
             return False
-        cl, ch = sorted(name_tuple[1:])
         lo, hi = sorted((r["lo"], r["hi"]))
+        if name_tuple[3]:
+            return any(abs(x - y) <= a.window for x in name_tuple[1:3] for y in (lo, hi))
+        cl, ch = sorted(name_tuple[1:3])
         return abs(cl - lo) <= a.window and abs(ch - hi) <= a.window
 
     samples = [f"S{i + 1}" for i in range(a.samples)]
@@ -145,6 +153,7 @@ def main():
     explained_disc = set()
     for r in truth:
         r["disc"] = any(match(c, r) for s in samples for c in dcalls[s])
+        r["disc1s"] = r["disc"] and not any(match(c, r) for s in samples for c in dcalls[s] if not c[3])
         for s in samples:
             for c in dcalls[s]:
                 if match(c, r):
@@ -171,6 +180,8 @@ def main():
             continue
         v["lifted"] += 1
         v["disc"] += r["disc"]
+        v["disc1s"] += r["disc1s"]
+        v["comb1s"] += r["comb_name"] is not None and parse_name(r["comb_name"])[3]
         v["ev"] += r["ev_name"] is not None
         v["pooled"] += r["pooled"]
         v["comb"] += r["comb_name"] is not None
@@ -251,7 +262,7 @@ def main():
         for loc in loci:
             if loc is None:
                 continue
-            lo, hi = min(loc[1:]), max(loc[1:])
+            lo, hi = min(loc[1:3]), max(loc[1:3])
             for rd in bam.fetch(loc[0], max(0, lo - 1500), hi + 1500):
                 q = rd.query_name
                 if q in seen:
@@ -287,7 +298,7 @@ def main():
     # ---------------------------------------------------------------- output
     lines = []
     P = lines.append
-    P("| variant | role | n | lifted | disc | ev | pooled>=2 | comb | elem | struct | strand | tag recall | extra tags | src id | beyond (>=10bp) | beyond >=2 frag | T/L/U/A |")
+    P("| variant | role | n | lifted | disc (1-sided) | ev | pooled>=2 | comb (1-sided) | elem | struct | strand | tag recall | extra tags | src id | beyond (>=10bp) | beyond >=2 frag | T/L/U/A |")
     P("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
     tot = {"TP": Counter(), "ARTEFACT": Counter()}
     for k in sorted(var, key=lambda x: (roles[x] != "TP", x)):
@@ -343,7 +354,8 @@ def _pct(a, b):
 
 def _row(k, role, v):
     calls = "/".join(str(v["call_" + c]) for c in ("TPRT", "LIKELY_TPRT", "UNCERTAIN", "ARTEFACT_LIKE"))
-    return (f"| {k} | {role} | {v['n']} | {v['lifted']} | {v['disc']} | {v['ev']} | {v['pooled']} | {v['comb']} | "
+    return (f"| {k} | {role} | {v['n']} | {v['lifted']} | {v['disc']} ({v['disc1s']}) | {v['ev']} | {v['pooled']} | "
+            f"{v['comb']} ({v['comb1s']}) | "
             f"{_pct(v['elem'], v['ann'])} | {_pct(v['struct'], v['ann'])} | {_pct(v['strand'], v['strand_n'])} | "
             f"{_pct(v['tag_hit'], v['tag_n'])} | {v['tag_extra']} | {_pct(v['src'], v['src_n'])} | "
             f"{_pct(v['beyond'], v['polya_n'])} | {_pct(v['beyond2'], v['polya_n'])} | {calls} |")

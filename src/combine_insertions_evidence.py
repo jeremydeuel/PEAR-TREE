@@ -713,7 +713,15 @@ def apply_evidence(insertions, input_files, cfg, ref_fetch=None):
     n_replaced = 0
     for ins in insertions:
         recs = []
+        open_side = getattr(ins, "open_side", None)
+        if open_side is None:            # Feature-A discordant end: TYPE_RIGHT_DISC=4 / TYPE_LEFT_DISC=5
+            open_side = {4: "RIGHT", 5: "LEFT"}.get(getattr(ins, "type", None))
         for side in SIDES:
+            if side == open_side:
+                # one-sided locus (discovery `oneside_`, Feature-A disc end, kept poly-A
+                # record): the open end has no reads by construction -- only the real side is
+                # gated (it still needs >= min_independent_fragments)
+                continue
             pooled = [r for m in members[ins.name] for r in (rows.get((m, side)) or rows.get((m[1], side), []))]
             rec = evaluate_junction(ins.name, side, pooled, cfg, ref_fetch)
             short_reasons.update(rec.short_reasons)
@@ -762,10 +770,11 @@ def apply_evidence(insertions, input_files, cfg, ref_fetch=None):
 def _member_loci(ins):
     """(file basename, discovery locus id) of every record merged into `ins` -- recorded by
     Insertion.__init__/__iadd__; falls back to (file, name) for objects without it."""
-    ml = getattr(ins, "member_loci", None)
-    if ml:
-        return list(dict.fromkeys(ml))
-    return [(f, ins.name) for f in getattr(ins, "files", [])]
+    ml = list(getattr(ins, "member_loci", None) or [])
+    # + (file, name) for every contributing file: one-sided loci are pooled by name in
+    # intersect_insertions without __iadd__ (their files list is extended instead)
+    ml += [(f, ins.name) for f in getattr(ins, "files", [])]
+    return list(dict.fromkeys(ml))
 
 
 def allele_forward_seq(r: EvidenceRow) -> str:

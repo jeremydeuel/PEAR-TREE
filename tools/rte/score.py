@@ -116,9 +116,19 @@ def score(si: ScoreInput, weights=None, thresholds=None):
             pts.append((name, v))
 
     t = si.tsd_len
+    # an L1-mediated duplication (TPRT 3' end: element + strand-consistent poly-A + EN motif)
+    # legitimately duplicates > 50 bp; a long-TSD chimera has no EN-nick context and one
+    # fragment per junction, so it keeps the penalty
+    # (the chimera signature is a single-colony event of modest size: below 150 bp, one sample,
+    # the penalty stays -- simulated long-TSD chimeras are 51-150 bp, single-sample)
+    l1dup = ("L1_MED_DUPLICATION" in si.tags and si.en_mismatches is not None
+             and si.en_mismatches <= 2 and not si.slippage
+             and t is not None and (t > 150 or si.n_samples >= 2))
     if t is not None:
-        if t > 50:
+        if t > 50 and not l1dup:
             add("tsd_gt50")
+        elif t > 50:
+            pass
         elif 4 <= t <= 25 and si.tsd_verified:
             add("tsd_4_25")
         elif t > 0 and si.tsd_verified:

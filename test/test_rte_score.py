@@ -229,3 +229,20 @@ def test_calibrate_reports_separation_and_roc():
     assert rep["tags"]["CHIMERIC_ENDS"]["recall"] == 1.0
     assert rep["features"]["tsd_gt50"]["frac_ARTEFACT"] > 0 and rep["features"]["tsd_gt50"]["frac_TP"] == 0
     assert "ROC AUC" in format_report(rep)
+
+
+def test_l1_mediated_duplication_vs_long_tsd_chimera():
+    """Same discovery geometry (gap > 40): a large or multi-colony L1-mediated duplication with
+    an EN nick keeps its points; a modest single-colony one keeps the tsd_gt50 chimera penalty."""
+    from tools.rte.score import ScoreInput, score
+    base = dict(element="L1", structure="TRUNCATED_5P", tags=["L1_MED_DUPLICATION"], polya_len=20,
+                en_mismatches=0, tsd_verified=True)
+    _, pts, _ = score(ScoreInput(tsd_len=800, n_samples=1, **base))
+    assert "tsd_gt50" not in pts
+    _, pts, _ = score(ScoreInput(tsd_len=90, n_samples=2, **base))
+    assert "tsd_gt50" not in pts
+    _, pts, call = score(ScoreInput(tsd_len=90, n_samples=1, **base))
+    assert "tsd_gt50" in pts and call not in ("TPRT", "LIKELY_TPRT")
+    base["en_mismatches"] = 4                      # no EN-nick context: chimera-like
+    _, pts, _ = score(ScoreInput(tsd_len=800, n_samples=2, **base))
+    assert "tsd_gt50" in pts

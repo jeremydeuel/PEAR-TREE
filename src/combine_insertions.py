@@ -75,6 +75,31 @@ def write_combined_splice(input_files, insertions, combined_insertions, window=2
     print(f"aggregated {n} discovery splice-hallmark rows -> {out_path}")
 
 
+def _far_flank_trimmed(ins, side, probe=20, min_insert=10):
+    """Clip of `side` for the clipped-remap filter, cut where it runs into the OTHER
+    junction's reference flank. A short insertion is spanned completely by junction reads, so
+    the (indel-aware) clip = insert + far flank; that flank remaps right next to the breakpoint
+    and the filter would discard a real insertion. RIGHT clip (outward = reference-forward):
+    insert + ref[L:]; LEFT clip (outward): rc(insert) + rc(ref[..R]). The far flank is taken
+    from the junction records themselves (left_aligned starts at L, right_aligned ends at R)."""
+    clip = ins.right_clipped if side == "R" else ins.left_clipped
+    if clip is None:
+        return None
+    try:
+        if side == "R":
+            far = str(ins.left_aligned).upper()[:probe] if ins.left_aligned is not None else ""
+        else:
+            far = revcomp(str(ins.right_aligned.revcomp()).upper()[-probe:]) if ins.right_aligned is not None else ""
+    except Exception:
+        return clip
+    if len(far) < probe:
+        return clip
+    k = str(clip).upper().find(far)
+    if k >= min_insert:
+        return clip[:k]
+    return clip
+
+
 def _evidence_paths(combined_insertions):
     """`<stem>.combined.txt.gz` -> (`<stem>.insertions.evidence.tsv.gz`, `<stem>.insertions.reads.fa.gz`)."""
     stem = combined_insertions
@@ -171,10 +196,16 @@ def combine_insertions(input_files, insertions_genotyping_file, combined_inserti
         with gzip.open(insertions_fasta, 'wt', compresslevel=1) as f:
             # Feature A: a discordant-anchored call has a None clipped side; emit only the
             # side(s) that carry sequence (full-info calls still emit both).
+            if CONFIG['combine_insertions'].get('trim_far_flank_before_remap', False):
+                # TPRT mode: a short insertion's clip runs into the far flank; remap only the
+                # inserted part (see _far_flank_trimmed)
+                clips = [(_far_flank_trimmed(i, "L"), _far_flank_trimmed(i, "R")) for i in insertions]
+            else:
+                clips = [(i.left_clipped, i.right_clipped) for i in insertions]
             f.writelines(
-                [(i.left_clipped.fastq(f"{i.name}:L") if i.left_clipped is not None else "")
-                 + (i.right_clipped.fastq(f"{i.name}:R") if i.right_clipped is not None else "")
-                 for i in insertions])
+                [(lc.fastq(f"{i.name}:L") if lc is not None else "")
+                 + (rc_.fastq(f"{i.name}:R") if rc_ is not None else "")
+                 for i, (lc, rc_) in zip(insertions, clips)])
         print(f"running bowtie2 {CONFIG['combine_insertions']['bowtie2_executable']} with index {CONFIG['combine_insertions']['bowtie2_index2']}")
         # -F 2308 = unmapped (4) + secondary (256) + supplementary (2048). Only the primary
         # alignment is ever read below, but -k 1000 emits up to 1000 records per clip, so

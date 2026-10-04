@@ -193,7 +193,7 @@ def test_pooling_follows_combine_grouping(monkeypatch):
     monkeypatch.setattr(ev, "load_evidence", fake_load)
     cfg = {"require_independent_fragments": True, "min_independent_fragments": 2}
     kept, records, failed, _ = apply_evidence([Ins()], ["A.txt.gz", "B.txt.gz"], cfg)
-    assert seen["wanted"] == set(Ins.member_loci)
+    assert set(Ins.member_loci) <= seen["wanted"]
     assert len(kept) == 1 and not failed
     r = [x for x in records["chr1:100-110"] if x.side == "RIGHT"][0]
     assert r.n_independent == 2 and r.n_samples == 2
@@ -285,6 +285,53 @@ def test_short_read_duplicate_of_clip_fragment_collapses():
                 clip_at=58, seq=SREF[SJ - 58:SJ] + ELEM_CLIP[:8])
     rec = _short_junction([_clip_frag(), short])
     assert rec.n_short_used == 1 and rec.n_independent == 1 and rec.n_duplicates == 1
+
+
+def test_one_sided_locus_gates_only_its_real_side(monkeypatch):
+    """`oneside_` / Feature-A loci: the open end has no reads by construction; only the real
+    side is evaluated, and it still needs >= 2 independent fragments."""
+    rows = {(("A.txt.gz", "chr1:100-oneside_100"), "LEFT"): [
+        row(sample="A", side="LEFT", frag="l1", strand="-", outer=200),
+        row(sample="A", side="LEFT", frag="l2", strand="-", outer=230)]}
+    monkeypatch.setattr(ev, "load_evidence", lambda files, wanted: (rows, {"A.txt.gz"}))
+    cfg = {"require_independent_fragments": True, "min_independent_fragments": 2}
+
+    def mk(open_side, typ):
+        class Ins:
+            name = "chr1:100-oneside_100"
+            files = ["A.txt.gz"]
+            right_aligned = left_aligned = None
+        Ins.open_side, Ins.type = open_side, typ
+        return Ins()
+    kept, records, failed, _ = apply_evidence([mk("RIGHT", 4)], ["A.txt.gz"], cfg)
+    assert len(kept) == 1 and [r.side for r in records["chr1:100-oneside_100"]] == ["LEFT"]
+    kept, _, _, _ = apply_evidence([mk(None, 4)], ["A.txt.gz"], cfg)      # Feature-A disc end
+    assert len(kept) == 1
+    rows[(("A.txt.gz", "chr1:100-oneside_100"), "LEFT")].pop()
+    kept, _, failed, _ = apply_evidence([mk("RIGHT", 4)], ["A.txt.gz"], cfg)
+    assert kept == [] and failed == {"chr1:100-oneside_100"}
+
+
+def test_far_flank_trim_for_short_insertions():
+    """A short insertion spanned by the junction reads: the clip = insert + far flank; the
+    remap copy is cut where the far flank starts (else it maps next to the breakpoint)."""
+    from combine_insertions_insertion import Insertion
+    q = lambda s: QualitySeq(s, [30] * len(s))
+    g = GENOME["chr1"]
+    L, R = 5000, 5012                      # 12 bp TSD
+    ins_seq = "GGCTCACGCCTGTAATCC" + "A" * 15
+    right_clip = ins_seq + g[L:L + 30]     # outward from R ... runs into ref[L:]
+    left_clip_fwd = g[R - 30:R] + ins_seq  # ref-forward: ref[..R] + insert (as discovery writes)
+    data = {"LEFT:MATE": [], "RIGHT:MATE": [],
+            "LEFT:CLIPPED": q(left_clip_fwd.lower()), "LEFT:ALIGNED": q(g[L:L + 40]),
+            "RIGHT:CLIPPED": q(right_clip.lower()), "RIGHT:ALIGNED": q(g[R - 40:R])}
+    i = Insertion("chr1", str(L), str(R), data, "/x/A.txt.gz")
+    assert str(ci_mod._far_flank_trimmed(i, "R")).upper() == ins_seq
+    assert str(ci_mod._far_flank_trimmed(i, "L")).upper() == revcomp(ins_seq)
+    # long insertion (no far flank inside the clip) is untouched
+    data["RIGHT:CLIPPED"] = q((ins_seq * 3).lower())
+    i = Insertion("chr1", str(L), str(R), data, "/x/A.txt.gz")
+    assert str(ci_mod._far_flank_trimmed(i, "R")).upper() == ins_seq * 3
 
 
 def test_polya_end_is_gated(monkeypatch):

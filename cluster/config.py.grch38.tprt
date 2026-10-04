@@ -161,6 +161,7 @@ CONFIG = {
         'count_short_overhang': True, #SHORT sidecar reads (1-11 bp overhang) may ADD independent fragments to a junction with >= 1 CLIP fragment
         'short_overhang_min_bases': 5, #overhang bases that must match the junction clip consensus
         'short_overhang_min_ref_mismatch': 2, #overhang mismatches to the reference required (and a better match to the consensus than to the reference)
+        'trim_far_flank_before_remap': True, #clipped-remap filter: cut a junction clip where it runs into the other junction's reference flank (short insertions spanned by the reads)
         'keep_polya_one_sided': False, #intersect: keep legacy Bp+polyA records as one-sided loci on their real junction (discovery's one_sided_loci `oneside_` loci are always kept); off until the evidence gate skips the open side
     },
     'annotate': { #necessary for annotate_v2.py (step 3, optional element classification)

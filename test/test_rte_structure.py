@@ -148,7 +148,10 @@ def test_en_independent():
 def test_l1_mediated_deletion():
     r = annotate(L1[5000:CEND] + A, tsd=-300)
     assert r.tsd_len == -300
-    assert "TSD_DELETION" in r.tags and "L1_MED_DELETION" in r.tags
+    # SPEC pairing modes: gap < -30 is an L1-mediated deletion, not a target-site deletion
+    assert "L1_MED_DELETION" in r.tags and "TSD_DELETION" not in r.tags
+    r = annotate(L1[5000:CEND] + A, tsd=-12)
+    assert "TSD_DELETION" in r.tags and "L1_MED_DELETION" not in r.tags
 
 
 def test_chimeric_ends_artefact():
