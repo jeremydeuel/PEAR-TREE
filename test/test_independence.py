@@ -101,6 +101,192 @@ def test_cross_sample_independent_unless_identical():
     assert len(clusters) == 1 and n_cross == 1          # exact identity -> flagged + collapsed
 
 
+# --------------------------------------------------------------------- lenient dedup (2nd pass)
+
+CLIP_TAIL = "GATTACAGATTACAGATTACAGATTACAGATTACAGATTA"
+
+
+def _shifted(frag, d_outer, d_mate, **kw):
+    """A RIGHT CLIP fragment whose read starts d_outer bp later (same junction at 110) and
+    whose mapped mate starts d_mate bp later."""
+    n_al = 60 - d_outer
+    return row(frag=frag, pos=50 + d_outer, outer=50 + d_outer, cigar=f"{n_al}M40S", clip_at=n_al,
+               seq="A" * n_al + kw.pop("clip", CLIP_TAIL), mref="chr1", mpos=400 + d_mate,
+               mstrand="-", **kw)
+
+
+@pytest.mark.parametrize("d_outer,d_mate", [(3, 0), (0, 3), (-3, 3), (3, -3)])
+def test_lenient_dup_start_end_shift_with_same_mate(d_outer, d_mate):
+    rows = [_shifted("f1", 0, 0), _shifted("f2", d_outer, d_mate)]
+    stats = {}
+    clusters, n_dup, _ = independent_clusters(collapse_fragments(rows), stats=stats)
+    assert len(clusters) == 1 and n_dup == 1 and stats == {"n_dup_coord": 1}
+
+
+def test_lenient_dup_shift_but_different_mate_is_independent():
+    rows = [_shifted("f1", 0, 0), _shifted("f2", 3, 60)]
+    assert n_ind(rows) == 2
+
+
+def test_lenient_dup_tolerance_is_configurable():
+    rows = [_shifted("f1", 0, 0), _shifted("f2", 3, 3)]
+    clusters, _, _ = independent_clusters(collapse_fragments(rows), ev.DedupParams(tol=2))
+    assert len(clusters) == 2
+
+
+def test_lenient_dup_polya_length_and_degenerate_tail():
+    """Same molecule read twice: poly-A length differs (SBS jitter) and the sequence 3' of the
+    poly-A is low-quality junk in one copy -> still a duplicate (unmapped mates, sequence path)."""
+    mate = "ACGTTGCAGGTCCATGATCCAGTTGACCAGTAGGCATCGTTAGCATGCCTAGGATCA"
+    c1 = "GGCTCACGCCTGTAATCCCAGC" + "A" * 18 + "GTCAGGATCCTGACCGTTAG"
+    c2 = "GGCTCACGCCTGTAATCCCAGC" + "A" * 21 + "GTNAGCATGGTGACTTTAG"
+    rows = [row(frag="f1", seq="C" * 60 + c1, cigar=f"60M{len(c1)}S"),
+            row(frag="f1", r12=2, role="MATE", ref="*", pos=-1, outer=-1, seq=mate),
+            row(frag="f2", outer=52, pos=52, seq="C" * 58 + c2, cigar=f"58M{len(c2)}S", clip_at=58),
+            row(frag="f2", r12=2, role="MATE", ref="*", pos=-1, outer=-1, seq=mate[2:] + "TT")]
+    stats = {}
+    clusters, _, _ = independent_clusters(collapse_fragments(rows), stats=stats)
+    assert len(clusters) == 1 and stats == {"n_dup_seq": 1}
+
+
+def test_lenient_dup_real_clip_difference_is_independent():
+    """Same coordinates, but the non-poly-A clip differs by more than the edit budget."""
+    other = "GATTCCTGATCAGTTACAGGTTCAGATTACGAATTTGTTA"
+    rows = [_shifted("f1", 0, 0), _shifted("f2", 2, 1, clip=other)]
+    assert n_ind(rows) == 2
+
+
+def test_allele_forward_orientation_of_mates():
+    """reads.fa promises allele-forward sequence: a MATE stored on the same strand as its
+    partner (placed on a paralog in the opposite orientation) is reverse-complemented."""
+    s = "ACGTTGCAGGTCCATGA"
+    # partner forward (0x20 unset), mate reverse (0x10 set): FR geometry -> stored as is
+    assert ev.allele_forward_seq(row(role="MATE", flag=0x1 | 0x10 | 0x80, seq=s)) == s
+    # partner forward, mate also forward (paralog in the other orientation / unmapped as read)
+    assert ev.allele_forward_seq(row(role="MATE", flag=0x1 | 0x8 | 0x80, seq=s)) == revcomp(s)
+    # partner reverse (0x20), mate forward -> as is
+    assert ev.allele_forward_seq(row(role="MATE", flag=0x1 | 0x20 | 0x80, seq=s)) == s
+    # junction reads are never touched
+    assert ev.allele_forward_seq(row(role="CLIP", flag=0x1 | 0x10, seq=s)) == s
+
+
+def test_pooling_follows_combine_grouping(monkeypatch):
+    """Evidence of every discovery locus merged into one Insertion pools (colony A
+    chr1:100-110 + colony B chr1:101-110), not only rows whose locus id equals the name."""
+    rows = {(("A.txt.gz", "chr1:100-110"), "RIGHT"): [row(sample="A", frag="a1")],
+            (("B.txt.gz", "chr1:101-110"), "RIGHT"): [row(sample="B", frag="b1", outer=55, pos=55)],
+            (("A.txt.gz", "chr1:100-110"), "LEFT"): [row(sample="A", side="LEFT", frag="a2", strand="-", outer=200)],
+            (("B.txt.gz", "chr1:101-110"), "LEFT"): [row(sample="B", side="LEFT", frag="b2", strand="-", outer=210)]}
+
+    class Ins:
+        name = "chr1:100-110"
+        files = ["A.txt.gz", "B.txt.gz"]
+        member_loci = [("A.txt.gz", "chr1:100-110"), ("B.txt.gz", "chr1:101-110")]
+        right_aligned = left_aligned = None
+
+    seen = {}
+
+    def fake_load(files, wanted):
+        seen["wanted"] = set(wanted)
+        return rows, {"A.txt.gz", "B.txt.gz"}
+
+    monkeypatch.setattr(ev, "load_evidence", fake_load)
+    cfg = {"require_independent_fragments": True, "min_independent_fragments": 2}
+    kept, records, failed, _ = apply_evidence([Ins()], ["A.txt.gz", "B.txt.gz"], cfg)
+    assert seen["wanted"] == set(Ins.member_loci)
+    assert len(kept) == 1 and not failed
+    r = [x for x in records["chr1:100-110"] if x.side == "RIGHT"][0]
+    assert r.n_independent == 2 and r.n_samples == 2
+    assert r.member_loci == "chr1:100-110,chr1:101-110"
+
+
+def test_insertion_iadd_records_member_loci():
+    from combine_insertions_insertion import Insertion
+    q = lambda s: QualitySeq(s, [30] * len(s))
+    data = lambda: {"LEFT:MATE": [], "RIGHT:MATE": [], "LEFT:CLIPPED": q("acgtacgtacgt"),
+                    "LEFT:ALIGNED": q("ACGTACGTAAAA"), "RIGHT:CLIPPED": q("ttttacgtacgt"),
+                    "RIGHT:ALIGNED": q("GGGGACGTACGT")}
+    a = Insertion("chr1", "100", "110", data(), "/x/A.txt.gz")
+    b = Insertion("chr1", "101", "110", data(), "/x/B.txt.gz")
+    a += b
+    assert a.member_loci == [("A.txt.gz", "chr1:100-110"), ("B.txt.gz", "chr1:101-110")]
+
+
+# --------------------------------------------------------------------- SHORT overhang reads
+
+_SR = random.Random(77)
+SREF = "".join(_SR.choice("ACGT") for _ in range(2000))
+SREF = SREF[:994] + "AAAAAA" + SREF[1000:]        # reference A-tract ending at 1000 (inward)
+SJ = 1300                                          # RIGHT junction used by most cases
+ELEM_CLIP = "GGCTCACGCCTGTAATCCCAGCACTTTGGGAGGCCGAGGC"
+SHORT_CFG = {"count_short_overhang": True, "min_independent_fragments": 2}
+
+
+def _sfetch(contig, start, end):
+    return SREF[max(0, start):end]
+
+
+def _clip_frag(frag="c1", j=SJ, clip=ELEM_CLIP, n_al=60, sample="S1"):
+    return row(sample=sample, frag=frag, ref="chr1", pos=j - n_al, outer=j - n_al,
+               cigar=f"{n_al}M{len(clip)}S", clip_at=n_al, seq=SREF[j - n_al:j] + clip)
+
+
+def _short_frag(over, frag="s1", j=SJ, n_al=90, clipped=True, sample="S1"):
+    cig = f"{n_al}M{len(over)}S" if clipped else f"{n_al + len(over)}M"
+    return row(sample=sample, frag=frag, role="SHORT", ref="chr1", pos=j - n_al, outer=j - n_al,
+               cigar=cig, clip_at=n_al, seq=SREF[j - n_al:j] + over)
+
+
+def _short_junction(rows, cfg=SHORT_CFG):
+    return evaluate_junction("chr1:1290-1300", "RIGHT", rows, cfg, _sfetch)
+
+
+def test_short_overhang_matching_consensus_counts():
+    assert sum(a != b for a, b in zip(ELEM_CLIP[:8], SREF[SJ:SJ + 8])) >= 2
+    rec = _short_junction([_clip_frag(), _short_frag(ELEM_CLIP[:8])])
+    assert rec.n_short_used == 1 and rec.n_independent == 2 and rec.n_independent_no_short == 1
+    assert rec.n_short_mate_inside == 1          # mate unmapped (no MATE row, mref '*')
+    # off by default: SHORT rows are invisible
+    rec = _short_junction([_clip_frag(), _short_frag(ELEM_CLIP[:8])], {"min_independent_fragments": 2})
+    assert rec.n_short_used == 0 and rec.n_independent == 1 and all(r.role != "SHORT" for r in rec.rows)
+
+
+def test_short_overhang_too_short_not_counted():
+    rec = _short_junction([_clip_frag(), _short_frag(ELEM_CLIP[:3])])
+    assert rec.n_short_used == 0 and rec.n_short_rejected == 1 and rec.n_independent == 1
+    assert rec.short_reasons == {"overhang_too_short": 1}
+
+
+def test_short_overhang_matching_reference_not_counted():
+    rec = _short_junction([_clip_frag(), _short_frag(SREF[SJ:SJ + 8], clipped=False)])
+    assert rec.n_short_used == 0 and rec.n_short_rejected == 1
+    # even when the consensus itself starts like the reference (microhomology), an overhang
+    # that equals the reference proves nothing
+    rec = _short_junction([_clip_frag(clip=SREF[SJ:SJ + 8] + ELEM_CLIP),
+                           _short_frag(SREF[SJ:SJ + 8], clipped=False)])
+    assert rec.n_short_used == 0 and rec.short_reasons == {"matches_reference": 1}
+
+
+def test_short_polya_overhang_next_to_reference_a_tract_not_counted():
+    clip = "A" * 20 + ELEM_CLIP
+    rec = evaluate_junction("chr1:990-1000", "RIGHT",
+                            [_clip_frag(j=1000, clip=clip), _short_frag("A" * 8, j=1000)], SHORT_CFG, _sfetch)
+    assert rec.n_short_used == 0 and rec.short_reasons == {"ref_homopolymer": 1}
+
+
+def test_short_only_junction_not_supported():
+    rec = _short_junction([_short_frag(ELEM_CLIP[:8]), _short_frag(ELEM_CLIP[:9], frag="s2", n_al=80)])
+    assert rec.n_independent == 0 and rec.short_reasons == {"no_clip_fragment": 2}
+
+
+def test_short_read_duplicate_of_clip_fragment_collapses():
+    """A SHORT read of the same molecule as the CLIP read (start shifted 2 bp, same bases)."""
+    short = row(frag="s1", role="SHORT", ref="chr1", pos=SJ - 58, outer=SJ - 58, cigar="58M8S",
+                clip_at=58, seq=SREF[SJ - 58:SJ] + ELEM_CLIP[:8])
+    rec = _short_junction([_clip_frag(), short])
+    assert rec.n_short_used == 1 and rec.n_independent == 1 and rec.n_duplicates == 1
+
+
 def test_polya_end_is_gated(monkeypatch):
     """RIGHT has 2 independent fragments, the poly-A (LEFT, outward poly-T) end only one."""
     elem = "GGCTCACGCCTGTAATCCCGGATCCAGT"
@@ -231,13 +417,15 @@ def build_fixture(d, with_sidecar=True):
     a, b = Sample("sampleA"), Sample("sampleB")
     # X RIGHT: A has 4 fragments, two of them PCR duplicates (same read + same mate);
     # poly-A lengths differ within each sample so discovery's column-wise consensus
-    # (emulated in Sample.write) truncates at the poly-A, as on real data
-    a.add_right(X, 10015, 18, 12, 5)
-    f = a.add_right(X, 10015, 20, 14, 9)
-    a.add_right(X, 10015, 20, 14, 9)        # PCR dup of f (new qname, same molecule)
-    a.add_right(X, 10015, 16, 15, 7)
-    b.add_right(X, 10015, 16, 13, 3)
-    b.add_right(X, 10015, 19, 12, 11)
+    # (emulated in Sample.write) truncates at the poly-A, as on real data. Unmapped mates start
+    # past the poly-A at distinct offsets: the lenient dedup compares sequence only up to a long
+    # poly-A, so mates inside ELEM + poly-A would be indistinguishable (= duplicates).
+    a.add_right(X, 10015, 18, 12, 45)
+    f = a.add_right(X, 10015, 20, 14, 60)
+    a.add_right(X, 10015, 20, 14, 60)       # PCR dup of f (new qname, same molecule)
+    a.add_right(X, 10015, 16, 15, 75)
+    b.add_right(X, 10015, 16, 13, 48)
+    b.add_right(X, 10015, 19, 12, 85)
     # X LEFT: one fragment per sample
     a.add_left(X, 10000, 17, 30)
     b.add_left(X, 10000, 21, 34)

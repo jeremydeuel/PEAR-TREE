@@ -13,6 +13,12 @@ is a credible novel 3' transduction source when, on the remap genome (hs1):
     elsewhere in the same cohort),
   * and the insertion carries TPRT hallmarks (checked by the caller: poly-A after the tag, TSD/EN).
 Reported as TD3P_SOURCE=novel:<contig>:<start>-<end> + NOVEL_SOURCE with the source identity.
+
+Tiers (SPEC refinement, calibrated in docs/transduction_sources.html): identity is
+tools/rte_library/common.cons_identity (edlib infix both ways, robust to ragged ends) of the source
+L1 to the L1HS consensus. Tier A (credible) >= `novel_source_tier_a` (0.98); tier B (reasonably
+similar, L1PA2 / young L1PA3) in [`novel_source_min_identity` (0.95), 0.98) -- reported (tier in
+SourceCall.tier / rte_detail novel_tier) but worth fewer score points; < 0.95 is not a source.
 """
 from __future__ import annotations
 
@@ -24,12 +30,48 @@ from dataclasses import dataclass
 
 from .sequtil import rc
 
+
+def _edlib_identity(query, target):
+    """1 - edit/len(query) of the best infix (HW) alignment of query in target."""
+    import edlib
+    if not query or not target:
+        return 0.0
+    r = edlib.align(query, target, mode="HW", task="distance")
+    return 1.0 - r["editDistance"] / len(query) if r["editDistance"] >= 0 else 0.0
+
+
+def _load_common_cons_identity():
+    import importlib.util
+    import os
+    p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "rte_library", "common.py")
+    try:
+        spec = importlib.util.spec_from_file_location("_rte_library_common", p)
+        m = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(m)
+        return m.cons_identity
+    except Exception:
+        return None
+
+
+_COMMON_CONS_IDENTITY = _load_common_cons_identity()
+
+
+def cons_identity(seq, cons):
+    """Identity of a genomic element to a class consensus, robust to ragged ends: the better of
+    (consensus infix in element) and (element infix in consensus). Uses
+    tools/rte_library/common.cons_identity (the definition the tiers were calibrated with) and
+    falls back to an edit-distance approximation when that file is unavailable."""
+    if _COMMON_CONS_IDENTITY is not None:
+        return _COMMON_CONS_IDENTITY(seq, cons)
+    return max(_edlib_identity(cons.upper(), seq.upper()), _edlib_identity(seq.upper(), cons.upper()))
+
 _REGION = re.compile(r"^(.+):(\d+)-(\d+)$")
 
 DEFAULTS = {
     "novel_source_max_dist": 15000,
     "novel_source_min_len": 5500,
     "novel_source_min_identity": 0.95,
+    "novel_source_tier_a": 0.98,
     "novel_source_min_mapq": 20,
     "novel_source_min_seg": 25,
 }
@@ -44,6 +86,7 @@ class SourceCall:
     novel: bool = False
     identity: float = 0.0  # novel: identity of the source L1 to the L1HS consensus
     detail: str = ""
+    tier: str = ""         # novel: 'A' (>= 0.98) or 'B' (0.95-0.98); '' for known sources
 
 
 def known_source(flank_segments, lib):
@@ -62,8 +105,12 @@ def known_source(flank_segments, lib):
     if not per:
         return None
     sid = max(per, key=per.get)
-    n = sum(1 for s in flank_segments if lib.source_for_flank(s.target) == sid and s.strand > 0)
-    return SourceCall(sid, ends[sid], starts[sid], n)
+    hits = [s for s in flank_segments if lib.source_for_flank(s.target) == sid and s.strand > 0]
+    # strandless source (`<id>/+` / `<id>/-` flanks): the flank that matched in sense resolves
+    # the source orientation -- report it
+    strands = sorted({lib.flank_strand(s.target) for s in hits} - {""})
+    detail = f"source_strand={','.join(strands)}" if strands else ""
+    return SourceCall(sid, ends[sid], starts[sid], len(hits), detail=detail)
 
 
 class L1Rmsk:
@@ -169,15 +216,7 @@ class NovelSourceFinder:
             if seq:
                 if strand == "-":
                     seq = rc(seq)
-                import mappy
-                al = mappy.Aligner(seq=cons, preset="map-ont")
-                m = b = 0
-                for h in al.map(seq):
-                    if h.strand == 1:
-                        m += h.mlen
-                        b += h.blen
-                if b:
-                    ident = m / b
+                ident = cons_identity(seq.upper(), cons)
         if ident is None:
             ident = 1.0 - div / 100.0        # RepeatMasker divergence as a proxy
         self._ident_cache[key] = ident
@@ -214,5 +253,7 @@ class NovelSourceFinder:
             return None
         dist, src, ident, name = best
         off_end = dist + (e - s)
+        tier = "A" if ident >= c["novel_source_tier_a"] else "B"
         return SourceCall(f"novel:{src}", off_end, dist, 1, True, round(ident, 4),
-                          f"source={name};tag={contig}:{s}-{e}({gstrand});dist={dist}")
+                          f"source={name};tag={contig}:{s}-{e}({gstrand});dist={dist};tier={tier}",
+                          tier)

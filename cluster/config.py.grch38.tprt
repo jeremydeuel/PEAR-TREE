@@ -154,9 +154,13 @@ CONFIG = {
         'require_independent_fragments': True, #drop insertions with any junction (LEFT/RIGHT, incl. the poly-A end) below min_independent_fragments, pooled over all colonies
         'min_independent_fragments': 2, #independent fragments per junction after (sample,frag) collapse + within-sample PCR/optical dedup (never the 0x400 flag)
         'indel_aware_consensus': True, #use the homopolymer-aware pooled clip consensus (src/indel_consensus.py) in combined.txt.gz when >= the legacy longest clip
-        'dup_coord_tolerance': 2, #bp tolerance on read/mate outer coordinates for within-sample duplicates
-        'dup_max_edit': 2, #max edit distance of junction-clip (and mate) sequence for within-sample duplicates
+        'dup_coord_tolerance': 5, #bp tolerance on read outer, mate outer/mpos and junction position (lenient 2nd dedup; 0x400 reads are dropped by discovery)
+        'dup_max_edit': 3, #edit budget for clip/mate sequence (homopolymer-compressed, cut after a long poly-A) of within-sample duplicates
+        'dup_max_edit_frac': 0.02, #... or this fraction of the compared length, whichever is larger
         'polya_min_len': 8, #min consensus homopolymer A/T run reported as the poly-A (evidence.tsv polya_len_*/beyond_polya)
+        'count_short_overhang': True, #SHORT sidecar reads (1-11 bp overhang) may ADD independent fragments to a junction with >= 1 CLIP fragment
+        'short_overhang_min_bases': 5, #overhang bases that must match the junction clip consensus
+        'short_overhang_min_ref_mismatch': 2, #overhang mismatches to the reference required (and a better match to the consensus than to the reference)
     },
     'annotate': { #necessary for annotate_v2.py (step 3, optional element classification)
         # NOTE: annotate works in bowtie2_index2 (hs1) space, NOT GRCh38 — so rmsk and
@@ -176,6 +180,12 @@ CONFIG = {
         'insertions_file': lambda sample: f'insertions/{sample}.combined.txt.gz',
         'polya_min_len': 12, #minimum homopolymer run at the clip junction to count as a poly-A/T tail
         'require_polya_hallmark': False, #True = require the poly-A hallmark for an RTE family call
+        # TPRT-hallmark annotation (tools/rte, plans/tprt_hallmarks/SPEC.md). A relative path is
+        # resolved against the repository root at runtime (tools/rte/annotator.py).
+        'rte_library': 'resources/rte_library',
+        'genome_2bit': '/lustre/scratch126/casm/teams/team273/users/jd43/hg38.2bit', # discovery genome (same as combine): TSD / EN motif / slippage context
+        'remap_2bit': None, # hs1 .2bit (novel-source identity, exon-junction cores); None = off until staged on the farm
+        'remap_rmsk': '/lustre/scratch126/casm/teams/team273/users/jd43/pt_hu_trees/hs1.repeatMasker.out.gz', # novel-source rule (young full-length L1s on hs1)
     },
     'version': '1.1'
 }

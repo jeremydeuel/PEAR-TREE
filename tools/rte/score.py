@@ -47,7 +47,8 @@ WEIGHTS = {
     "twin_priming_ge590": 1.0,
     "twin_priming_lt590": -1.5,
     "exon_junction": 3.0,            # pseudogene: exon-exon junction read (intron removed)
-    "novel_source": 1.0,             # credible novel transduction source (SPEC rule)
+    "novel_source": 1.0,             # credible (tier A, >= 98 % to L1HS) novel transduction source
+    "novel_source_tier_b": 0.5,      # tier B source (95-98 %, L1PA2 / young L1PA3): weaker
     # --- support (pooled after combine, SPEC independence rule) -------------------------------
     "junction_supported": 0.5,       # per junction with >= 2 independent fragments (max 3)
     "multi_colony": 1.0,             # seen in >= 2 colonies/samples (independent libraries)
@@ -98,6 +99,7 @@ class ScoreInput:
     foldback: bool = False
     recurrent: bool = False
     cross_sample_identical: bool = False
+    novel_tier: str = ""
 
 
 def score(si: ScoreInput, weights=None, thresholds=None):
@@ -152,7 +154,7 @@ def score(si: ScoreInput, weights=None, thresholds=None):
     if "EN_INDEPENDENT" in si.tags:
         add("en_independent")
     if "NOVEL_SOURCE" in si.tags:
-        add("novel_source")
+        add("novel_source_tier_b" if si.novel_tier == "B" else "novel_source")
     if si.junctions_supported:
         add("junction_supported", w["junction_supported"] * min(3, si.junctions_supported))
     if si.n_samples >= 2:

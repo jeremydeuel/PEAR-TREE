@@ -40,8 +40,8 @@ import edlib
 from indel_consensus import ClipRead, ConsensusResult, indel_aware_consensus, revcomp
 from quality_seq import QualitySeq
 
-EVIDENCE_ROLES = ("CLIP", "POLYA", "DISC", "SPAN")  # MATE rows only attach to a fragment
-_ROLE_PRIORITY = {"CLIP": 0, "POLYA": 1, "DISC": 2, "SPAN": 3, "MATE": 9}
+EVIDENCE_ROLES = ("CLIP", "POLYA", "DISC", "SPAN", "SHORT")  # MATE rows only attach to a fragment
+_ROLE_PRIORITY = {"CLIP": 0, "POLYA": 1, "DISC": 2, "SPAN": 3, "SHORT": 4, "MATE": 9}
 SIDES = ("LEFT", "RIGHT")
 
 EVIDENCE_TSV_COLUMNS = [
@@ -51,6 +51,8 @@ EVIDENCE_TSV_COLUMNS = [
     "beyond_polya", "beyond_polya_support",
     # additive diagnostics (appended; see SPEC)
     "polya_end", "n_duplicates", "n_cross_sample_identical", "fail_reason", "consensus_stop",
+    "n_dup_coord", "n_dup_seq", "member_loci",
+    "n_short_used", "n_short_rejected", "n_short_mate_inside", "n_independent_no_short",
 ]
 
 
@@ -144,25 +146,30 @@ def _clip_at_from_cigar(cigar: str, side: str, n: int) -> int:
 
 
 def load_evidence(input_files: List[str], wanted_loci) -> (Dict, set):
-    """Stream every existing sidecar; keep rows whose locus is in `wanted_loci`.
-    Returns ({(locus, side): [EvidenceRow]}, {basename of txt.gz with a sidecar})."""
+    """Stream every existing sidecar; keep rows whose locus is in `wanted_loci` -- either a
+    set of locus ids (any file) or a set of (txt.gz basename, locus) pairs (that file only).
+    Returns ({(locus, side): [EvidenceRow]}, {basename of txt.gz with a sidecar}); with
+    (file, locus) pairs the key is ((file, locus), side)."""
     rows = defaultdict(list)
     have = set()
     for f in input_files:
         sp = sidecar_path(f)
         if not os.path.exists(sp):
             continue
-        have.add(os.path.basename(f))
+        fb = os.path.basename(f)
+        have.add(fb)
         sample = sample_name(f)
+        by_file = any(isinstance(w, tuple) for w in wanted_loci)
+        want = {l for (ff, l) in wanted_loci if ff == fb} if by_file else wanted_loci
         with gzip.open(sp, "rt") as fh:
             header = fh.readline().rstrip("\n").split("\t")
             li = header.index("locus")
             for line in fh:
                 p = line.rstrip("\n").split("\t")
-                if len(p) != len(header) or p[li] not in wanted_loci:
+                if len(p) != len(header) or p[li] not in want:
                     continue
                 r = EvidenceRow(sample, dict(zip(header, p)))
-                rows[(r.locus, r.side)].append(r)
+                rows[((fb, r.locus) if by_file else r.locus, r.side)].append(r)
     return rows, have
 
 
@@ -226,39 +233,129 @@ def collapse_fragments(rows: List[EvidenceRow]) -> List[Fragment]:
     return sorted([f for f in frags if f.primary is not None], key=lambda f: (f.sample, f.outer, f.frag))
 
 
-def _seq_close(a: str, b: str, max_edit: int) -> bool:
+class DedupParams:
+    """Lenient within-sample duplicate rule (SPEC "Independence rule"; 0x400 reads are already
+    dropped by discovery -- this is the SECOND dedup, for PCR/optical copies markdup missed).
+
+    tol        `dup_coord_tolerance` (5): read outer, mate outer/mpos and the junction (clip)
+               position may each differ by up to tol bp
+    max_edit   `dup_max_edit` (3) / `dup_max_edit_frac` (0.02): edit budget for the lenient
+               sequence match = max(max_edit, ceil(frac * compared length))
+    polya_min  `polya_min_len` (8): sequences are compared homopolymer-compressed and cut after
+               the first A/T run >= polya_min (sequence 3' of a long poly-A is SBS junk)"""
+    __slots__ = ("tol", "max_edit", "max_edit_frac", "polya_min")
+
+    def __init__(self, tol=5, max_edit=3, max_edit_frac=0.02, polya_min=8):
+        self.tol, self.max_edit, self.max_edit_frac, self.polya_min = tol, max_edit, max_edit_frac, polya_min
+
+    @classmethod
+    def from_cfg(cls, cfg):
+        return cls(cfg.get("dup_coord_tolerance", 5), cfg.get("dup_max_edit", 3),
+                   cfg.get("dup_max_edit_frac", 0.02), cfg.get("polya_min_len", 8))
+
+    def budget(self, n):
+        return max(self.max_edit, int(-(-self.max_edit_frac * n // 1)))
+
+
+def _hp_compress_cut(seq: str, polya_min: int) -> str:
+    """Homopolymer-compressed sequence, cut right after the first A/T run >= polya_min (the
+    run itself is kept as one symbol): poly-A length jitter and the low-quality sequence that
+    follows a long poly-A on Illumina never count as differences."""
+    out = []
+    i, n = 0, len(seq)
+    while i < n:
+        j = i
+        while j < n and seq[j] == seq[i]:
+            j += 1
+        out.append(seq[i])
+        if seq[i] in "AT" and j - i >= polya_min:
+            break
+        i = j
+    return "".join(out)
+
+
+def _prefix_close(a: str, b: str, p: DedupParams) -> bool:
+    """Homopolymer-compressed, poly-A-cut, common-prefix comparison within the edit budget."""
+    a = _hp_compress_cut(a, p.polya_min)
+    b = _hp_compress_cut(b, p.polya_min)
     m = min(len(a), len(b))
     if m == 0:
         return True
     a, b = a[:m], b[:m]
     if a == b:
         return True
-    return edlib.align(a, b, mode="NW", task="distance", k=max_edit)["editDistance"] != -1
+    return edlib.align(a, b, mode="NW", task="distance", k=p.budget(m))["editDistance"] != -1
 
 
-def _is_dup(a: Fragment, b: Fragment, tol: int, max_edit: int) -> bool:
-    """SPEC rule 2 (same sample only)."""
+def _seq_close(a: str, b: str, p: DedupParams, shift: int = 0) -> bool:
+    """Lenient sequence identity. `shift` > 0: the two reads may start up to `shift` bases
+    apart (unanchored reads, e.g. an unmapped mate of a duplicate); each offset 0..shift of
+    either read is tried, the comparison itself stays strict (edit budget)."""
+    if not shift:            # anchored at the junction
+        return _prefix_close(a, b, p)
+    for k in range(shift + 1):
+        if _prefix_close(a[k:], b, p) or (k and _prefix_close(a, b[k:], p)):
+            return True
+    return False
+
+
+def _junction_pos(f: Fragment):
+    """Reference position of the junction (clip) of a CLIP fragment, else None."""
+    p = f.primary
+    if p.role != "CLIP" or not p.mapped:
+        return None
+    if p.side == "LEFT":
+        return p.pos
+    import re
+    ref_len = sum(int(n) for n, op in re.findall(r"(\d+)([MDN=X])", p.cigar or ""))
+    return p.pos + ref_len
+
+
+def _dup_seqs(a: Fragment, b: Fragment):
+    """Sequences compared by the lenient dedup: the outward junction clips when both
+    fragments are CLIP fragments, else the two full primary reads (DISC / POLYA / SHORT, or a
+    SHORT read against a CLIP read of the same molecule)."""
+    if a.primary.role == "CLIP" and b.primary.role == "CLIP":
+        return a.clip_seq(), b.clip_seq()
+    return a.primary.seq.upper(), b.primary.seq.upper()
+
+
+def _clip_shift(a: Fragment, b: Fragment, p: DedupParams) -> int:
+    """Junction clips are anchored (shift 0); a whole-read comparison (DISC/POLYA primary) may
+    be offset by the outer-coordinate tolerance."""
+    return 0 if a.primary.role == "CLIP" and b.primary.role == "CLIP" else p.tol
+
+
+def _is_dup(a: Fragment, b: Fragment, p: DedupParams):
+    """SPEC rule 2 (same sample only). Returns '' (not a duplicate), 'coord' (mate placed on
+    both: coordinates within tol + lenient clip sequence) or 'seq' (mate unplaced on both:
+    read outer within tol + lenient clip AND mate sequence)."""
+    tol = p.tol
     if a.strand != b.strand or abs(a.outer - b.outer) > tol:
-        return False
+        return ""
+    ja, jb = _junction_pos(a), _junction_pos(b)
+    if ja is not None and jb is not None and abs(ja - jb) > tol:
+        return ""
     ao, bo = a.mate_outer(), b.mate_outer()
     if ao is not None and bo is not None:
         am, bm = ao, bo
     else:
         am, bm = a.mate_coord(), b.mate_coord()
-    if am is not None and bm is not None:
-        # outer coordinates match on both ends -> duplicate
-        return am[0] == bm[0] and am[2] == bm[2] and abs(am[1] - bm[1]) <= tol
     if (am is None) != (bm is None):
-        return False
-    # no mate placement on either: same read outer AND junction-clip sequence within
-    # max_edit; when both mate sequences are known they must agree too (a different
-    # mate => a different molecule => independent).
-    if not _seq_close(a.clip_seq(), b.clip_seq(), max_edit):
-        return False
+        return ""
+    if am is not None:
+        if not (am[0] == bm[0] and am[2] == bm[2] and abs(am[1] - bm[1]) <= tol):
+            return ""
+        return "coord" if _seq_close(*_dup_seqs(a, b), p, _clip_shift(a, b, p)) else ""
+    # no mate placement on either: same read outer AND lenient junction-clip sequence; when
+    # both mate sequences are known they must agree too (shift-tolerant: an unmapped mate has
+    # no coordinate, but a duplicate's mate starts within tol of the original's).
+    if not _seq_close(*_dup_seqs(a, b), p, _clip_shift(a, b, p)):
+        return ""
     ams, bms = a.mate_seq(), b.mate_seq()
-    if ams and bms:
-        return _seq_close(ams, bms, max_edit)
-    return True
+    if ams and bms and not _seq_close(ams, bms, p, shift=tol):
+        return ""
+    return "seq"
 
 
 def _identical(a: Fragment, b: Fragment) -> bool:
@@ -274,8 +371,12 @@ def _identical(a: Fragment, b: Fragment) -> bool:
     return a.mate_seq() == b.mate_seq()
 
 
-def independent_clusters(frags: List[Fragment], tol: int = 2, max_edit: int = 2):
-    """Union-find over fragments. Returns (clusters, n_duplicates, n_cross_identical)."""
+def independent_clusters(frags: List[Fragment], params: Optional[DedupParams] = None,
+                         stats: Optional[dict] = None):
+    """Union-find over fragments. Returns (clusters, n_duplicates, n_cross_identical);
+    `stats` (optional dict) receives the split n_dup_coord / n_dup_seq."""
+    p = params or DedupParams()
+    tol = p.tol
     parent = list(range(len(frags)))
 
     def find(i):
@@ -294,9 +395,14 @@ def independent_clusters(frags: List[Fragment], tol: int = 2, max_edit: int = 2)
             for j in idx[a_pos + 1:]:
                 if frags[j].outer - frags[i].outer > tol:
                     break
-                if find(i) != find(j) and _is_dup(frags[i], frags[j], tol, max_edit):
+                if find(i) == find(j):
+                    continue
+                kind = _is_dup(frags[i], frags[j], p)
+                if kind:
                     parent[find(j)] = find(i)
                     n_dup += 1
+                    if stats is not None:
+                        stats["n_dup_" + kind] = stats.get("n_dup_" + kind, 0) + 1
     # cross-sample: exact identity only
     by_key = defaultdict(list)
     for i, f in enumerate(frags):
@@ -324,6 +430,11 @@ class JunctionRecord:
         self.rows: List[EvidenceRow] = []
         self.n_reads = self.n_fragments = self.n_independent = self.n_samples = self.n_mates = 0
         self.n_duplicates = self.n_cross = 0
+        self.n_dup_coord = self.n_dup_seq = 0
+        self.member_loci = ""
+        self.n_short_used = self.n_short_rejected = self.n_short_mate_inside = 0
+        self.n_independent_no_short = 0
+        self.short_reasons = Counter()
         self.supported = "NA"
         self.consensus: ConsensusResult = ConsensusResult()          # junction reads + mates (TSV)
         self.combined_consensus: ConsensusResult = ConsensusResult()  # junction reads only (combined.txt.gz)
@@ -347,24 +458,28 @@ class JunctionRecord:
                 ",".join(str(d) for d in depth),
                 "" if c.polya_len_median is None else c.polya_len_median, c.polya_len_range,
                 beyond.lower(), c.beyond_polya_support if beyond else 0,
-                self.polya_end, self.n_duplicates, self.n_cross, self.fail_reason, c.stop_reason]
+                self.polya_end, self.n_duplicates, self.n_cross, self.fail_reason, c.stop_reason,
+                self.n_dup_coord, self.n_dup_seq, self.member_loci or ".",
+                self.n_short_used, self.n_short_rejected, self.n_short_mate_inside,
+                self.n_independent_no_short]
         return "\t".join(str(v) for v in vals) + "\n"
 
 
-def evaluate_junction(insertion_id, side, rows, cfg) -> JunctionRecord:
-    tol = cfg.get("dup_coord_tolerance", 2)
-    max_edit = cfg.get("dup_max_edit", 2)
+def evaluate_junction(insertion_id, side, rows, cfg, ref_fetch=None) -> JunctionRecord:
+    """Pooled stats + consensus for one junction. `ref_fetch(contig, start, end)` (0-based,
+    reference-forward) is only needed for SHORT-overhang validation (`count_short_overhang`)."""
+    dedup = DedupParams.from_cfg(cfg)
     min_ind = cfg.get("min_independent_fragments", 2)
     polya_min = cfg.get("polya_min_len", 8)
+    use_short = bool(cfg.get("count_short_overhang", False))
     rec = JunctionRecord(insertion_id, side)
-    rec.rows = rows
-    rec.n_mates = sum(1 for r in rows if r.role == "MATE")
-    rec.n_reads = len(rows) - rec.n_mates
     frags = collapse_fragments(rows)
-    rec.n_fragments = len(frags)
-    rec.n_samples = len({f.sample for f in frags})
-    clusters, rec.n_duplicates, rec.n_cross = independent_clusters(frags, tol, max_edit)
-    rec.n_independent = len(clusters)
+    # SHORT-only fragments (reads crossing the junction by a few bases) never feed the
+    # consensus; they are validated against it afterwards and may only ADD support.
+    short = [f for f in frags if f.primary.role == "SHORT"]
+    main = [f for f in frags if f.primary.role != "SHORT"]
+    dstats = {}
+    clusters, n_dup, n_cross = independent_clusters(main, dedup, dstats)
     # consensus input: every read, weighted 1/|cluster| so a PCR family votes once;
     # `group` = cluster so depth counts independent fragments.
     reads = []
@@ -372,6 +487,8 @@ def evaluate_junction(insertion_id, side, rows, cfg) -> JunctionRecord:
         w = 1.0 / len(cl)
         for f in cl:
             for r in f.rows:
+                if r.role == "SHORT":
+                    continue
                 if r.role == "CLIP":
                     s, q = r.outward_clip()
                     reads.append(ClipRead(s, q, gi, w, True))
@@ -385,10 +502,131 @@ def evaluate_junction(insertion_id, side, rows, cfg) -> JunctionRecord:
         anchored = [r for r in reads if r.anchored]
         rec.combined_consensus = (rec.consensus if len(anchored) == len(reads) else
                                   indel_aware_consensus(anchored, min_depth=min_ind, polya_min_len=polya_min))
+    rec.n_independent_no_short = len(clusters)
+    used = []
+    if use_short and short:
+        has_clip = any(f.primary.role == "CLIP" for f in main)
+        # validation target: the junction-read clip consensus at depth >= 1 (a single CLIP
+        # fragment must suffice -- the SHORT read may supply the second fragment itself)
+        anchored = [r for r in reads if r.anchored]
+        vcons = indel_aware_consensus(anchored, min_depth=1, polya_min_len=polya_min).seq if anchored else ""
+        for f in short:
+            reason = _short_overhang_check(f.primary, side, vcons, has_clip, cfg, ref_fetch)
+            if reason:
+                rec.short_reasons[reason] += 1
+            else:
+                used.append(f)
+                rec.n_short_mate_inside += int(_mate_inside(f, cfg))
+        rec.n_short_used, rec.n_short_rejected = len(used), len(short) - len(used)
+        if used:
+            dstats = {}
+            clusters, n_dup, n_cross = independent_clusters(main + used, dedup, dstats)
+    kept = main + used
+    # rows of unused SHORT-only fragments (and their mates) are dropped from every output;
+    # with count_short_overhang off this makes SHORT rows invisible (legacy behaviour)
+    used_keys = {(f.sample, f.frag) for f in used}
+    drop = {(f.sample, f.frag) for f in short} - used_keys
+    rec.rows = [r for r in rows if (r.sample, r.frag) not in drop
+                and (r.role != "SHORT" or (r.sample, r.frag) in used_keys)]
+    rec.n_mates = sum(1 for r in rec.rows if r.role == "MATE")
+    rec.n_reads = len(rec.rows) - rec.n_mates
+    rec.n_fragments = len(kept)
+    rec.n_samples = len({f.sample for f in kept})
+    rec.n_duplicates, rec.n_cross = n_dup, n_cross
+    rec.n_dup_coord, rec.n_dup_seq = dstats.get("n_dup_coord", 0), dstats.get("n_dup_seq", 0)
+    rec.n_independent = len(clusters)
     rec.polya_end = int(rec.consensus.polya_base is not None
                         or any(r.role == "POLYA" for r in rows)
                         or _clips_start_with_polya([r for r in rows if r.role == "CLIP"], polya_min))
     return rec
+
+
+def _ref_pos_at(pos: int, cigar: str, q: int) -> int:
+    """Reference coordinate (0-based) aligned to read offset q (a soft-clipped / inserted base
+    maps to the next reference base)."""
+    import re
+    r, qi = pos, 0
+    for n, op in re.findall(r"(\d+)([MIDNSHP=X])", cigar or ""):
+        n = int(n)
+        if op in "M=X":
+            if q < qi + n:
+                return r + (q - qi)
+            r += n
+            qi += n
+        elif op in "IS":
+            if q < qi + n:
+                return r
+            qi += n
+        elif op in "DN":
+            r += n
+    return r
+
+
+def _short_overhang_check(r: EvidenceRow, side: str, cons: str, has_clip: bool, cfg, ref_fetch):
+    """'' if a SHORT read may count as a fragment for its junction, else the rejection reason.
+
+    1. the junction already has >= 1 full CLIP fragment (short reads only ADD support);
+    2. the overhang (read bases past clip_at, outward) has >= short_overhang_min_bases (5)
+       bases matching the junction's indel-aware clip consensus;
+    3. >= short_overhang_min_ref_mismatch (2) of the overhang bases differ from the reference
+       at the same positions, and the overhang matches the consensus better than the reference;
+    4. the overhang is not a homopolymer continuing a reference homopolymer at the junction
+       (poly-A slippage next to a reference A-tract)."""
+    min_b = cfg.get("short_overhang_min_bases", 5)
+    min_mm = cfg.get("short_overhang_min_ref_mismatch", 2)
+    if not has_clip:
+        return "no_clip_fragment"
+    if not cons:
+        return "no_consensus"
+    seq = r.seq.upper()
+    at = r.clip_at
+    if not (0 < at < len(seq)) or not r.mapped:
+        return "bad_record"
+    j = _ref_pos_at(r.pos, r.cigar, at)
+    if side == "RIGHT":
+        over = seq[at:]
+    else:
+        over = revcomp(seq[:at])
+    n = min(len(over), len(cons))
+    if n < min_b:
+        return "overhang_too_short"
+    over = over[:n]
+    if ref_fetch is None:
+        return "no_reference"
+    if side == "RIGHT":
+        ref_out = ref_fetch(r.ref, j, j + n).upper()
+        ref_in = ref_fetch(r.ref, max(0, j - 6), j).upper()[::-1]
+    else:
+        ref_out = revcomp(ref_fetch(r.ref, max(0, j - n), j).upper())
+        ref_in = revcomp(ref_fetch(r.ref, j, j + 6).upper())[::-1]
+    if len(ref_out) < n:
+        return "no_reference"
+    c = cons[:n].upper()
+    m_cons = sum(1 for a, b in zip(over, c) if a == b)
+    m_ref = sum(1 for a, b in zip(over, ref_out) if a == b)
+    if m_cons < min_b:
+        return "consensus_mismatch"
+    if n - m_ref < min_mm or m_cons <= m_ref:
+        return "matches_reference"
+    top = max("ACGT", key=over.count)
+    if over.count(top) >= 0.8 * n:
+        if ref_in[:6].count(top) >= 4 or ref_out[:6].count(top) >= 4:
+            return "ref_homopolymer"
+    return ""
+
+
+def _mate_inside(f: Fragment, cfg) -> bool:
+    """The mate of a SHORT fragment lies inside the inserted element: unmapped, on another
+    contig, far from the junction, or MAPQ < short_mate_min_mapq (20)."""
+    p = f.primary
+    m = f.mate
+    if m is None:
+        return not p.mate_mapped
+    if not m.mapped:
+        return True
+    if m.ref != p.ref or abs(m.pos - p.pos) > cfg.get("short_mate_max_dist", 1000):
+        return True
+    return m.mapq < cfg.get("short_mate_min_mapq", 20)
 
 
 def _clips_start_with_polya(clip_rows, polya_min, within=5) -> bool:
@@ -413,7 +651,7 @@ def _aligned_part(ins, side) -> str:
     return str(a).upper() if a is not None else ""
 
 
-def apply_evidence(insertions, input_files, cfg):
+def apply_evidence(insertions, input_files, cfg, ref_fetch=None):
     """Evaluate every junction of every insertion from the pooled sidecars.
 
     Returns (kept, records, failed_names, stats) or None when no sidecar exists (the
@@ -421,7 +659,12 @@ def apply_evidence(insertions, input_files, cfg):
     gated-out insertions keep their records (supported=0) for diagnostics.
     Mutates kept insertions' clips when `indel_aware_consensus` is on and the new
     consensus is at least as long as the legacy longest-clip choice."""
-    wanted = {i.name for i in insertions}
+    # Pooling follows combine's own cross-sample grouping: every discovery locus that
+    # intersect_insertions merged into this Insertion (Insertion.member_loci, one
+    # (file, locus) per contributing record) contributes its sidecar rows, so colony A's
+    # chr1:100-115 and colony B's chr1:101-115 pool when combine merged them.
+    members = {i.name: _member_loci(i) for i in insertions}
+    wanted = {m for ms in members.values() for m in ms}
     rows, have = load_evidence(input_files, wanted)
     if not have:
         return None
@@ -435,12 +678,23 @@ def apply_evidence(insertions, input_files, cfg):
               f"{' ...' if len(missing) > 5 else ''}")
     kept, failed, records = [], set(), {}
     reasons = Counter()
+    short_reasons = Counter()
+    if cfg.get("count_short_overhang", False) and ref_fetch is None:
+        try:
+            from combine_insertions_get_sequence import get_sequence as ref_fetch
+        except Exception as e:     # no genome: SHORT reads are rejected ("no_reference")
+            print(f"WARNING: count_short_overhang without a reference ({e}); SHORT reads ignored")
     n_replaced = 0
     for ins in insertions:
         recs = []
         for side in SIDES:
-            rec = evaluate_junction(ins.name, side, rows.get((ins.name, side), []), cfg)
+            pooled = [r for m in members[ins.name] for r in (rows.get((m, side)) or rows.get((m[1], side), []))]
+            rec = evaluate_junction(ins.name, side, pooled, cfg, ref_fetch)
+            short_reasons.update(rec.short_reasons)
             rec.aligned = _aligned_part(ins, side)
+            loci = sorted({l for _, l in members[ins.name]})
+            if loci != [ins.name]:
+                rec.member_loci = ",".join(loci)
             recs.append(rec)
         records[ins.name] = recs
         eligible = all(f in have for f in ins.files)
@@ -469,7 +723,41 @@ def apply_evidence(insertions, input_files, cfg):
             print(f"  dropped: failing junction(s) {reason}: {n}")
     if use_cons:
         print(f"indel-aware consensus replaced {n_replaced} junction clip(s) in combined output")
+    if cfg.get("count_short_overhang", False):
+        n_used = sum(r.n_short_used for recs in records.values() for r in recs)
+        n_only = sum(1 for recs in records.values() for r in recs
+                     if r.n_independent >= min_ind > r.n_independent_no_short)
+        print(f"SHORT overhang reads: {n_used} fragment(s) used, {sum(short_reasons.values())} rejected "
+              f"({', '.join(f'{k}={v}' for k, v in sorted(short_reasons.items())) or '-'}); "
+              f"{n_only} junction(s) reach >= {min_ind} independent fragments only thanks to them")
     return kept, records, failed, {"reasons": reasons, "replaced": n_replaced}
+
+
+def _member_loci(ins):
+    """(file basename, discovery locus id) of every record merged into `ins` -- recorded by
+    Insertion.__init__/__iadd__; falls back to (file, name) for objects without it."""
+    ml = getattr(ins, "member_loci", None)
+    if ml:
+        return list(dict.fromkeys(ml))
+    return [(f, ins.name) for f in getattr(ins, "files", [])]
+
+
+def allele_forward_seq(r: EvidenceRow) -> str:
+    """Sequence of an evidence record in ALLELE-forward (= reference-forward at the insertion
+    site) orientation, as SPEC promises for insertions.reads.fa.gz.
+
+    CLIP/DISC/SPAN records are aligned at the site, so their stored (BAM) sequence already is
+    site-forward. A MATE or POLYA record may be unmapped (stored as sequenced) or placed on a
+    paralogous element copy (stored forward relative to THAT copy); its orientation in the
+    allele follows from the pair geometry: in an FR pair it is opposite to its partner, whose
+    strand is the record's 0x20 bit. So: site-forward = stored if (0x10 set) == (partner
+    forward), else the reverse complement."""
+    seq = r.seq
+    if not seq or seq == "*" or r.role not in ("MATE", "POLYA") or not (r.flag & 0x1):
+        return seq
+    stored_rev = bool(r.flag & 0x10)
+    partner_fwd = not (r.flag & 0x20)
+    return seq if stored_rev == partner_fwd else revcomp(seq)
 
 
 def _replace_clips(ins, recs) -> int:
@@ -501,6 +789,7 @@ def write_evidence_outputs(records: Dict[str, list], names, evidence_tsv: str, r
                 t.write(rec.tsv())
                 n_rows += 1
                 for r in rec.rows:
-                    fa.write(f">{name}|{rec.side}|{r.role}|{r.sample}|{r.frag}|{r.r12}\n{r.seq}\n")
+                    fa.write(f">{name}|{rec.side}|{r.role}|{r.sample}|{r.frag}|{r.r12}\n"
+                             f"{allele_forward_seq(r)}\n")
                     n_reads += 1
     print(f"wrote {n_rows} junction rows -> {evidence_tsv}; {n_reads} reads -> {reads_fa}")

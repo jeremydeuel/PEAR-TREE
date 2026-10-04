@@ -75,6 +75,9 @@ class Insertion:
         self.right_mates = data['RIGHT:MATE']
         self.left_mates = data['LEFT:MATE']
         self.files = [os.path.basename(file)]
+        # (discovery file, original locus id) of every record merged into this insertion; the
+        # pooled-evidence step follows this grouping (src/combine_insertions_evidence.py)
+        self.member_loci = [(self.files[0], self.name)]
 
     @property
     def left_consensus(self) -> str:
@@ -138,6 +141,7 @@ class Insertion:
         self.right_mates += other.right_mates
         self.left_mates += other.left_mates
         self.files += other.files
+        self.member_loci = getattr(self, "member_loci", []) + getattr(other, "member_loci", [])
         return self
 
     @staticmethod

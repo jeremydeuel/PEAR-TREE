@@ -33,6 +33,9 @@ def main():
     p.add_argument("--phasing-burst", type=float, default=1.0)
     p.add_argument("--pcr-dup-unflagged-frac", type=float, default=0.05)
     p.add_argument("--error-rate", type=float, default=0.002)
+    p.add_argument("--pcr-dup-jitter", type=int, default=0,
+                   help="unflagged PCR copies get start/end shifted independently by up to +-N bp "
+                        "(emulates duplicates markdup misses; exercises combine's lenient dedup)")
     a = p.parse_args()
 
     rng = random.Random(a.seed * 1000 + a.sample)
@@ -104,7 +107,12 @@ def main():
                 r1_fwd = rng.random() < 0.5
                 lo, hi = bisect_left(jpos, st + 10), bisect_right(jpos, en - 10)
                 for c in range(ncopy + 1):
-                    pair = sampler.pair(hap, st, en)
+                    cst, cen = st, en
+                    if c and a.pcr_dup_jitter:
+                        j = a.pcr_dup_jitter
+                        cst = min(max(0, st + rng.randint(-j, j)), len(seq) - 1)
+                        cen = max(cst + sampler.read_len + 1, min(len(seq), en + rng.randint(-j, j)))
+                    pair = sampler.pair(hap, cst, cen)
                     emit(f"S{S}:{hname}:{rec}:{i}" + (f"_d{c}" if c else ""), pair, r1_fwd)
                     for (pos, eid, side) in js[lo:hi]:
                         if any(x[0] <= pos - 10 and x[1] >= pos + 10
@@ -122,8 +130,12 @@ def main():
             hap = Hap(mol, None, "mol")
             r1_fwd = rng.random() < 0.5
             for c in range(copies + 1):
+                m0, m1 = 0, len(mol)
+                if c and a.pcr_dup_jitter:
+                    m0 = rng.randint(0, a.pcr_dup_jitter)
+                    m1 = len(mol) - rng.randint(0, a.pcr_dup_jitter)
                 emit(f"S{S}:mol:{name.split('|')[0]}" + (f"_d{c}" if c else ""),
-                     sampler.pair(hap, 0, len(mol)), r1_fwd)
+                     sampler.pair(hap, m0, m1), r1_fwd)
     o1.close(); o2.close()
     with open(a.out_prefix + ".support.tsv", "w") as f:
         f.write("event_id\tside\tfragments\treads\n")

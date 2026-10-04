@@ -134,17 +134,18 @@ def main():
     L = len(cons_l1)
     with open(os.path.join(OUT, "consensus_landmarks.tsv"), "w") as fh:
         fh.write("consensus\tfeature\tstart\tend\n")
-        # L1.3-like anatomy (approximate; 0-based half-open on this consensus)
+        # L1.3-like anatomy (approximate). Intervals below are 0-based half-open and are
+        # WRITTEN 1-based inclusive (start + 1, end), the convention of resources/rte_library.
         for f, s, e in (("5UTR", 0, 910), ("ORF1", 910, 1927), ("ORF2", 1990, 5817), ("3UTR", 5817, L)):
-            fh.write(f"L1HS\t{f}\t{s}\t{min(e, L)}\n")
+            fh.write(f"L1HS\t{f}\t{s + 1}\t{min(e, L)}\n")
         for n, d in alus:
             ln = len(dfam[d])
             for f, s, e in (("left_monomer", 0, 120), ("A_linker", 120, 140), ("right_monomer", 140, ln)):
-                fh.write(f"{n}\t{f}\t{s}\t{e}\n")
+                fh.write(f"{n}\t{f}\t{s + 1}\t{e}\n")
         for n, d in svas:
             ln = len(dfam[d])
             for f, s, e in (("hexamer", 0, 60), ("alu_like", 60, 430), ("VNTR", 430, 860), ("SINE_R", 860, ln)):
-                fh.write(f"{n}\t{f}\t{s}\t{e}\n")
+                fh.write(f"{n}\t{f}\t{s + 1}\t{e}\n")
 
     with open(os.path.join(OUT, "active.tsv"), "w") as fh:
         fh.write("id\tclass\tconsensus\thot\n")

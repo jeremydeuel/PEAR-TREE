@@ -229,6 +229,10 @@ class RteAnnotator:
             rec.detail["slippage"] = site.slippage_detail
         if fb:
             rec.detail["foldback_bp"] = fb
+        n_short = sum(j.n_short_used for j in ev.junctions.values())
+        if n_short:      # combine counted SHORT-overhang fragments (count_short_overhang)
+            rec.detail["short_used"] = n_short
+            rec.detail["short_mate_inside"] = sum(j.n_short_mate_inside for j in ev.junctions.values())
         rec.score_input = ScoreInput(
             element=call.element, structure=call.structure, tags=list(call.tags),
             tsd_len=site.tsd_len, tsd_verified=site.tsd_verified, polya_len=rec.polya_len,
@@ -240,7 +244,8 @@ class RteAnnotator:
             element_identity=asm.element_identity or 0.0,
             inactive_only=bool(asm.consensus) and not self.lib.is_young(asm.consensus),
             inv_p1=call.inv_p1, junctions_supported=supported, n_samples=n_samples,
-            foldback=bool(fb), recurrent=False, cross_sample_identical=csi)
+            foldback=bool(fb), recurrent=False, cross_sample_identical=csi,
+            novel_tier=(call.source.tier if call.source is not None else ""))
         self._score(rec)
         return rec
 

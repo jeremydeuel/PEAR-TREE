@@ -157,7 +157,7 @@ def classify(res, lib, ctx=None, cfg=None, novel_finder=None, premrna=None,
         tol = c["full_length_tolerance"].get(cls_, 50)
         if j5.strand > 0:
             call.j5_pos = j5.t_st
-            in_hex = cls_ == "SVA" and lib.landmark_at(j5.target, j5.t_st) == "hexamer"
+            in_hex = cls_ == "SVA" and lib.landmark_at(j5.target, j5.t_st).lower() == "hexamer"
             call.structure = "FULL_LENGTH" if (j5.t_st <= tol or in_hex) else "TRUNCATED_5P"
             call.detail["j5"] = j5.t_st
         else:
@@ -224,6 +224,10 @@ def classify(res, lib, ctx=None, cfg=None, novel_finder=None, premrna=None,
         if src.novel:
             call.add("NOVEL_SOURCE")
             call.detail["source_identity"] = src.identity
+            if src.tier:
+                call.detail["novel_tier"] = src.tier
+        elif src.detail:
+            call.detail["td_flank"] = src.detail
     call.td3p_seq = td_seq
 
     # ---------------------------------------------------------------- SVA 5' transduction

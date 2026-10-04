@@ -128,8 +128,9 @@ CONFIG = {
         'require_independent_fragments': False, #drop insertions with any junction (LEFT/RIGHT, incl. the poly-A end) below min_independent_fragments, pooled over all colonies
         'min_independent_fragments': 2, #independent fragments per junction after (sample,frag) collapse + within-sample PCR/optical dedup (never the 0x400 flag)
         'indel_aware_consensus': False, #use the homopolymer-aware pooled clip consensus (src/indel_consensus.py) in combined.txt.gz when >= the legacy longest clip
-        'dup_coord_tolerance': 2, #bp tolerance on read/mate outer coordinates for within-sample duplicates
-        'dup_max_edit': 2, #max edit distance of junction-clip (and mate) sequence for within-sample duplicates
+        'dup_coord_tolerance': 5, #bp tolerance on read outer, mate outer/mpos and junction position (lenient 2nd dedup; 0x400 reads are dropped by discovery)
+        'dup_max_edit': 3, #edit budget for clip/mate sequence (homopolymer-compressed, cut after a long poly-A) of within-sample duplicates
+        'dup_max_edit_frac': 0.02, #... or this fraction of the compared length, whichever is larger
         'polya_min_len': 8, #min consensus homopolymer A/T run reported as the poly-A (evidence.tsv polya_len_*/beyond_polya)
     },
     # NOTE: the 'annotate' paths below are still FARM paths — step 3 has not been

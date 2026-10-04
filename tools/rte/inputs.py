@@ -45,6 +45,8 @@ class JunctionEvidence:
     beyond_polya: str = ""
     beyond_polya_support: int = 0
     cross_sample_identical: int = 0
+    n_short_used: int = 0           # SHORT overhang fragments counted in n_independent
+    n_short_mate_inside: int = 0    # ... of which the mate lies inside the element
 
     @classmethod
     def from_row(cls, r: dict) -> "JunctionEvidence":
@@ -57,7 +59,9 @@ class JunctionEvidence:
                    polya_len_range=r.get("polya_len_range") or "",
                    beyond_polya=(r.get("beyond_polya") or "").strip("."),
                    beyond_polya_support=_int(r.get("beyond_polya_support")),
-                   cross_sample_identical=_int(r.get("cross_sample_identical")))
+                   cross_sample_identical=_int(r.get("cross_sample_identical")),
+                   n_short_used=_int(r.get("n_short_used")),
+                   n_short_mate_inside=_int(r.get("n_short_mate_inside")))
 
 
 @dataclass

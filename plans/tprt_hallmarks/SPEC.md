@@ -133,18 +133,43 @@ the pooled rule in combine that enforces >=2).
 
 ### Independence rule (combine)
 
-Per insertion junction, pooled over colonies:
+**0x400 reads are dropped by discovery; combine applies a second, lenient dedup** (Jeremy,
+2026-10-04 — supersedes "never from the 0x400 flag" for the discovery side: markdup's verdict is
+trusted, combine only catches the PCR/optical copies markdup missed).
+
+Per insertion junction, pooled over colonies **and over every discovery locus that
+intersect_insertions merged into the insertion** (`Insertion.member_loci`, one
+`(file, locus)` per merged record — colony A's `chr1:100-115` and colony B's `chr1:101-115`
+pool when combine merged them):
 1. Collapse records by (`sample`, `frag`) → one fragment (mates and supplementary of one
    template count once).
-2. Within one sample, two fragments are PCR/optical duplicates if their outer coordinates
-   match on both ends (read `outer` ±2 bp and mate `outer`/`mpos` ±2 bp, same strands) **or**
-   (same read `outer` ±2 and junction-clip sequences with Hamming/edit distance ≤ 2 over the
-   overlap **and** mate placement within ±2). Duplicates collapse to one.
+2. Lenient within-sample dedup. Same strand, read `outer` within ±`dup_coord_tolerance`
+   (default 5 bp), junction (clip) position within ±tol for CLIP fragments, and then:
+   * both mates placed: mate `outer`/`mpos` within ±tol on the same contig/strand **and** the
+     sequences match leniently → duplicate (`n_dup_coord`);
+   * neither mate placed: lenient clip-sequence match **and** lenient mate-sequence match
+     (mate start may be shifted by up to tol bases) → duplicate (`n_dup_seq`);
+   * exactly one mate placed → independent.
+   Lenient sequence match = homopolymer-compressed sequences, cut right after the first A/T
+   run ≥ `polya_min_len` (poly-A length jitter and the low-quality sequence 3' of a long poly-A
+   never count), edit distance ≤ max(`dup_max_edit` (3), `dup_max_edit_frac` (0.02) × compared
+   length). Compared: the outward junction clips for two CLIP fragments, else the full reads.
 3. Fragments in different samples are independent libraries ⇒ independent, except exact
    identity of both outer coordinates AND sequence (flag as `cross_sample_identical`).
 4. Junction supported iff `n_independent >= min_independent_fragments` (default 2).
    Applies to LEFT, RIGHT and the poly-A end. Config key under
    `CONFIG['combine_insertions']`.
+5. SHORT overhang reads (sidecar role `SHORT`, `count_short_overhang`, default False, True in
+   `.tprt`): a SHORT-only fragment counts for its junction only if (a) the junction has ≥ 1 full
+   CLIP fragment (SHORT reads only ADD support, but may supply the second fragment), (b) its
+   overhang (read bases past `clip_at`, outward) has ≥ `short_overhang_min_bases` (5) bases
+   matching the junction-read clip consensus (built at depth ≥ 1, without SHORT reads),
+   (c) ≥ `short_overhang_min_ref_mismatch` (2) overhang bases differ from the reference
+   (`genome_2bit`) at the same positions and it matches the consensus better than the
+   reference, (d) it is not a homopolymer continuing a reference homopolymer at the junction
+   (≥ 80 % one base and ≥ 4 of the 6 adjacent reference bases on either side are that base).
+   Used SHORT fragments then go through rules 1–3 like every fragment. SHORT reads never feed
+   the consensus. Rejected SHORT fragments (and their mates) are dropped from all outputs.
 
 ### `<patient>.insertions.evidence.tsv.gz` (combine → annotate)
 
@@ -169,16 +194,25 @@ Implementation notes (combine worker; `src/combine_insertions_evidence.py`, `src
   fooled by flank sequence.
 - Additive trailing columns (after the SPEC ones, order fixed): `polya_end` (0/1),
   `n_duplicates` (within-sample merges), `n_cross_sample_identical`, `fail_reason`,
-  `consensus_stop` (`end`/`depth`/`disagreement`/`empty`).
+  `consensus_stop` (`end`/`depth`/`disagreement`/`empty`), `n_dup_coord`, `n_dup_seq` (split of
+  `n_duplicates`), `member_loci` (comma list of merged discovery loci when they differ from the
+  insertion id, else `.`), `n_short_used`, `n_short_rejected`, `n_short_mate_inside` (used SHORT
+  fragments whose mate is unmapped / elsewhere / MAPQ < 20), `n_independent_no_short`.
 - Rows: surviving insertions first (combined.txt.gz order), then gated-out ones (supported=0).
 - Config (`CONFIG['combine_insertions']`): `require_independent_fragments` (False; True in
   `cluster/config.py.grch38.tprt`), `min_independent_fragments` (2), `indel_aware_consensus`
-  (False; True in .tprt), `dup_coord_tolerance` (2), `dup_max_edit` (2), `polya_min_len` (8).
+  (False; True in .tprt), `dup_coord_tolerance` (5), `dup_max_edit` (3), `dup_max_edit_frac`
+  (0.02), `polya_min_len` (8), `count_short_overhang` (False; True in .tprt),
+  `short_overhang_min_bases` (5), `short_overhang_min_ref_mismatch` (2).
 
 ### `<patient>.insertions.reads.fa.gz` (combine → annotate)
 
 FASTA, record name `insertion_id|side|role|sample|frag|r12`, sequence in reference-forward
 orientation. Mates included. annotate builds the covered-element consensus from these.
+As implemented: CLIP/DISC/SPAN/SHORT rows are written as stored (aligned at the site); MATE and
+POLYA rows of paired reads are re-oriented to the allele from the pair geometry (FR pair:
+opposite to the partner, whose strand is the 0x20 bit) — a mate stored on a paralogous element
+copy or unmapped is otherwise in arbitrary orientation.
 
 ### Reference libraries — `resources/rte_library/` (committed; small) built by `tools/rte_library/build.py`
 
@@ -237,15 +271,25 @@ are documented in `tools/rte/annotator.py`.
 
 ### Format assumptions made by annotate (W3) on W2/W4 outputs
 
-- `consensus_landmarks.tsv`: header `consensus feature start end` (0-based half-open); optional.
-  SVA landmark `hexamer` is used for FULL_LENGTH. Consensus sequences may end in a poly-A; the
-  trailing A-run is excluded from the element.
+- `consensus_landmarks.tsv`: header `consensus feature start end`, **1-based inclusive** (as
+  shipped in resources/rte_library; integration fix — W3 originally assumed 0-based half-open,
+  the fixture was converted); optional. Feature names compare case-insensitively (SVA `HEXAMER`
+  is used for FULL_LENGTH). Consensus sequences may end in a poly-A; the trailing A-run is
+  excluded from the element.
 - Young (active-subfamily) consensus = name matching `^(L1HS|L1PA[23]|ALU_?Y|SVA)` (config
   `young_consensus_regex`); other consensus records are treated as old/inactive controls.
 - `active.tsv`, `transduction_sources.tsv`, `*_intact.tsv`: read by header, key column `id`.
-  `transduction_sources.tsv` may carry `intact_id` (source → intact element id) for the
-  "3' tag is the flank of the 5'-end element" bonus. `flanks_3p.fa` / `flanks_5p_sva.fa` records
-  are named by source id (anything after `|`/whitespace ignored).
+  Source → intact element (for the "3' tag is the flank of the 5'-end element" bonus): column
+  `intact_id` / `element_id`, else `l1base_id` (real library), else active.tsv `source_id`.
+  active.tsv lists L1 only; for a class without active.tsv rows (Alu, SVA) every intact element
+  counts as active (the intact sets are the youngest copies of the active subfamilies).
+- `flanks_3p.fa(.gz)` / `flanks_5p_sva.fa(.gz)` records are named by source id (anything after
+  `|`/whitespace ignored); `<id>/+` and `<id>/-` (strandless sources) map to `<id>`, the
+  matching flank's strand is reported as `td_flank=source_strand=<s>` in rte_detail.
+- `CONFIG['annotate']['rte_library']` may be relative (`resources/rte_library`): resolved against
+  the working directory, else the repository root.
+- Novel sources: tier A (≥ 0.98) scores `novel_source` (+1), tier B (0.95–0.98)
+  `novel_source_tier_b` (+0.5); tier in rte_detail `novel_tier`.
 - evidence TSV: optional extra column `cross_sample_identical` (0/1); a `POLYA` side row is
   accepted and counted for `supported`.
 - reads FASTA: every sequence, mates included, is in allele-forward (= reference-forward)
