@@ -79,10 +79,19 @@ Green VAL-1 remains necessary, not sufficient: orthogonal (IGV / long-read / PCR
 confirmation of real calls is still required.
 """
 import argparse
+import os
 import random
 import sys
 
 import pysam
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+from simlib import library as _simlib_library  # noqa: E402
+from simlib import models as _simlib_models  # noqa: E402
+from simlib import truth as _simlib_truth  # noqa: E402
+from simlib.reads import FragmentSampler  # noqa: E402
+from simlib.seqs import rnd_seq as _rnd_seq  # noqa: E402
+from simlib.val1render import PairWriter, prepare_event, render_sample  # noqa: E402
 
 # a fixed "LTR consensus" shared by the SENS/Feature ERV toggles below — models the
 # biology that ERV clips are the element LTR consensus (so many insertions share one
@@ -718,6 +727,66 @@ def simulate(args):
         idx += 1
 
     # =====================================================================
+    # TPRT-hallmark insertion-type catalogue (--types / --n-per-type). Read-level,
+    # multi-sample, literature-calibrated (see test/simlib). Off by default, so the legacy
+    # output above is byte-identical when --types is not given. Uses its own RNG.
+    # =====================================================================
+    new_rows = []                                   # (truth8 tuple, label dict, ins_seq)
+    sample_records = [records] + [[] for _ in range(max(1, args.samples) - 1)]
+    type_keys = _simlib_models.parse_types(args.types)
+    if type_keys and args.n_per_type > 0:
+        trng = random.Random(args.seed * 7919 + 17)
+        lib = _simlib_library.load_library(args.rte_library, args.hs1_2bit, args.hs1_rmsk,
+                                           args.library_cache)
+        print(lib.summary(), file=sys.stderr)
+        genes = _val1_genes(args, trng)
+        ctx = _simlib_models.Ctx(lib, genes, polya_scale=args.polya_scale,
+                                 max_del=args.max_l1_deletion, max_dup=args.max_l1_duplication)
+        sampler = FragmentSampler(trng, read_len=read_len, jitter_scale=args.polya_jitter,
+                                  error_rate=args.error_rate,
+                                  pcr_dup_frac=args.pcr_dup_unflagged_frac,
+                                  burst_scale=args.phasing_burst)
+        nsamp = max(1, args.samples)
+        for key in type_keys:
+            for rep in range(args.n_per_type):
+                ev = _simlib_models.build_event(key, trng, ctx)
+                strand = trng.choice("+-")
+                rref = random.Random(trng.getrandbits(64))
+                prep = prepare_event(rref, ev, strand, lib)
+                contig = contigs[idx % len(contigs)]; ti = tid[contig]
+                base = slot[ti]
+                slot[ti] += max(step, len(prep.ref) + 20_000)
+                idx += 1
+                # sample presence + per-sample VAF (clonal het 0.5 or subclonal)
+                if ev.role == "ARTEFACT":
+                    present = {trng.randrange(nsamp)}  # library artefact: one sample only
+                elif nsamp == 1 or trng.random() < args.present_all_frac:
+                    present = set(range(nsamp))
+                else:
+                    k = trng.randint(1, nsamp)
+                    present = set(trng.sample(range(nsamp), k))
+                vafs, counts = [], []
+                for si in range(nsamp):
+                    v = 0.0
+                    if si in present:
+                        v = 0.5 if trng.random() < args.vaf_clonal_frac else round(trng.uniform(0.1, 0.5), 3)
+                    vafs.append(v if ev.role == "TP" else (1.0 if si in present else 0.0))
+                    w = PairWriter(hdr, ti, contig, base, read_len)
+                    c = render_sample(trng, prep, w, sampler, args.depth, v, si in present,
+                                      f"{key}_{contig}_{base}_S{si + 1}")
+                    sample_records[si].extend(w.records)
+                    counts.append(c)
+                tr = prep.tr
+                left, right = base + tr["left"], base + tr["right"]
+                alt_reads = sum(c["R_reads"] + c["L_reads"] for c in counts)
+                vaf_mean = round(sum(vafs) / nsamp, 3)
+                row8 = (contig, left, right, f"{ev.element}_{key}", right - left, alt_reads,
+                        0, vaf_mean)
+                labels = _simlib_truth.event_labels(ev, tr, sorted(s + 1 for s in present), vafs,
+                                                    counts)
+                new_rows.append((row8, labels, tr.get("x_seq", "")))
+
+    # =====================================================================
     # False-positive artefacts — NOT in truth. A call at one of these loci is a false
     # positive. They live in a dedicated coordinate band (>=10 Mb) clear of the real
     # insertions (<~5 Mb) and the Feature A/B bands (15-18 Mb on contig 3).
@@ -932,16 +1001,41 @@ def simulate(args):
             records.append(make_read(hdr, ti, f"art_{contig}_{A}_L{k}", seq_l,
                                      A, f"{clip_s}S{anchor_m}M", args.artefact_mapq, flag=PAIRED_R1))
 
-    records.sort(key=lambda a: (a.reference_id, a.reference_start))
-    with pysam.AlignmentFile(args.out_bam, "wb", header=hdr) as out:
-        for a in records:
-            out.write(a)
-    pysam.index(args.out_bam)
+    if max(slot + astate) > args.contig_len:
+        sys.exit(f"simulated loci run past --contig-len {args.contig_len} (max {max(slot + astate)}); "
+                 f"raise --contig-len or lower --step / counts")
+    out_paths = sample_bam_paths(args.out_bam, len(sample_records))
+    for recs, path in zip(sample_records, out_paths):
+        if len(sample_records) > 1:
+            hdr_s = pysam.AlignmentHeader.from_dict({
+                **hdr.to_dict(), "RG": [{"ID": os.path.basename(path)[:-4], "SM": os.path.basename(path)[:-4]}]})
+        else:
+            hdr_s = hdr
+        recs.sort(key=lambda a: (a.reference_id, a.reference_start))
+        with pysam.AlignmentFile(path, "wb", header=hdr_s) as out:
+            for a in recs:
+                out.write(a)
+        pysam.index(path)
 
     with open(args.out_truth, "w") as f:
-        f.write("contig\tleft\tright\tclass\ttsd\talt_reads\tref_reads\tvaf\n")
+        head = ["contig", "left", "right", "class", "tsd", "alt_reads", "ref_reads", "vaf"]
+        if new_rows:
+            head += _simlib_truth.LABEL_COLUMNS
+        f.write("\t".join(head) + "\n")
         for row in truth:
-            f.write("\t".join(str(x) for x in row) + "\n")
+            cols = [str(x) for x in row]
+            if new_rows:
+                lab = _simlib_truth.legacy_labels(str(row[3]))
+                cols += [lab[c] for c in _simlib_truth.LABEL_COLUMNS]
+            f.write("\t".join(cols) + "\n")
+        for row8, lab, _ in new_rows:
+            f.write("\t".join([str(x) for x in row8] + [lab[c] for c in _simlib_truth.LABEL_COLUMNS]) + "\n")
+    if new_rows:
+        # inserted sequences (element sense) for annotate / structure checks
+        with open(args.out_truth + ".ins.fa", "w") as f:
+            for row8, lab, seq in new_rows:
+                if seq:
+                    f.write(f">{row8[0]}:{row8[1]}-{row8[2]}|{lab['variant']}|{lab['role']}\n{seq}\n")
 
     # Feature A: emit a matching RepeatMasker .out track (div-gated parser format:
     # col1=%div, col4=contig, col5=begin 1-based, col6=end) covering the RTE band the
@@ -959,8 +1053,50 @@ def simulate(args):
             for contig, begin, end, gene in exon_rows:
                 f.write(f"{contig}\t{begin}\t{end}\t{gene}\n")
 
-    print(f"wrote {len(records)} reads, {len(truth)} insertions to {args.out_bam}; truth -> {args.out_truth}",
-          file=sys.stderr)
+    print(f"wrote {sum(len(r) for r in sample_records)} reads, {len(truth) + len(new_rows)} truth rows "
+          f"to {', '.join(out_paths)}; truth -> {args.out_truth}", file=sys.stderr)
+
+
+def sample_bam_paths(out_bam, n):
+    """One sample: --out-bam as given. n>1 colonies: <stem>.S1.bam .. <stem>.Sn.bam."""
+    if n <= 1:
+        return [out_bam]
+    stem = out_bam[:-4] if out_bam.endswith(".bam") else out_bam
+    return [f"{stem}.S{i + 1}.bam" for i in range(n)]
+
+
+def _val1_genes(args, rng):
+    """Parent genes for the pseudogene / decoy types: a real annotation (--gene-model +
+    --hs1-2bit), else gene models built on real hs1 sequence with canonical GT..AG splice
+    signals (--hs1-2bit), else on random sequence."""
+    G = _simlib_library
+    if args.hs1_2bit and os.path.exists(args.hs1_2bit):
+        from simlib.seqs import Genome
+        g = Genome(args.hs1_2bit)
+        if args.gene_model:
+            genes = G.load_gene_model(args.gene_model, g)
+            if genes:
+                return genes
+        genes = []
+        contigs = [c for c in g.lengths if c in ("chr1", "chr2", "chr3", "chr5", "chr12", "chr17")]
+        for i in range(30):
+            c = rng.choice(contigs)
+            for _ in range(20):
+                st = rng.randint(10_000_000, g.lengths[c] - 10_000_000)
+                seq = g.fetch(c, st, st + 30_000)
+                if seq.count("N") == 0:
+                    break
+            gene = G.gene_from_sequence(f"hs1gene{i}_{c}_{st}", c, seq, st, rng,
+                                        strand=rng.choice("+-"))
+            if gene:
+                genes.append(gene)
+        return genes
+    genes = []
+    for i in range(10):
+        gene = G.gene_from_sequence(f"synGene{i}", "synthetic", _rnd_seq(rng, 30_000), 0, rng)
+        if gene:
+            genes.append(gene)
+    return genes
 
 
 def main():
@@ -1050,6 +1186,43 @@ def main():
     g.add_argument("--artefact-cov-min", type=int, default=150)
     g.add_argument("--artefact-cov-max", type=int, default=300)
     g.add_argument("--artefact-mapq", type=int, default=60, help="MAPQ of pile-up clipped reads (30 => low-MAPQ pileup)")
+
+    g = p.add_argument_group(
+        "TPRT-hallmark insertion-type catalogue (read-level, multi-sample; off unless --types)")
+    g.add_argument("--types", default="",
+                   help="comma list of catalogue keys and/or literature type ids, or all / tp / artefact. "
+                        "Keys: " + ", ".join(_simlib_models.CATALOGUE))
+    g.add_argument("--n-per-type", type=int, default=0, help="events per selected type")
+    g.add_argument("--samples", type=int, default=1,
+                   help="colonies/samples of one patient; >1 writes <out-bam stem>.S1..Sn.bam "
+                        "(legacy catalogue goes to S1 only)")
+    g.add_argument("--depth", type=float, default=15.0, help="per-sample read depth at catalogue loci")
+    g.add_argument("--present-all-frac", type=float, default=0.5,
+                   help="fraction of TP events present in ALL samples (rest: random k of n)")
+    g.add_argument("--vaf-clonal-frac", type=float, default=0.7,
+                   help="per-sample probability an event is clonal heterozygous (VAF 0.5); else U(0.1,0.5)")
+    g.add_argument("--rte-library", default=None,
+                   help="resources/rte_library dir (real intact elements, transduction sources, flanks)")
+    g.add_argument("--hs1-2bit", default=os.environ.get("PEARTREE_HS1_2BIT"),
+                   help="hs1 .2bit for the element/flank fallback and real-sequence gene models "
+                        "(env PEARTREE_HS1_2BIT)")
+    g.add_argument("--hs1-rmsk", default=os.environ.get("PEARTREE_HS1_RMSK"),
+                   help="hs1 RepeatMasker .out.gz for the element/flank fallback (env PEARTREE_HS1_RMSK)")
+    g.add_argument("--library-cache", default=None,
+                   help="cache dir for the hs1 extraction (default <hs1 dir>/simlib_rte_cache)")
+    g.add_argument("--gene-model", default=None,
+                   help="gene annotation (tools/build_gene_model.py TSV or GTF) for pseudogene parents")
+    g.add_argument("--polya-jitter", type=float, default=1.0,
+                   help="scale of per-read homopolymer (SBS slippage) length jitter; 0 disables")
+    g.add_argument("--phasing-burst", type=float, default=1.0,
+                   help="scale of post-homopolymer phasing loss (read turns to low-quality junk after "
+                        "a long poly-A, p=min(0.6,0.01*(n-12)) per read); 0 disables")
+    g.add_argument("--polya-scale", type=float, default=1.0, help="scale the median poly-A length")
+    g.add_argument("--pcr-dup-unflagged-frac", type=float, default=0.05,
+                   help="fraction of fragments with PCR/optical duplicate copies (0x400 NOT set)")
+    g.add_argument("--error-rate", type=float, default=0.002, help="per-base substitution rate")
+    g.add_argument("--max-l1-deletion", type=int, default=20000, help="max L1-mediated deletion (bp)")
+    g.add_argument("--max-l1-duplication", type=int, default=5000, help="max L1-mediated duplication (bp)")
 
     simulate(p.parse_args())
 

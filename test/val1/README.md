@@ -178,6 +178,67 @@ must appear in the recall table *and* be flagged in `<out>.splice.tsv`.
 Every count is tuneable; set any `--n-*` to 0 to drop that class. `--n-l1` / `--n-erv`
 still drive the canonical full-length counts (backward compatible).
 
+## Insertion-type catalogue (`--types`, TPRT-hallmark overhaul)
+
+Off by default — without `--types` the output is **byte-identical** to before. With it,
+`simulate.py` appends read-level events from the shared library `test/simlib/` (also used by
+`test/fullstack/build_donor.py --types`). Unlike the clip-signal generators above, each event
+is a real haplotype (reference window + inserted sequence + TSD/deletion) from which **read
+pairs** are sampled and aligned *by construction*: correct mates (insert size N(330,90);
+mates inside the element are unmapped and placed at their partner, `MQ`/`MC` tags set),
+soft clips where a read leaves the reference, `SA` + supplementary records for split reads
+(fold-back / templated copies map back near the site), per-read Illumina noise.
+
+```bash
+venv/bin/python test/val1/simulate.py --out-bam sim.bam --out-truth truth.tsv \
+    --types all --n-per-type 3 --samples 2 --contig-len 40000000 \
+    --hs1-2bit hs1.2bit --hs1-rmsk hs1.repeatMasker.out.gz     # or --rte-library resources/rte_library
+venv/bin/python test/val1/score.py --bam sim.S1.bam,sim.S2.bam --truth truth.tsv --window 5
+```
+
+New flags: `--types` (keys, literature ids, `all`/`tp`/`artefact`), `--n-per-type`,
+`--samples` (n colonies of one patient → `<stem>.S1..Sn.bam`, legacy catalogue in S1),
+`--depth` (per sample, default 15), `--present-all-frac` (0.5; else present in a random k of
+n), `--vaf-clonal-frac` (0.7 clonal het VAF 0.5; else U(0.1,0.5)), `--rte-library`,
+`--hs1-2bit`/`--hs1-rmsk`/`--library-cache` (fallback: real young L1HS/AluYa5/AluYb8/SVA_E/F
+copies and their real 3'/5' flanks extracted from hs1), `--gene-model`, `--polya-jitter`,
+`--phasing-burst`, `--polya-scale`, `--pcr-dup-unflagged-frac` (0.05), `--error-rate`,
+`--max-l1-deletion`, `--max-l1-duplication`.
+
+Types (parameters + sources in `test/simlib/seqs.py` / `models.py`; truth schema in
+`test/simlib/TRUTH_SCHEMA.md`): solo L1 full / 5'-truncated (3'-clustered, median ~0.7 kb) /
+5'-inverted twin priming (breakpoint >= 590 bp, fwd:inv ~2.3, junction 66 % deletion median
+14.5 bp / 17 % duplication median 22 bp / 17 % clean) / twin priming + 5' switching /
+target-site deletion; partnered and orphan 3' transduction (real downstream flank of a real
+source, 1-3 fixed per-source endpoints after a poly-A signal, mostly < 1 kb, up to 12 kb);
+AluYa5/AluYb8, SVA_E/F, SVA 5' (upstream flank) and 3' transduction; processed pseudogene
+(>= 2 spliced exons, exon-exon junctions in the insert) and its no-junction decoy; solitary
+poly(A); L1-mediated deletion (no TSD, 1-5 bp microhomology) and tandem duplication;
+EN-independent; templated local (<250 bp from <= 15 bp of the site); co-inserted local
+pre-mRNA; fold-back inverted duplication. Every TPRT event gets a TSD (peak ~15, 4-25), a
+degenerate EN motif `TT|AAAA` (0-3 mismatches) at the nick and a poly-A (L1 median ~70,
+15-635). Artefacts (`role=ARTEFACT`, in truth but scored separately): single-molecule
+ligation chimera (L1 3' end + unrelated locus), the same duplicated by PCR, chimera faking a
+TSD > 50 bp, chimeric ends (Alu/SVA 5' + L1 3'), poly-A slippage at a reference A-tract,
+same-subfamily mismapping clips, fold-back palindrome.
+
+Read noise that matters for the new caller: per-read homopolymer length jitter (sd ~1 bp for
+a 20-mer, ~3 bp for a 70-mer), post-homopolymer phasing loss (the rest of the read becomes
+low-quality junk with p = min(0.6, 0.01(n-12)) — so many reads lose the 3'-beyond-poly-A
+sequence), substitutions, and PCR duplicates **without** the 0x400 flag (identical outer
+coordinates, independent noise). The truth records independent fragments vs reads per
+junction per sample (`frags_R/L`, `reads_R/L`) for the >= 2-independent-fragments rule.
+
+`score.py` now accepts comma-separated colony BAMs (calls pooled), matches breakpoints
+order-free, reports per-variant recall (+ one-sided hits) and calls at `ARTEFACT` loci.
+
+Baseline (seed 1, `--types all --n-per-type 10 --samples 2`, default discovery, pooled): TP
+recall 151/220, 8 FP. 9-10/10 for solo L1 (all structures), partnered TD, Alu, SVA (incl. TDs
+8-10/10), pseudogene and decoy; templated 8, pre-mRNA 8, fold-back 7 (+3 one-sided), orphan TD
+3/10; **0/10** for TSD-deletion, poly(A)-only, L1-mediated deletion/duplication and
+EN-independent (outside discovery's 2..40 bp TSD pairing). Artefacts called: chimeric ends
+2/10, all other artefact kinds 0/10.
+
 ## ⚠ Synthetic-only limitation (do not skip)
 
 This proves **necessity, not sufficiency**. The simulator now emits a synthetic
