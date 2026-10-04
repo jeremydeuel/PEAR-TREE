@@ -1324,30 +1324,33 @@ class VariantAnnotationContainer:
         dfamscan = CONFIG['annotate'].get('dfamscan')
         # cores this job owns (LSF), not the whole node's
         cpu = int(os.environ.get("LSB_DJOB_NUMPROC") or os.cpu_count() or 1)
-        if dfamscan and os.path.exists(dfamscan):
-            assert os.access(dfamscan, os.X_OK)
-            # a PERL5LIB/PERL_* inherited from the submitting shell's modules points this perl at
-            # another perl's XS modules ("ListUtil.c: loadable library and perl binaries are
-            # mismatched", PD37449 farm run) -> run dfamscan.pl with the perl variables removed
-            env = {k: v for k, v in os.environ.items() if not k.startswith("PERL")}
-            rc = subprocess.call([dfamscan, "--fastafile", self.fasta_file, "--hmmfile", hmm,
-                                  "--cpu", str(cpu), "--dfam_outfile", self.dfam_file], env=env)
-            assert rc == 0, f"dfamscan.pl failed (exit {rc})"
-        else:
-            # nhmmscan cannot read gzip; decompress the clip fasta to a temp file first.
-            fa = self.fasta_file
-            tmp_fa = None
-            if fa.endswith(".gz"):
-                tmp_fa = self.dfam_file + ".query.fa"
-                with gzip.open(fa, "rt") as i, open(tmp_fa, "w") as o:
-                    o.write(i.read())
-                fa = tmp_fa
-            rc = os.system(
-                f"nhmmscan --cpu {cpu} --dfamtblout {self.dfam_file} {hmm} {fa} "
-                f"> /dev/null 2>&1")
+        # nhmmscan cannot read gzip ("Sequence file ... is empty or misformatted"), whether called
+        # directly or by dfamscan.pl -> decompress the clip fasta to a temp file for both
+        fa = self.fasta_file
+        tmp_fa = None
+        if fa.endswith(".gz"):
+            tmp_fa = self.dfam_file + ".query.fa"
+            with gzip.open(fa, "rt") as i, open(tmp_fa, "w") as o:
+                o.write(i.read())
+            fa = tmp_fa
+        try:
+            if dfamscan and os.path.exists(dfamscan):
+                assert os.access(dfamscan, os.X_OK)
+                # a PERL5LIB/PERL_* inherited from the submitting shell's modules points this perl
+                # at another perl's XS modules ("ListUtil.c: loadable library and perl binaries
+                # are mismatched", PD37449 farm run) -> run dfamscan.pl without perl variables
+                env = {k: v for k, v in os.environ.items() if not k.startswith("PERL")}
+                rc = subprocess.call([dfamscan, "--fastafile", fa, "--hmmfile", hmm,
+                                      "--cpu", str(cpu), "--dfam_outfile", self.dfam_file], env=env)
+                assert rc == 0, f"dfamscan.pl failed (exit {rc})"
+            else:
+                rc = os.system(
+                    f"nhmmscan --cpu {cpu} --dfamtblout {self.dfam_file} {hmm} {fa} "
+                    f"> /dev/null 2>&1")
+                assert rc == 0, "nhmmscan failed"
+        finally:
             if tmp_fa and os.path.exists(tmp_fa):
                 os.remove(tmp_fa)
-            assert rc == 0, "nhmmscan failed"
         assert os.path.exists(self.dfam_file)
 
     def generate_sam_file(self):
