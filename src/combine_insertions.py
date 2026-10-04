@@ -134,6 +134,17 @@ def combine_insertions(input_files, insertions_genotyping_file, combined_inserti
     if CONFIG['combine_insertions'].get('far_pair_strict', False):
         from combine_insertions_evidence import discovery_breakpoints
         breakpoints = discovery_breakpoints(all_insertions)
+    ci_cfg = CONFIG['combine_insertions']
+    if (ci_cfg.get('require_independent_fragments', False) and ci_cfg.get('evidence_prefilter_early', False)
+            and any(os.path.exists(f + ".evidence.tsv.gz") for f in accepted_files)):
+        # TPRT: the pooled >= 2-fragment gate as an upper bound BEFORE merging, so the merge and
+        # the dense-region filter only see loci that can still pass it
+        from combine_insertions_evidence import early_prefilter
+        n_before = len(all_insertions)
+        all_insertions, n_early = early_prefilter(all_insertions, accepted_files, ci_cfg)
+        print(f"early fragment pre-filter: dropped {n_early} of {n_before} discovery loci "
+              f"(pooled distinct fragments < {ci_cfg.get('min_independent_fragments', 2)} within "
+              f"+-{ci_cfg.get('merge_tolerance_bp', 0)} bp)")
     insertions = intersect_insertions(all_insertions)
     #remove insertions in regions with far too high count
     bin_range = 100

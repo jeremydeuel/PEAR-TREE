@@ -173,17 +173,9 @@ def load_evidence(input_files: List[str], wanted_loci) -> (Dict, set):
     return rows, have
 
 
-def prefilter_fragments(insertions, input_files, min_ind: int, far_pair: bool, cfg=None):
-    """Drop insertions that cannot pass the independent-fragment gate, from one streaming pass
-    over the sidecars that keeps at most `min_ind` distinct fragment ids per (file, locus,
-    side). The pooled count of distinct (file, frag) over an insertion's member loci is an
-    upper bound on `n_independent` (dedup only merges fragments; SHORT rows are counted, so a
-    junction rescued by SHORT reads is kept). Without `far_pair` an insertion goes when ANY
-    gated junction is below `min_ind`; with it, a far-geometry pair only when ALL are (it may
-    still be split into a one-sided call on its good side). Insertions with a file lacking a sidecar are never
-    gated, so they are kept. Returns (kept insertions, number dropped)."""
-    if min_ind <= 1:
-        return insertions, 0
+def _capped_fragments(input_files, cap: int):
+    """One streaming pass over every sidecar: {(file basename, locus, side): (frag, ...)} with at
+    most `cap` distinct fragment ids per key, and the set of basenames that have a sidecar."""
     seen = {}
     have = set()
     for f in input_files:
@@ -204,8 +196,86 @@ def prefilter_fragments(insertions, input_files, min_ind: int, far_pair: bool, c
                 cur = seen.get(key)
                 if cur is None:
                     seen[key] = (p[fi],)
-                elif len(cur) < min_ind and p[fi] not in cur:
+                elif len(cur) < cap and p[fi] not in cur:
                     seen[key] = cur + (p[fi],)
+    return seen, have
+
+
+def early_prefilter(insertions, input_files, cfg):
+    """Pooled fragment gate BEFORE intersect_insertions (and so before the dense-region filter):
+    single-linkage clusters of every per-colony locus's junction coordinate (per contig and side,
+    links <= merge_tolerance_bp, the fuzzy-merge tolerance -- every merge group lies inside one
+    cluster on each side) pool their distinct (file, frag) ids from the sidecars. A locus is
+    dropped when a gated junction's cluster stays below min_independent_fragments (both
+    junctions for far-geometry pairs with far_pair_strict, which may be split one-sided):
+    no merge it can take part in could pass the gate. Legacy Bp+poly-A records (no position on
+    the poly-A side) and files without a sidecar are left alone. Returns (kept, n_dropped)."""
+    min_ind = int(cfg.get("min_independent_fragments", 2))
+    if min_ind <= 1:
+        return insertions, 0
+    tol = int(cfg.get("merge_tolerance_bp", 0) or 0)
+    far_pair = bool(cfg.get("far_pair_strict", False))
+    seen, have = _capped_fragments(input_files, min_ind)
+    if not have:
+        return insertions, 0
+    cluster_of = {}                       # (index, side) -> cluster id
+    pooled = []                           # cluster id -> set of (file, frag), capped
+    for side in SIDES:
+        pts = []
+        for k, ins in enumerate(insertions):
+            if side == _open_side(ins):
+                continue
+            pos = _ins_junction(ins, side)
+            if pos is None:
+                continue
+            pts.append((ins.reference_name, pos, k))
+        pts.sort()
+        prev = None
+        for contig, pos, k in pts:
+            if prev is None or prev[0] != contig or pos - prev[1] > tol:
+                pooled.append(set())
+            cid = len(pooled) - 1
+            cluster_of[(k, side)] = cid
+            fr = pooled[cid]
+            if len(fr) < min_ind:
+                for fb in insertions[k].files:
+                    for x in seen.get((fb, insertions[k].name, side), ()):
+                        fr.add((fb, x))
+            prev = (contig, pos)
+    kept, n_drop = [], 0
+    far_geometry = None
+    for k, ins in enumerate(insertions):
+        if not all(f in have for f in ins.files):
+            kept.append(ins)
+            continue
+        ups = [len(pooled[cluster_of[(k, s)]]) for s in SIDES if (k, s) in cluster_of]
+        if len(ups) < (1 if _open_side(ins) else 2):
+            kept.append(ins)              # a junction without a position: not judged here
+            continue
+        far = False
+        if far_pair and len(ups) == 2:
+            if far_geometry is None:
+                from combine_insertions_tprt_filters import far_geometry
+            far = far_geometry(ins.right_pos - ins.left_pos, cfg)
+        if (max(ups) if far else min(ups)) < min_ind:
+            n_drop += 1
+        else:
+            kept.append(ins)
+    return kept, n_drop
+
+
+def prefilter_fragments(insertions, input_files, min_ind: int, far_pair: bool, cfg=None):
+    """Drop insertions that cannot pass the independent-fragment gate, from one streaming pass
+    over the sidecars that keeps at most `min_ind` distinct fragment ids per (file, locus,
+    side). The pooled count of distinct (file, frag) over an insertion's member loci is an
+    upper bound on `n_independent` (dedup only merges fragments; SHORT rows are counted, so a
+    junction rescued by SHORT reads is kept). Without `far_pair` an insertion goes when ANY
+    gated junction is below `min_ind`; with it, a far-geometry pair only when ALL are (it may
+    still be split into a one-sided call on its good side). Insertions with a file lacking a sidecar are never
+    gated, so they are kept. Returns (kept insertions, number dropped)."""
+    if min_ind <= 1:
+        return insertions, 0
+    seen, have = _capped_fragments(input_files, min_ind)
     if not have:
         return insertions, 0
     kept, n_drop = [], 0
