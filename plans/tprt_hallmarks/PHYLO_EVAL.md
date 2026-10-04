@@ -32,6 +32,13 @@ python tools/phylo/discrimination.py --fit <run>/phylo/phylo_fit.tsv --out <run>
   read, alt if any junction is alt), so the model is per locus × colony.
 * Resources: 30,000 loci × 49 colonies took 150 s and 2.1 GB peak RSS (single core), including
   the bootstrap.
+* The annotation table is read TAB- or comma-separated (sniffed from the header). annotate_v2
+  writes TAB-separated text into `<P>.annotated.csv.gz`.
+* `cluster/tprt/evaluate.sh` (farm kit) calls both CLIs per arm, then `compare_arms.py` reads
+  `phylo_fit.tsv` columns `locus` and `phylo_label`. The chain is proven locally by
+  `test/e2e/phylo_ab_local.sh`, which uses two E2E-derived stand-in arms (legacy vs .tprt
+  genotyper on the same simulated patient) laid out as the kit's rundirs. It writes
+  `ab_report.md` with the phylo labels of both arms.
 * Needs `scipy` (added to requirements.txt). `matplotlib` is optional (PNGs are skipped without it).
 
 ## 2. Model
@@ -53,7 +60,7 @@ from its founder; the other cells carry none of its somatic variants):
 | somatic clonal het, diploid | f1 = (p/2)K / ((p/2)K + 1 − p/2) |
 | somatic, haploid (male X/Y) | f1 = pK / (pK + 1 − p) |
 | germline het (all cells) | fg = K / (K + 1) |
-| germline hom / hemizygous | 1 − ε_c |
+| germline hom / hemizygous | one fraction shared by all colonies, ~ Beta(8, 1) (a hom locus reads 0.85-0.98: some reference-configuration reads survive) |
 | absent | ε_c (background alt-vote rate: mapping, slippage) |
 
 Counts follow a beta-binomial BB(a | n, f, ρ) with intra-class correlation ρ (ρ1 for present,
@@ -101,8 +108,9 @@ Cells with n = 0 (or n < `--min-depth`) are missing data and contribute 0 to eve
 * **Branch b** (every non-root node: tips and internal nodes):
   log L_b = Σ_{c∈clade(b)} log P(d_c | present) + Σ_{c∉clade(b)} log P(d_c | absent).
   This is one matrix product, (ℓ1 − ℓ0) · M_b + Σ ℓ0.
-* **Root** ("carried by all colonies"): a locus-level mixture of germline het, germline hom and
-  somatic-in-all, with weights 1/3 each (het excluded on haploid loci).
+* **Root** ("carried by all colonies"): a locus-level mixture of germline het (fixed fg),
+  germline hom (shared fraction ~ Beta(8, 1), closed form) and somatic-in-all (f1 per colony),
+  with weights 1/3 each (het excluded on haploid loci).
 * **Prior over branches**: root 0.1. Other branches share 0.9 in proportion to their length
   (= mutation time, default; zero-length branches get a floor of 1 % of the mean length), or
   uniformly (`--branch-prior uniform`).
@@ -110,8 +118,9 @@ Cells with n = 0 (or n < `--min-depth`) are missing data and contribute 0 to eve
   * INDEP: each colony carries the insertion independently with probability π ~ U(0, 1). This is
     computed exactly: expand Π_c (π P1_c + (1 − π) P0_c) in the basis π^k (1 − π)^{C−k} by
     dynamic programming over colonies, then integrate each term to B(k + 1, C − k + 1).
-  * NOISE: nobody carries it, and the locus has its own alt rate ε ~ Beta(0.5, 2) in every
-    colony (closed form). This is the constant-allele-fraction artefact of
+  * NOISE: nobody carries it, and the locus has its own alt rate ε ~ Beta(0.5, 4) (mean 0.11)
+    in every colony (closed form). A constant het or hom fraction is the root hypothesis
+    instead, so the prior keeps NOISE at low fractions. This is the constant-allele-fraction artefact of
     `carrier-count-is-binomial-tail`.
 * **Bayes factor**: log10 BF = log10 Σ_b prior_b L_b − log10 [(L_indep + L_noise) / 2].
 * **Posterior over branches**, best branch (MAP), second branch.
@@ -139,6 +148,9 @@ log10 P0/P1 ≥ 1 (this needs depth: 0 of 2 reads is not a confident wild-type).
 | `uninformative_depth` | otherwise |
 
 Label: `phylo_consistent` if log10 BF ≥ 1, `phylo_violating` if ≤ −1, `ambiguous` in between.
+`phylo_label` is one verdict per locus for downstream tools (`cluster/tprt/compare_arms.py` picks
+it by default): the label for `informative_shared`, `noise_violating` for `noise`, and the class
+itself otherwise.
 Labels are only meaningful for `informative_shared`. `private` loci, which are the bulk of somatic
 L1 in colon, cannot be validated by a tree; `discrimination.py` reports their score distribution
 next to the validated sets.
@@ -147,7 +159,7 @@ next to the validated sets.
 
 | file | content |
 |---|---|
-| `phylo_fit.tsv` | one row per locus: `locus_kind`, `ploidy`, `total_alt/ref`, `n_carriers_observed`, `n_confident_wt`, `carriers`, `best_branch` (node id: tip name, `N<k>` preorder, `ROOT`), `best_clade`, `n_clade`, `branch_length`, `post_best_branch`, `second_branch`, `root_component`, log10 L of best / root / indep / noise, `log10_bf_tree`, `n_missing_leaves` / `n_extra_carriers` (flagged), `min_p_missing` / `min_p_extra`, `p_locus`, `class`, `label`, `passes_combine_genotypes`, then the annotate columns (a colliding name gets the prefix `ann_`, e.g. `ann_class`) |
+| `phylo_fit.tsv` | one row per locus (`phylo_label` = the single verdict): `locus_kind`, `ploidy`, `total_alt/ref`, `n_carriers_observed`, `n_confident_wt`, `carriers`, `best_branch` (node id: tip name, `N<k>` preorder, `ROOT`), `best_clade`, `n_clade`, `branch_length`, `post_best_branch`, `second_branch`, `root_component`, log10 L of best / root / indep / noise, `log10_bf_tree`, `n_missing_leaves` / `n_extra_carriers` (flagged), `min_p_missing` / `min_p_extra`, `p_locus`, `class`, `label`, `passes_combine_genotypes`, then the annotate columns (a colliding name gets the prefix `ann_`, e.g. `ann_class`) |
 | `violations.tsv` | per locus × colony candidate violation: kind, counts, expected fraction (f1 or ε), `p_dropout`, `p_chance`, log10 LR, `flagged` |
 | `colony_params.tsv` | purity (+ cells used), allelic balance b_c, ε_c (+ cells), median / mean depth, f1 at a TSD locus, P(dropout) at the median depth, terminal branch length |
 | `cells.tsv.gz` | every informative cell: counts, f1, ε, log10 LR, `p_dropout`, P(A ≤ a \| present), P(A ≥ a \| absent), in best clade |
@@ -199,8 +211,8 @@ U(0.001, 0.006) and a depth of 15× (25 % of colonies at 0.15-0.4×, negative bi
     binning plus sampling noise, not model bias.
   * The beta-binomial pmf was checked against 400k direct draws.
 * The locus-level bootstrap p-value of true clade loci is uniform. Its ECDF follows the diagonal
-  with a point mass at 1, so it is slightly conservative: p < 0.01 for 16 of 1357 and p < 0.05 for
-  70 of 1357.
+  with a point mass at 1, so it is slightly conservative: p < 0.01 for 14 of 1357 and p < 0.05 for
+  67 of 1357.
 * Purity is recovered to ±0.05 for most colonies, and worst for low-depth colonies with few
   informative cells. ε is recovered to within ~30 %.
 
@@ -213,7 +225,7 @@ U(0.001, 0.006) and a depth of 15× (25 % of colonies at 0.15-0.4×, negative bi
 
 * Best clade = true clade for 97.3 % of the informative true clade loci.
 * All 300 noise loci are classed noise or uninformative (none are informative_shared or germline).
-* 1272 of 1430 private loci are classed private.
+* 1268 of 1516 private loci are classed private (most of the rest have too little depth).
 * 564 of 620 germline loci are classed germline; 56 are informative_shared, because a
   low-purity-looking colony gets a confident wild-type call.
 
@@ -225,7 +237,65 @@ directly.
 
 ### 4.2 Full-stack E2E (`test/e2e/run_phylo_e2e.sh`)
 
-E2E_RESULTS_PLACEHOLDER
+The run simulates 10 colonies on a random coalescent tree (seed 21) through the full pipeline:
+fullstack simulator → bwa → Rust discovery → combine → annotate_v2 → Rust genotyper (.tprt
+contract) → tree_fit. Each colony gets a purity from U(0.7, 1) and a depth of 15× (low-depth
+colonies 0.25-0.5×, here S2, S3, S7, S10). Events: 220 TP on branches (uniform), 15 % non-clade
+decoys, 25 % at the root (60 % of those germline het, the rest somatic before the MRCA), and 60
+artefacts (slippage artefacts on non-clade subsets).
+
+```bash
+cd /Users/jeremy/Documents/PEAR_TREE/.claude/worktrees/agent-af1cff52023dab033
+OUT=/private/tmp/claude-501/-Users-jeremy-Documents-PEAR-TREE/fde0700f-e325-4651-8daf-0cdd52bd072b/scratchpad/work/e2e_phylo2 bash test/e2e/run_phylo_e2e.sh
+```
+
+283 genotyped loci: 46 clade, 49 private, 35 germline/root, 29 non-clade, and 134 `none` (hs1 vs
+GRCh38 germline differences, mostly hom, plus STR length differences).
+
+![E2E calibration](phylo_eval/calibration_e2e.png)
+
+* **(a) Per-colony flags are calibrated.**
+  * 380 true-carrier cells flagged as missing leaves: 0 / 0.5 % / 1.05 % / 5.0 % / 8.2 % at
+    α = 0.001 / 0.005 / 0.01 / 0.05 / 0.1.
+  * 858 true non-carrier cells flagged as extra carriers: ≤ 0.8 % at every α.
+* **Dropouts run about 2× above prediction in the full pipeline** (bins 0.01-0.03: 5 observed
+  vs 1.1 expected; 0.2-0.5: 14 vs 8.7). This is not binomial sampling. In the first run the
+  zero-alt carriers concentrate on a few loci where the genotyper misses the alt reads in several
+  carriers at full depth (e.g. an SVA_F clade with 0/12, 0/12 and 0/10 next to 5/16), so the alt
+  yield varies per locus.
+  * The model has no locus-level yield term. Such loci become `phylo_violating` or `ambiguous`
+    (1 of 41 informative true clades is violating).
+  * The violation p-values stay calibrated because the subclonal component floors them.
+* **Purity is an effective parameter.** Estimated purity runs ~0.15 below the truth here because
+  K (from 22 germline-het loci, K_TSD = 1.14) is pulled up by partial-fraction germline STR
+  differences that pass as hets. Purity is then fitted to the somatic clade cells given K, so the
+  expected fraction f1 still matches the observed somatic fractions, and the flags above are
+  calibrated.
+* **(b) Labels**:
+
+| truth | informative_shared | consistent | ambiguous | violating |
+|---|---|---|---|---|
+| clade (≥ 2 carriers) | 41 / 46 | 27 | 13 | 1 |
+| non-clade subset | 21 / 29 (8 more = `noise`) | 0 | 2 | **19** |
+
+  * Best clade = true clade for 40 of 41.
+  * 33 of 35 root events are `germline` (2 are `noise`: low-yield one-sided loci).
+  * The `none` loci are 103 germline, 21 noise and 2 informative_shared (1 violating, 1 ambiguous).
+  * 44 of 49 private events are `private`, and none are violating.
+  * With 10 colonies the BF of a correct clade is modest, so a third of the true clades are
+    `ambiguous`.
+* **The bootstrap `p_locus`** of true clade loci is < 0.01 for 1 of 41 and < 0.05 for 3 of 41.
+* **(c) `discrimination.py` runs end to end.** tprt_score AUC is 0.63 [0.47-0.77] here. That is
+  expected and not a statement about the caller: the simulator's non-clade decoys are REAL
+  insertion sequences placed on non-clade subsets, so the hallmark score should not separate
+  them. In this simulation the phylo labels test the phylogenetic method; on colon data, where
+  violating loci are real artefacts, the same report measures the caller.
+
+**Farm chain.** `test/e2e/phylo_ab_local.sh` runs `cluster/tprt/evaluate.sh` (tree_fit +
+discrimination per arm, then `compare_arms.py`) on the first E2E run. Arm A is the legacy
+genotyper and contract, arm B the .tprt genotyper and extended contract. `ab_report.md` lists the
+phylo labels of both arms: A has 245 loci (36 consistent, 14 violating, 23 noise_violating), B has
+283 (39 consistent, 21 violating, 29 noise_violating).
 
 ## 5. How to read the outputs on a real patient
 
@@ -263,6 +333,13 @@ E2E_RESULTS_PLACEHOLDER
 * **The genotyper's adjustments to n_ref** (`halve_single_junction_ref`, `dup_ref_discount`)
   make n a pseudo-count for one-sided and far-pair loci. K_kind absorbs the mean effect, but the
   beta-binomial then sees fewer effective trials, which is conservative.
+* **Locus-level allele yield**: the genotyper sometimes misses a locus's alt reads in several
+  carriers (E2E: an SVA_F clade with 0/12 in three deep carriers). The model has one vote-odds K
+  per locus kind, so such loci read as missing leaves. In the full pipeline dropouts are about
+  2× the binomial prediction. A per-locus yield multiplier integrated over a grid is the natural
+  next step; it would cost about 7× runtime.
+* **Purity is effective**, not physical, when K is contaminated (see 4.2). It is the parameter
+  that makes f1 match the somatic fractions.
 * **Bootstrap p-values** use plug-in parameters (no parameter uncertainty) and B = 200, so the
   floor is 0.005.
 * **`multi_colony`** in `tprt_points` is circular for shared loci. `tprt_score_no_multicolony`
