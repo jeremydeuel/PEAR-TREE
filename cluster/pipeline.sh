@@ -519,7 +519,8 @@ cmd_combine() {
         log "WARNING: no staged BAM left to verify the assembly against — proceeding unchecked"
     fi
 
-    "$VENV/bin/python" "$PT_ROOT/src/main.py" --step combine_insertions \
+    # -u: unbuffered, so the job log shows combine's progress while it runs (it can take hours)
+    "$VENV/bin/python" -u "$PT_ROOT/src/main.py" --step combine_insertions \
         --discovery_files "${files[@]}" --out "insertions/$PATIENT_ID" --threads "$CI_CORES"
 
     [ -s "$CONTRACT" ] || { echo "combine_insertions produced no $CONTRACT" >&2; exit 1; }
@@ -643,7 +644,7 @@ cmd_annotate() {
     # perl modules leaked from the submitting shell break dfamscan.pl (ListUtil.c mismatch)
     unset PERL5LIB PERLLIB PERL_LOCAL_LIB_ROOT PERL_MB_OPT PERL_MM_OPT
     PYTHONPATH="$PT_ROOT${PYTHONPATH:+:$PYTHONPATH}" \
-        "$VENV/bin/python" "$PT_ROOT/tools/annotate_v2.py" "$PATIENT_ID" "$PATIENT_ID.annotated.csv.gz"
+        "$VENV/bin/python" -u "$PT_ROOT/tools/annotate_v2.py" "$PATIENT_ID" "$PATIENT_ID.annotated.csv.gz"
     if [ -s "$PATIENT_ID.annotated.csv.gz" ]; then
         mkdir -p "$RESULTS_DIR/$PATIENT_ID"
         cp -f "$PATIENT_ID.annotated.csv.gz" "$RESULTS_DIR/$PATIENT_ID/"
