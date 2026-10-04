@@ -33,6 +33,40 @@ pub struct GenotypingConfig {
     pub artefact_read_fraction: f64,
     pub min_artefact_reads: i64,
     pub double_alt_is_artefact: bool,
+    /// TPRT one-sided loci (`contig:L-oneside_L` / `contig:oneside_R-R`): score only the
+    /// real junction; the open end carries no consensus and is never scored. Off (default)
+    /// -> such a locus has no consensus on its open side and is reported as `error`
+    /// (legacy contracts never contain one-sided loci, so their output is unchanged).
+    pub one_sided_loci: bool,
+    /// Far Bp+Bp pairs (L1-mediated deletion `R < L` / duplication `R > L`, up to 50 kb):
+    /// when `|R - L|` exceeds this, the two breakpoints are depth-gated and fetched as two
+    /// separate 1-bp windows instead of one `[min, max]` window (which would count every read
+    /// of the deleted/duplicated span as depth -> `high-coverage`, and let a non-spanning
+    /// mate claim the fragment's qname before the spanning one). 0 = off (legacy).
+    pub split_breakpoint_span: i64,
+    /// One-sided loci only: a read whose alignment ends, on the OPEN side, in a soft clip of
+    /// at least `one_sided_open_min_clip` bases within this many bp of the real breakpoint is a
+    /// junction read of the missing end (its aligned part runs over the real breakpoint in
+    /// reference configuration) and is skipped. Two-sided genotyping scores such a read alt
+    /// on its own side; with the open side unscored it would be a false ref vote, pulling a
+    /// het towards VAF 1/3. 0 = off. Spans the TSD (<= 40) and target-site deletion (<= 30).
+    pub one_sided_open_window: i64,
+    pub one_sided_open_min_clip: i64,
+    /// Far L1-mediated duplications (`R - L` >= this, i.e. longer than a read): the
+    /// alt haplotype `ref[..R) + element + ref[L..)` still carries BOTH reference junctions
+    /// (the duplicated copy), so every alt-haplotype molecule also yields about one
+    /// reference-configuration read; a het reads VAF ~1/3, a hom ~1/2. Discount one ref read
+    /// per alt read (`n_ref -= min(n_ref, n_alt)`, ref score scaled alike) before the VAF
+    /// bands. Wild-type colonies (n_alt = 0) are unchanged. 0 = off.
+    pub dup_ref_discount_min_span: i64,
+    /// Single-junction evidence (one-sided loci, split far pairs): count each reference vote
+    /// as HALF (`n_ref -> ceil(n_ref / 2)`, ref score halved). The VAF bands are calibrated on
+    /// a TSD locus, where alt reads come from TWO junctions but one reference read spans both
+    /// (het VAF = 2f/(2f+1), f = junction-read yield). A one-sided locus has alt from one
+    /// junction per reference span, a far pair has two disjoint reference spans: both read
+    /// f/(1+f) (E2E: ~0.30-0.38 for true hets) unless the reference side is halved. Applied
+    /// before the duplication discount. false = off.
+    pub halve_single_junction_ref: bool,
 }
 
 impl Default for GenotypingConfig {
@@ -52,6 +86,12 @@ impl Default for GenotypingConfig {
             artefact_read_fraction: 0.5,
             min_artefact_reads: 2,
             double_alt_is_artefact: true,
+            one_sided_loci: false,
+            split_breakpoint_span: 0,
+            one_sided_open_window: 0,
+            one_sided_open_min_clip: 5,
+            dup_ref_discount_min_span: 0,
+            halve_single_junction_ref: false,
         }
     }
 }
@@ -108,6 +148,12 @@ impl GenotypingConfig {
             "artefact_read_fraction" => self.artefact_read_fraction = parse_num(val)?,
             "min_artefact_reads" => self.min_artefact_reads = parse_num(val)?,
             "double_alt_is_artefact" => self.double_alt_is_artefact = parse_bool(val)?,
+            "one_sided_loci" => self.one_sided_loci = parse_bool(val)?,
+            "split_breakpoint_span" => self.split_breakpoint_span = parse_num(val)?,
+            "one_sided_open_window" => self.one_sided_open_window = parse_num(val)?,
+            "one_sided_open_min_clip" => self.one_sided_open_min_clip = parse_num(val)?,
+            "dup_ref_discount_min_span" => self.dup_ref_discount_min_span = parse_num(val)?,
+            "halve_single_junction_ref" => self.halve_single_junction_ref = parse_bool(val)?,
             other => eprintln!("warning: ignoring unknown config key '{other}'"),
         }
         Ok(())
@@ -127,6 +173,12 @@ mod tests {
         assert!(c.recover_low_coverage_presence);
         assert_eq!(c.reads_for_high_coverage, 180);
         assert!((c.vaf_hom_min - 0.85).abs() < 1e-12);
+        // TPRT keys default off (legacy byte-identical output)
+        assert!(!c.one_sided_loci);
+        assert_eq!(c.split_breakpoint_span, 0);
+        assert_eq!(c.one_sided_open_window, 0);
+        assert_eq!(c.dup_ref_discount_min_span, 0);
+        assert!(!c.halve_single_junction_ref);
     }
 
     #[test]
@@ -138,5 +190,9 @@ mod tests {
         assert_eq!(c.min_mapq, 60);
         assert_eq!(c.reads_for_high_coverage, 250);
         assert!(!c.recover_low_coverage_presence);
+        c.set("one_sided_loci", "true").unwrap();
+        c.set("split_breakpoint_span", "50").unwrap();
+        assert!(c.one_sided_loci);
+        assert_eq!(c.split_breakpoint_span, 50);
     }
 }

@@ -199,5 +199,112 @@ geometry from the 0x20 / 0x10 flags).
    Annotate features that should catch it: `inactive_only` does not apply (young subfamily);
    proposal: flag a clip whose flank part maps uniquely to a reference L1 3' flank elsewhere while
    the element part sits on a reference L1 copy here (mismap signature), rather than a score tweak.
-6. One-sided loci are not genotyped; `keep_polya_one_sided` can now be enabled (the gate skips
-   the open side) but was left off pending a measurement.
+6. ~~One-sided loci are not genotyped~~ — now genotyped, see "Genotyping new locus kinds" below;
+   `keep_polya_one_sided` can now be enabled (the gate skips the open side) but was left off
+   pending a measurement.
+
+## Genotyping new locus kinds (genotyping worker, 2026-10-04)
+
+The E2E above stubbed genotyping. This section genotypes the same combine output with the Rust
+genotyper, per colony, and scores present/absent per colony against the simulator truth
+(`vaf_by_sample`; present = VAF > 0).
+
+### How the genotyper builds alleles, and what each locus kind needs
+
+Per read, per junction: `qleft` compares the <= 12 read bases 5' of L with `LEFT_REFERENCE`
+(= genome[L-12, L)) and `LEFT_INSERTION` (the left clip's 12 junction-adjacent bases); `qright`
+the bases 3' of R with `RIGHT_REFERENCE` (genome[R, R+12)) and `RIGHT_INSERTION`. A read with
+an alt junction is one alt vote, a read with only ref junctions one ref vote; VAF bands decide.
+No allele is built "between" L and R, so:
+
+* **target-site deletion** (`R < L`, <= 30 bp) and **blunt** (`R - L` in {0, 1}): correct
+  unchanged — an alt read covers only its own junction (no false double-alt), a reference read
+  spans both and votes ref. Verified on synthetic reads (Rust unit tests) and in the E2E.
+* **L1-mediated deletion / duplication** (`|R - L|` up to 50 kb): the legacy single window
+  `[min, max]` counts every read of the span as depth -> `high-coverage` (6/18 TP colony calls,
+  5/6 in the wild-type control), and a mate inside the span can claim a spanning read's qname.
+  Fixed by `split_breakpoint_span = 40`: one 1-bp window per breakpoint, shared qname dedup.
+  Two further biases, both from the VAF bands being calibrated on a TSD locus (alt reads from
+  two junctions per reference span, het VAF = 2f/(2f+1), f = junction-read yield):
+  far pairs have two *disjoint* reference spans and one-sided loci one junction, so a het reads
+  f/(1+f) (E2E pooled VAF 0.30-0.38) -> `halve_single_junction_ref` (ref votes count half);
+  and a far **duplication**'s alt haplotype `ref[..R) + element + ref[L..)` still carries both
+  reference junctions, so alt-haplotype molecules also yield reference reads -> 
+  `dup_ref_discount_min_span = 150` (`n_ref -= min(n_ref, n_alt)`; wild-type colonies unchanged).
+* **one-sided** (`contig:L-oneside_L` / `contig:oneside_R-R`): combine leaves them out of
+  `<patient>.genotyping.txt.gz` (I don't own combine), so `src/genotyping_contract_oneside.py`
+  appends them -> `<patient>.genotyping.tprt.txt.gz`: real side only, built exactly as combine
+  builds that side (clip from `combined.txt.gz`, reference from the 2bit, combine's per-side
+  exclusions; 42 added, 1 excluded as clip == reference). The genotyper (`one_sided_loci`)
+  parses the token and never scores the open end. The missing end's junction reads (soft clip
+  on the open side, <= 50 bp from the real breakpoint) cross the real breakpoint in reference
+  configuration and would be false ref votes -> skipped (`one_sided_open_window = 50`).
+
+`cluster/pipeline.sh` builds the extended contract in the (single) combine task when
+`GENO_CFG` sets `one_sided_loci = true`, and the genotype tasks read it. Use
+`GENO_CFG=cluster/config.genotype.grch38.tprt`. `combine_genotypes.py` needed no change to
+accept the names (rows are keyed verbatim — what annotate joins on); it now prints a per-kind
+(`locus_kind`) removed/kept summary; `<patient>.genotypes.csv.gz` is unchanged.
+
+Byte-identity: default config and `config.genotype.grch38` produce md5-identical output to
+the pre-change binary on S1-S3, a wild-type control colony and `test_data/test.bam`; the `.tprt`
+config on the legacy contract changes only the 80 far-pair rows (TSD / TSD-deletion / blunt
+rows identical).
+
+### Commands
+
+```bash
+cd /Users/jeremy/Documents/PEAR_TREE/.claude/worktrees/agent-a76527686f1a0a72a
+bash /Users/jeremy/Documents/PEAR_TREE/.claude/worktrees/agent-a76527686f1a0a72a/test/e2e/run_genotype_e2e.sh
+```
+
+(needs the `run_e2e.sh` output in `$SP/work/e2e`; simulates a 4th, **wild-type control colony
+S4** from the event-free haplotype with the same simulator/mapping, extends the contract,
+genotypes S1-S4 with the legacy and the `.tprt` config, writes
+`$SP/work/e2e/genotype/genotype_score.md`.)
+
+### Results (135 combined TP loci x 3 colonies; S4 = wild-type control)
+
+Colony calls: present = het/hom/`insertion` (combine_genotypes' carrier set), absent =
+`wild-type`, no call = anything else (all no-calls here are truth-present colonies; most are
+subclonal VAF 0.125-0.375 reading `wild-type?`).
+
+| locus kind | TP loci | legacy: present ok / ->absent / no call | **tprt: present ok / ->absent / no call** | legacy S4 FP / no call | **tprt S4 FP / no call** | het (VAF 0.5) pooled VAF legacy -> tprt |
+|---|---|---|---|---|---|---|
+| TSD 2-40 | 101 | 188 / 18 / 55 (+42 absent ok) | 188 / 18 / 55 (+42 absent ok) | 0 / 1 | 0 / 1 | 0.449 -> 0.449 |
+| target-site deletion | 7 | 13 / 2 / 2 (+2 ok, 2 absent->present) | identical | 1 / 0 | 1 / 0 | 0.458 -> 0.458 |
+| blunt 0-1 | 8 | 20 / 1 / 3 | identical | 0 / 0 | 0 / 0 | 0.535 -> 0.535 |
+| L1DEL (< -30) | 6 | 10 / 0 / 8 (6 `high-coverage`) | **15 / 0 / 3** | 0 / 5 (`high-coverage`) | **0 / 0** | (high-cov) -> 0.544 |
+| L1DUP (> 40) | 3 | 2 / 1 / 6 | **8 / 0 / 1** | 0 / 0 | 0 / 0 | 0.273 -> 0.509 |
+| one-sided | 10 | 0 / 0 / 30 (not in contract) | **20 / 6 / 4** | — | **0 / 0** | — -> 0.446 |
+| **all** | 135 | 233 / 22 / 104 | **264 / 27 / 68** | 1 / 16 | **1 / 1** | |
+
+Key-by-key on the same data (one-sided present ok of 30 / L1DEL of 18 / L1DUP of 9):
+`one_sided_loci` + `split_breakpoint_span` only 10 / 12 / 2 (one-sided het pooled VAF 0.27)
+-> + `one_sided_open_window` and `dup_ref_discount_min_span` 16 / 12 / 3 (0.30)
+-> + `halve_single_junction_ref` **20 / 15 / 8** (0.45). No new-kind TP locus is called present
+in the wild-type control (0/19), so none of the corrections buys sensitivity with false carriers.
+The 2 TSD-deletion absent->present calls and the S4 FP are one locus, `chr22:26440278-26440276`
+(matched to an SVA_TD5P event present only in S1), homozygous in all four colonies including
+the control: a germline CHM13-vs-GRCh38 difference at the event site, identical under both
+configs.
+
+Remaining one-sided misses (6 present->absent, 4 no-call) are alt-read mappability, not
+genotyper logic: the real junction is the poly-A side, its junction reads start in the poly-A /
+element and lose MAPQ 60 in Alu-rich flanks (e.g. `chr22:32246706-oneside_32246706`: alt reads
+at MAPQ 34 / 4, 0 of them pass `min_mapq = 60` in S3), plus subclonal colonies.
+
+Unexplained (no TP event) far pairs and one-sided loci are now genotyped too: of 52 L1DEL /
+19 L1DUP unexplained loci, 12 / 7 are present in all three colonies **and** in the wild-type
+control (germline-like CHM13-vs-GRCh38 differences — a real cohort's `min_wild-types` removes
+them), single-colony ones are mostly absent in S4; the 3-colony E2E cannot run the clade gates
+meaningfully (`min_wild-types 20`), but `combine_genotypes` was run on the 4 genotype files and
+accepts every new name.
+
+Caveats: (1) with `halve_single_junction_ref` the `n_ref` column of one-sided / far-pair rows
+is a half-weight count — the dispersion gate sees it as such (fewer effective trials,
+conservative). (2) annotate_v2's `read_genotyping` counts only het/hom as carriers, not
+`insertion` (presence certain, zygosity unclear), unlike combine_genotypes — low-coverage
+one-sided loci reading `insertion` everywhere would be dropped there (annotate-owned).
+(3) The Python oracle genotyper (`src/genotype.py`) was not extended and rejects `oneside_`
+names; the cluster uses the Rust binary.

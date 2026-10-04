@@ -37,6 +37,54 @@ def _sample_stem(path: str) -> str:
     """
     base = os.path.basename(path)
     return re.sub(r'(\.genotypes)?(\.(txt|csv))?(\.gz)?$', '', base)
+
+
+ONESIDE_TOKEN = 'oneside_'
+LOCUS_KINDS = ('TSD', 'TSD_DELETION', 'BLUNT', 'L1_MED_DELETION', 'L1_MED_DUPLICATION',
+               'ONE_SIDED', 'OTHER')
+
+
+def locus_kind(name: str) -> str:
+    """Geometry class of a locus name (plans/tprt_hallmarks/SPEC.md "Pairing modes and locus
+    names"), from gap = R - L: `contig:L-oneside_L` / `contig:oneside_R-R` -> ONE_SIDED;
+    gap < -30 -> L1_MED_DELETION; -30..-1 -> TSD_DELETION; 0..1 -> BLUNT; 2..40 -> TSD;
+    > 40 -> L1_MED_DUPLICATION (or a long-TSD artefact: same geometry). Anything else (e.g. a
+    legacy `polyA_` / Feature-A `disc_` token) -> OTHER. Split from the right: contig names
+    may contain ':' or '-'.
+
+    Only used for the per-kind summary; the matrix rows are keyed by the name verbatim, which
+    is what annotate (`<patient>.genotypes.csv.gz`) joins on."""
+    contig, sep, pos = str(name).rpartition(':')
+    left, sep2, right = pos.rpartition('-')
+    if not sep or not sep2:
+        return 'OTHER'
+    if left.startswith(ONESIDE_TOKEN) != right.startswith(ONESIDE_TOKEN):
+        return 'ONE_SIDED'
+    try:
+        gap = int(right) - int(left)
+    except ValueError:
+        return 'OTHER'
+    if gap < -30:
+        return 'L1_MED_DELETION'
+    if gap < 0:
+        return 'TSD_DELETION'
+    if gap <= 1:
+        return 'BLUNT'
+    if gap <= 40:
+        return 'TSD'
+    return 'L1_MED_DUPLICATION'
+
+
+def kind_summary(index, failed) -> pd.DataFrame:
+    """Per locus kind: loci in, removed by any gate, kept (printed by collect_genotype)."""
+    kinds = pd.Series([locus_kind(n) for n in index], index=index)
+    failed = pd.Series(failed, index=index).astype(bool)
+    out = pd.DataFrame({'loci': kinds.value_counts(),
+                        'removed': kinds[failed].value_counts()}).fillna(0).astype(int)
+    out['kept'] = out['loci'] - out['removed']
+    return out.reindex([k for k in LOCUS_KINDS if k in out.index])
+
+
 def _overdispersion(n_alt: pd.DataFrame, n_ref: pd.DataFrame) -> pd.Series:
     """Pearson chi-square dispersion of a locus's per-colony alt counts about ONE
     constant allele fraction, averaged over its degrees of freedom.
@@ -212,6 +260,8 @@ def collect_genotype(input_files, output_file, threads):
                                       ])
     summary_filtering = summary_filtering.any(axis=0)
     print(f"= removing {sum(summary_filtering)} insertions failing any of these tests.")
+    print("per locus kind (TPRT pairing modes; name geometry, gap = R - L):")
+    print(kind_summary(d.index, summary_filtering.reindex(d.index).values).to_string())
     d = d.loc[~summary_filtering]
     print(f" applying score filtering")
     print(f"writing a final of {d.shape[0]} filtered insertions")
