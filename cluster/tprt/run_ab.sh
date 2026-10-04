@@ -59,16 +59,18 @@ case "$ARMS" in A) RUN_ARMS=(A) ;; B) RUN_ARMS=(B) ;; both) RUN_ARMS=(A B) ;; *)
 # discovery: post-jemalloc PD44579 cohort peak max 3.1 GB / p95 2.1 GB (job 954062) -> 8 GB for
 #   arm A (the validated submit_discovery.sh default). Arm B adds the evidence sidecar,
 #   fetch_all_mates, SHORT reads and a per-sample floor of ONE fragment (many more emitted
-#   breakpoints held with full records) — unmeasured on real WGS, so 12 GB; the retry controller
+#   breakpoints held with full records). PD37449 pilot: 17-30 GB before the exact-emission sidecar
+#   pass (3002f46), 11.9 GB after it on the worst colony (lo0002) -> 16 GB; the retry controller
 #   escalates any TERM_MEMLIMIT once to 32 GB on `long`.
 # combine_insertions: legacy 15.5 GB peak on 174 PD44579 files -> 24 GB (A). Arm B pools every
 #   colony's sidecar reads per junction in Python (dedup, SHORT, mappy) — unmeasured, and combine
-#   has NO retry controller, so 64 GB. Lower both after the pilot (ab_report.md prints the peaks).
+#   has NO retry controller. PD37449 (10 colonies) plateaued at ~58 GB before the streaming
+#   fragment pre-filter (a983e4d); it grows with the colony count, so 96 GB until re-measured.
 # genotype: 140 MB measured; 4 GB reservation on purpose — it is what keeps LSF from packing the
 #   whole array onto one 1.9 TB node (I/O starvation, genotyping-perf note); THROTTLE 12 per arm
 #   (24 concurrent for both) for the same reason.
-A_SD_MEM="${A_SD_MEM:-8000}";   B_SD_MEM="${B_SD_MEM:-12000}"; SD_MEM_T2="${SD_MEM_T2:-32000}"
-A_CI_MEM="${A_CI_MEM:-24000}";  B_CI_MEM="${B_CI_MEM:-64000}"; CI_CORES="${CI_CORES:-8}"
+A_SD_MEM="${A_SD_MEM:-8000}";   B_SD_MEM="${B_SD_MEM:-16000}"; SD_MEM_T2="${SD_MEM_T2:-32000}"
+A_CI_MEM="${A_CI_MEM:-24000}";  B_CI_MEM="${B_CI_MEM:-96000}"; CI_CORES="${CI_CORES:-8}"
 GT_MEM_T1="${GT_MEM_T1:-4000}"; GT_MEM_T2="${GT_MEM_T2:-8000}"; GT_THROTTLE="${GT_THROTTLE:-12}"
 STAGE_THROTTLE="${STAGE_THROTTLE:-20}"
 AN_MEM="${AN_MEM:-32000}"; AN_CORES="${AN_CORES:-4}"
