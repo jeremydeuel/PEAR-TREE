@@ -157,6 +157,7 @@ CONFIG = {
         'dup_coord_tolerance': 2, #bp tolerance on read/mate outer coordinates for within-sample duplicates
         'dup_max_edit': 2, #max edit distance of junction-clip (and mate) sequence for within-sample duplicates
         'polya_min_len': 8, #min consensus homopolymer A/T run reported as the poly-A (evidence.tsv polya_len_*/beyond_polya)
+        'keep_polya_one_sided': False, #intersect: keep legacy Bp+polyA records as one-sided loci on their real junction (discovery's one_sided_loci `oneside_` loci are always kept); off until the evidence gate skips the open side
     },
     'annotate': { #necessary for annotate_v2.py (step 3, optional element classification)
         # NOTE: annotate works in bowtie2_index2 (hs1) space, NOT GRCh38 — so rmsk and

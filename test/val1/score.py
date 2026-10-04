@@ -16,9 +16,10 @@ import sys
 import tempfile
 
 # a call header is @<contig>:<left>-<right>:...; either coordinate may carry a
-# non-numeric partner prefix (polyA_<pos>, or disc_<pos> from Feature A), which we
+# non-numeric partner prefix (polyA_<pos>, disc_<pos> from Feature A, or oneside_<pos>
+# for a TPRT one-sided locus, which repeats the real coordinate), which we
 # strip so the call is scored by its numeric breakpoint position.
-CALL_RE = re.compile(r"^@([^:]+):(?:polyA_|disc_)?(\d+)-(?:polyA_|disc_)?(\d+):")
+CALL_RE = re.compile(r"^@([^:]+):(?:polyA_|disc_|oneside_)?(\d+)-(?:polyA_|disc_|oneside_)?(\d+):")
 
 
 def load_truth(path):
@@ -109,6 +110,13 @@ def score(truth, calls, window, artefacts=()):
                 partial.setdefault(cls, 0)
                 partial[cls] += 1
     true_pos = sum(used)
+    # unmatched calls with one breakpoint at a TP junction (one-sided / mis-partnered calls
+    # of a real event) vs genuinely stray calls
+    tp_ends = {}
+    for t in truth:
+        tp_ends.setdefault(t["contig"], []).extend((t["left"], t["right"]))
+    near_tp = sum(1 for i, c in enumerate(calls) if not used[i]
+                  and any(abs(x - e) <= window for x in c[1:] for e in tp_ends.get(c[0], ())))
     # calls at labelled artefact loci (role=ARTEFACT): reported per artefact kind; they are
     # false positives (counted in false_pos as before)
     by_artefact = {}
@@ -124,6 +132,7 @@ def score(truth, calls, window, artefacts=()):
     return {
         "n_truth": len(truth), "n_calls": total_calls,
         "matched": matched_truth, "false_pos": total_calls - true_pos,
+        "unmatched_at_tp_junction": near_tp,
         "recall": round(recall, 4), "precision": round(precision, 4),
         "by_class": {k: {"found": v[0], "total": v[1], "one_sided": partial.get(k, 0)}
                      for k, v in by_class.items()},
@@ -164,7 +173,7 @@ def main():
         print(json.dumps(m))
         return
     print(f"[{args.label}]  recall {m['recall']:.3f}  precision {m['precision']:.3f}  "
-          f"(matched {m['matched']}/{m['n_truth']}, calls {m['n_calls']}, FP {m['false_pos']})")
+          f"(matched {m['matched']}/{m['n_truth']}, calls {m['n_calls']}, FP {m['false_pos']}, of which at a TP junction {m['unmatched_at_tp_junction']})")
     for k, v in m["by_class"].items():
         extra = f"  (+{v['one_sided']} one-sided)" if v.get("one_sided") else ""
         print(f"    class {k:4s}: {v['found']}/{v['total']}{extra}")

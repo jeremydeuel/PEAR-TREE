@@ -32,15 +32,27 @@ TYPE_LEFT_POLYA = 2
 # genotyping of coordinate-only ends is deferred (see intersect_insertions).
 TYPE_RIGHT_DISC = 4
 TYPE_LEFT_DISC = 5
+# TPRT one-sided locus (discovery `one_sided_loci`): token `oneside_<pos>` on the missing end,
+# <pos> = the real junction's coordinate, no reads. Parsed onto the Feature-A types above
+# (one real side: remapped/filtered/written like a discordant call, not genotyped) with
+# `open_side` = 'RIGHT' / 'LEFT' naming the end that has no evidence.
+ONESIDE_TOKEN = 'oneside_'
 class Insertion:
     def __init__(self, reference_name: str, start: str, end: str, data: Dict, file: str):
         assert reference_name is not None and len(reference_name), f"reference_name not given."
         self.name = f"{reference_name}:{start}-{end}"
         self.type = None
+        self.open_side = None  # TPRT: 'LEFT'/'RIGHT' for a one-sided locus, else None
         if 'RIGHT:ALIGNED' in data.keys() and 'RIGHT:CLIPPED' in data.keys():
             self.right_aligned = data['RIGHT:ALIGNED'].revcomp()
             self.right_clipped = data['RIGHT:CLIPPED']
             self.right_pos = int(end)
+        elif end.startswith(ONESIDE_TOKEN):
+            self.right_clipped = None
+            self.right_aligned = None
+            self.right_pos = int(end[len(ONESIDE_TOKEN):])
+            self.type = TYPE_RIGHT_DISC
+            self.open_side = 'RIGHT'
         elif end[:5] == 'disc_':
             # Feature A: discordant-anchored right end — real coordinate, no reads.
             self.right_clipped = None
@@ -57,6 +69,12 @@ class Insertion:
             self.left_clipped = data['LEFT:CLIPPED'].revcomp()
             self.left_aligned =  data['LEFT:ALIGNED']
             self.left_pos = int(start)
+        elif start.startswith(ONESIDE_TOKEN):
+            self.left_clipped = None
+            self.left_aligned = None
+            self.left_pos = int(start[len(ONESIDE_TOKEN):])
+            self.type = TYPE_LEFT_DISC
+            self.open_side = 'LEFT'
         elif start[:5] == 'disc_':
             # Feature A: discordant-anchored left end — real coordinate, no reads.
             self.left_clipped = None
