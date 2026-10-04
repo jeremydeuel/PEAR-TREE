@@ -285,7 +285,7 @@ cmd_stage_discover() {
         log "$SAMPLE: DISCOVERY FAILED"; rm -f "$TMP" "$TMP".*; exit 1
     fi
     mv -f "$TMP" "$OUT"
-    for ext in stats.json splice.tsv hallmarks.tsv; do
+    for ext in stats.json splice.tsv hallmarks.tsv evidence.tsv.gz; do
         [ -e "$TMP.$ext" ] && mv -f "$TMP.$ext" "$OUT.$ext"
     done
     log "$SAMPLE: done -> $OUT"

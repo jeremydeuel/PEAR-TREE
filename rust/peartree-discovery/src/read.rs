@@ -25,6 +25,17 @@ pub struct BamRead<'a> {
     /// mate coordinate (RNEXT/PNEXT) for the SPD-4 mate fetch
     pub mate_ref_id: Option<usize>,
     pub mate_pos: i64, // 0-based, -1 if unset
+    /// raw SAM FLAG (sidecar: kept verbatim, dup bit included for diagnostics)
+    pub flag: u16,
+    /// mate strand (0x20)
+    pub mate_is_reverse: bool,
+    /// SAM TLEN
+    pub tlen: i32,
+    /// soft-clip lengths adjacent to the alignment (hard clips skipped), for the
+    /// sidecar `outer` coordinate. Unlike `left_len`/`right_len` these look past a
+    /// leading/trailing hard clip.
+    pub lead_soft: usize,
+    pub trail_soft: usize,
     pub mapq: u8,
     pub is_read1: bool,
     pub is_read2: bool,
@@ -63,6 +74,10 @@ impl<'a> BamRead<'a> {
         let mut ref_len: i64 = 0;
         let mut first: Option<(Kind, usize)> = None;
         let mut last: Option<(Kind, usize)> = None;
+        // soft clips adjacent to the alignment, skipping hard clips (sidecar `outer`)
+        let mut lead_soft: usize = 0;
+        let mut trail_soft: usize = 0;
+        let mut seen_aligned = false;
         for op in record.cigar().iter() {
             let op = op?;
             let kind = op.kind();
@@ -71,6 +86,20 @@ impl<'a> BamRead<'a> {
                 first = Some((kind, len));
             }
             last = Some((kind, len));
+            match kind {
+                Kind::SoftClip => {
+                    if seen_aligned {
+                        trail_soft += len;
+                    } else {
+                        lead_soft += len;
+                    }
+                }
+                Kind::HardClip => {}
+                _ => {
+                    seen_aligned = true;
+                    trail_soft = 0;
+                }
+            }
             if matches!(
                 kind,
                 Kind::Match | Kind::Deletion | Kind::Skip | Kind::SequenceMatch | Kind::SequenceMismatch
@@ -96,6 +125,7 @@ impl<'a> BamRead<'a> {
 
         let mate_ref_id = record.mate_reference_sequence_id(header).transpose()?;
         let mate_pos = record.mate_alignment_start().transpose()?.map(|p| usize::from(p) as i64 - 1).unwrap_or(-1);
+        let tlen = record.template_length()?;
 
         Ok(BamRead {
             record,
@@ -106,6 +136,11 @@ impl<'a> BamRead<'a> {
             reference_end,
             mate_ref_id,
             mate_pos,
+            flag: flags.bits(),
+            mate_is_reverse: flags.is_mate_reverse_complemented(),
+            tlen,
+            lead_soft,
+            trail_soft,
             mapq,
             is_read1: flags.is_first_segment(),
             is_read2: flags.is_last_segment(),
@@ -124,7 +159,67 @@ impl<'a> BamRead<'a> {
         })
     }
 
+    /// Unclipped 5' end of this read on the reference (0-based, inclusive): the
+    /// leftmost base incl. leading soft clip for a forward read, the rightmost base
+    /// incl. trailing soft clip for a reverse read. -1 if unmapped.
+    pub fn outer(&self) -> i64 {
+        if !self.mapped || self.reference_start < 0 {
+            return -1;
+        }
+        if self.is_reverse {
+            self.reference_end - 1 + self.trail_soft as i64
+        } else {
+            self.reference_start - self.lead_soft as i64
+        }
+    }
+
+    /// 1 / 2 for first / last segment, 0 if neither (unpaired).
+    pub fn r12(&self) -> u8 {
+        if self.is_read1 {
+            1
+        } else if self.is_read2 {
+            2
+        } else {
+            0
+        }
+    }
+
     // --- lazy heavy fields (decode on demand) ---
+
+    /// CIGAR as a SAM string (`*` if empty). Sidecar only.
+    pub fn cigar_string(&self) -> String {
+        let mut s = String::new();
+        for op in self.record.cigar().iter() {
+            let Ok(op) = op else { break };
+            let c = match op.kind() {
+                Kind::Match => 'M',
+                Kind::Insertion => 'I',
+                Kind::Deletion => 'D',
+                Kind::Skip => 'N',
+                Kind::SoftClip => 'S',
+                Kind::HardClip => 'H',
+                Kind::Pad => 'P',
+                Kind::SequenceMatch => '=',
+                Kind::SequenceMismatch => 'X',
+            };
+            s.push_str(&op.len().to_string());
+            s.push(c);
+        }
+        if s.is_empty() {
+            s.push('*');
+        }
+        s
+    }
+
+    /// Stored sequence length (no decode).
+    pub fn record_len(&self) -> usize {
+        self.record.sequence().len()
+    }
+
+    /// Raw query-name bytes (no allocation). Used for the qname hash.
+    pub fn name_bytes(&self) -> &[u8] {
+        self.record.name().map(|n| -> &[u8] { n.as_ref() }).unwrap_or(&[])
+    }
 
     pub fn seq(&self) -> Vec<u8> {
         self.record.sequence().iter().collect()

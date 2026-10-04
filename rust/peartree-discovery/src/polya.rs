@@ -1,6 +1,7 @@
 //! Port of src/polyABreakpoint.py (PolyABreakpoint).
 
 use crate::config::*;
+use crate::evidence::{PaEv, PaLite};
 use crate::filters::clean_clipped_seq;
 use crate::qseq::QualitySeq;
 use crate::read::BamRead;
@@ -14,6 +15,10 @@ pub struct PolyABreakpoint {
     pub breakpoint: Option<i64>,
     pub clipped: Option<QualitySeq>,
     pub clip: i32,
+    /// TPRT sidecar payload (poly-A read + anchoring mate); None unless enabled.
+    pub ev: Option<Box<PaEv>>,
+    /// TPRT sidecar: compact identity of this read (set at extract when enabled).
+    pub sc: Option<PaLite>,
 }
 
 fn contains(haystack: &[u8], needle: &[u8]) -> bool {
@@ -101,6 +106,8 @@ impl PolyABreakpoint {
             breakpoint: None,
             clipped,
             clip,
+            ev: None,
+            sc: None,
         }
     }
 

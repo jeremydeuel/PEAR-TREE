@@ -45,7 +45,7 @@ shown there but marked.
 ```
 discovery (Rust, per sample)
    <sample>.txt.gz                (UNCHANGED format)
-   <sample>.evidence.tsv.gz       NEW sidecar, one row per evidence read (incl. mates)
+   <sample>.txt.gz.evidence.tsv.gz  NEW sidecar, one row per evidence read (incl. mates)
 combine_insertions (Python, per patient)
    <patient>.combined.txt.gz      (UNCHANGED format; consensus now indel-aware)
    <patient>.genotyping.txt.gz    (UNCHANGED)
@@ -55,7 +55,7 @@ annotate_v2 (+ new tools/rte/ package)
    existing table + new columns (see below)
 ```
 
-### `<sample>.evidence.tsv.gz` (discovery → combine)
+### `<sample>.txt.gz.evidence.tsv.gz` (discovery → combine)
 
 Header line, tab-separated, one row per read record:
 
@@ -78,6 +78,51 @@ Header line, tab-separated, one row per read record:
 
 Caps: `max_mates_per_breakpoint` (default 50) and `max_evidence_reads_per_breakpoint`
 (default 200) per side; when capped, keep a deterministic subset.
+
+**As implemented (discovery worker, Rust) — read this before parsing the sidecar:**
+
+- **Path**: `<out>.evidence.tsv.gz` next to the other sidecars, i.e.
+  `<sample>.txt.gz.evidence.tsv.gz` (the wrappers rename `$TMP.<ext>` → `$OUT.<ext>`; a
+  `<sample>.evidence.tsv.gz` name could not survive that rename). gzip, one header line.
+- `frag`: FNV-1a 64-bit hash of the qname, 16 lowercase hex digits.
+- `r12`: 1/2 from flag 0x40/0x80 (0 for unpaired input).
+- `pos`/`outer`/`mpos`: 0-based. `outer` = 0-based *inclusive* coordinate of the read's 5'
+  base incl. soft clips (hard clips skipped): `pos - leading_softclip` on `+`,
+  `aln_end - 1 + trailing_softclip` on `-`. Unmapped record: `ref *`, `pos -1`, `strand *`,
+  `outer -1` (its `seq`/`qual` are still written). Mate unmapped: `mref *`, `mpos -1`, `mstrand *`.
+- `seq`/`qual`: exactly as stored in the BAM (= reference-forward for mapped records); `*` if absent.
+- `clip_at`: offset of the junction in the stored `seq` (LEFT clip: leading soft-clip length;
+  RIGHT clip: `len - trailing soft-clip length`); `-1` for non-CLIP rows.
+- Rows per locus, LEFT then RIGHT; per breakpoint side `CLIP` rows, then `DISC`, then `MATE`.
+  A poly-A end writes `POLYA` + its anchoring `MATE` for the paired poly-A read **and** every
+  other poly-A read of the same clip side within `cluster_window` (pooled poly-A end).
+- `CLIP` = every read of the clustered junction (incl. supplementary records and reads off the
+  modal position), not only those that passed the consensus floor.
+- `DISC` = primary, MAPQ ≥ `min_mapq`, non-proper pair whose mate is unmapped / on another
+  contig / > `discordant_max_tlen` away / same strand, pointing into the insertion: a REVERSE
+  anchor starting ≥ B−5 and ending ≤ B+`sidecar_disc_span` for a LEFT junction at B, a FORWARD
+  anchor ending ≤ B+5 and starting ≥ B−`sidecar_disc_span` for a RIGHT junction. Independent of
+  `discordant_anchor`. Fragments already present as CLIP are not repeated as DISC.
+- `MATE` = the primary mate record (not supplementary). Without `fetch_all_mates`: mates of the
+  legacy `has_mate` orientation only (LEFT reverse / RIGHT forward CLIP reads). With it: mates of
+  every CLIP and DISC read. A mate already present as a primary CLIP record is not repeated.
+- `SPAN` is reserved but **not emitted yet** (needs the D2 fragment-spanning-pair work, not on
+  this base).
+- Caps per side: CLIP+DISC ≤ `max_evidence_reads_per_breakpoint` (CLIP first), MATE ≤
+  `max_mates_per_breakpoint`; subset = lowest (frag, flag) / (frag, r12) — deterministic and
+  independent of `--threads`.
+- Extra key: `sidecar_disc_span` (500).
+- Locus ids are exactly the `.txt.gz` record-name prefixes; the set of loci in the sidecar
+  equals the set in the `.txt.gz` (sub-floor partners of the dormant Feature-A rescue carry
+  CLIP rows but no MATE/DISC).
+- `ignore_dup_flag = false` keeps the legacy asymmetry: the clip path and mate pass drop 0x400,
+  the low-MAPQ poly-A path never checked it (changing that would break byte-identity). With
+  `true`, dups are kept everywhere (clip path, poly-A, mate pass, sidecar).
+- `min_evidence_fragments_per_sample`: distinct qname hashes among the reads supporting the
+  modal position (± `evidence_window`); `adaptive_evidence` scales it like the read floor
+  (`max(base, round(base·local/median))`). With floor ≤ 1 a single-read cluster takes the normal
+  consensus path (not only the poly-A rescue). Also fixes the LEFT `n_reads` double count (only
+  in this mode; the legacy value only feeds the off-by-default Feature-A rescue).
 
 New discovery config keys (default values keep the current FASTQ output byte-identical):
 `evidence_sidecar` (false), `fetch_all_mates` (false), `ignore_dup_flag` (false),
