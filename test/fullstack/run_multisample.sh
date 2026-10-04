@@ -43,8 +43,14 @@ LIBARGS=()
 
 echo "[$(ts)] 1. donor: $TYPES x $N_PER_TYPE, $SAMPLES samples, $REGION"
 REGARGS=(); for r in $REGION; do REGARGS+=(--region "$r"); done
+DARGS=(); for x in ${DONOR_ARGS:-}; do DARGS+=("$x"); done   # e.g. DONOR_ARGS="--tree random:10"
 "$PY" "$DIR/build_donor.py" --types "$TYPES" --n-per-type "$N_PER_TYPE" --samples "$SAMPLES" \
-    --hs1 "$HS1" "${LIBARGS[@]}" "${REGARGS[@]}" --seed "$SEED" --out-dir "$OUT/donor"
+    --hs1 "$HS1" "${LIBARGS[@]}" "${REGARGS[@]}" --seed "$SEED" --out-dir "$OUT/donor" ${DARGS[@]+"${DARGS[@]}"}
+# tree mode (--tree): per-colony depth factors in donor/samples.tsv; its colony count must be SAMPLES
+if [ -f "$OUT/donor/samples.tsv" ]; then
+    NS=$(($(wc -l < "$OUT/donor/samples.tsv") - 1))
+    [ "$NS" = "$SAMPLES" ] || { echo "donor has $NS colonies (tree tips) but SAMPLES=$SAMPLES"; exit 1; }
+fi
 
 if [ -z "$HG38" ]; then
     [ -n "$HG38_2BIT" ] || { echo "set HG38 (bwa-indexed) or HG38_2BIT for a reduced reference"; exit 1; }
@@ -70,9 +76,13 @@ fi
 CALLS=(); SUPPORT=()
 for i in $(seq 1 "$SAMPLES"); do
     S="S$i"
-    echo "[$(ts)] 2. $S: reads (depth $DEPTH) -> bwa-mem -> fixmate/sort"
+    SDEPTH="$DEPTH"
+    if [ -f "$OUT/donor/samples.tsv" ]; then
+        SDEPTH=$(awk -F'\t' -v s="$i" -v d="$DEPTH" '$1 == s { printf "%.3f", d * $4 }' "$OUT/donor/samples.tsv")
+    fi
+    echo "[$(ts)] 2. $S: reads (depth $SDEPTH) -> bwa-mem -> fixmate/sort"
     "$PY" "$DIR/simulate_reads.py" --donor-dir "$OUT/donor" --sample "$i" --out-prefix "$OUT/$S" \
-        --depth "$DEPTH" --seed "$SEED" --pcr-dup-unflagged-frac "$PCR_DUP" --pcr-dup-jitter "$PCR_DUP_JITTER" --polya-jitter "$POLYA_JITTER"
+        --depth "$SDEPTH" --seed "$SEED" --pcr-dup-unflagged-frac "$PCR_DUP" --pcr-dup-jitter "$PCR_DUP_JITTER" --polya-jitter "$POLYA_JITTER"
     bwa mem -t "$THREADS" -R "@RG\tID:$S\tSM:$S\tPL:ILLUMINA" "$HG38" "$OUT/${S}_R1.fq" "$OUT/${S}_R2.fq" \
         2>"$OUT/$S.bwa.log" \
       | samtools fixmate -m -u -@ "$THREADS" - - \

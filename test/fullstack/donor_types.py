@@ -37,6 +37,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 from simlib import library as L  # noqa: E402
 from simlib import models as M  # noqa: E402
+from simlib import phylo as PH  # noqa: E402
 from simlib import truth as T  # noqa: E402
 from simlib.seqs import Genome, homopolymer_runs, revcomp, write_fasta  # noqa: E402
 from simlib.val1render import window_for  # noqa: E402
@@ -77,6 +78,19 @@ def main(argv=None):
     p.add_argument("--polya-scale", type=float, default=1.0)
     p.add_argument("--max-l1-deletion", type=int, default=8000)
     p.add_argument("--max-l1-duplication", type=int, default=3000)
+    # tree-structured presence (test/simlib/phylo.py); off = the legacy random k-of-n subsets
+    p.add_argument("--tree", default=None,
+                   help="Newick file (tips -> S1..Sn in leaf order) or random:N. Overrides --samples. "
+                        "TP events go on one branch (carried by exactly its clade, clonal het x colony "
+                        "purity), a fraction become non-clade decoys; writes tree.nwk, samples.tsv, "
+                        "phylo_truth.tsv")
+    p.add_argument("--tree-root-frac", type=float, default=0.1, help="TP events carried by every colony")
+    p.add_argument("--tree-branch-weight", choices=["uniform", "length"], default="uniform")
+    p.add_argument("--tree-nonclade-frac", type=float, default=0.15,
+                   help="TP events placed on a random NON-clade subset (>= 2 carriers, >= 1 non-carrier)")
+    p.add_argument("--purity-range", default="0.7,1.0", help="tree mode: per-colony purity U(lo,hi)")
+    p.add_argument("--low-depth-frac", type=float, default=0.25, help="tree mode: low-depth colonies")
+    p.add_argument("--low-depth-range", default="0.25,0.5", help="tree mode: their depth factor U(lo,hi)")
     a = p.parse_args(argv)
 
     rng = random.Random(a.seed)
@@ -86,6 +100,14 @@ def main(argv=None):
     print(lib.summary(), file=sys.stderr)
     regions = [parse_region(r) for r in (a.region or ["chr22:26000000-30000000"])]
     nsamp = max(1, a.samples)
+    design, trng, placements = None, None, {}
+    if a.tree:
+        trng = random.Random(a.seed * 7919 + 17)          # separate stream: event building unchanged
+        design = PH.build_design(a.tree, trng, tuple(map(float, a.purity_range.split(","))),
+                                 a.low_depth_frac, tuple(map(float, a.low_depth_range.split(","))))
+        if a.samples not in (design.n, 2):
+            print(f"  --tree has {design.n} tips; overriding --samples {a.samples}", file=sys.stderr)
+        nsamp = design.n
     keys = [k for k in M.parse_types(a.types) if k not in UNSUPPORTED]
 
     # ---- per-region sequence, EN sites, A-tracts, gene models ---------------------------
@@ -169,7 +191,22 @@ def main(argv=None):
                 alt = M.apply_event(win, nick - lo, strand, ev)
                 e.update(strand=strand, alt=alt, left=lo + alt.left, right=lo + alt.right)
             # presence / VAF
-            if ev.role == "ARTEFACT":
+            if design is not None:
+                if ev.role == "ARTEFACT":
+                    s = PH.draw_nonclade(trng, design) if ev.render == "slippage" else None
+                    if s is not None:      # systematic artefact: same tract slips in many colonies
+                        present, pl = set(s), "NONCLADE_ARTEFACT"
+                    else:                  # per-library artefact: one colony
+                        present, pl = {trng.randrange(nsamp)}, "ARTEFACT"
+                else:
+                    s = PH.draw_nonclade(trng, design) if trng.random() < a.tree_nonclade_frac else None
+                    if s is not None:
+                        present, pl = set(s), "NONCLADE"
+                    else:
+                        pl, s = PH.draw_branch(trng, design, a.tree_root_frac, a.tree_branch_weight)
+                        present = set(s)
+                placements[e["id"]] = (pl, frozenset(present))
+            elif ev.role == "ARTEFACT":
                 present = {rng.randrange(nsamp)}
             elif nsamp == 1 or rng.random() < a.present_all_frac:
                 present = set(range(nsamp))
@@ -181,6 +218,8 @@ def main(argv=None):
                     kv.append((0, 0.0))
                 elif ev.role == "ARTEFACT":
                     kv.append((0, 1.0))
+                elif design is not None:   # clonal het in every carrier; purity dilutes it
+                    kv.append((N_ALT, 0.5 * design.purity[si]))
                 else:
                     v = 0.5 if rng.random() < a.vaf_clonal_frac else rng.uniform(0.1, 0.5)
                     kv.append(quantize_vaf(v))
@@ -192,7 +231,8 @@ def main(argv=None):
     ref_recs = {f"{r['contig']}_{r['start']}": r["seq"] for r in reg}
     write_fasta(os.path.join(a.out_dir, "ref.hap.fa"), ref_recs, width=0)
     for si in range(nsamp):
-        haps_rows.append((si + 1, "ref.hap.fa", 0.5))
+        pur = design.purity[si] if design is not None else 1.0
+        haps_rows.append((si + 1, "ref.hap.fa", 1.0 - 0.5 * pur))
         for k in range(1, N_ALT + 1):
             fname = f"S{si + 1}.hap{k}.fa"
             recs = {}
@@ -221,7 +261,7 @@ def main(argv=None):
                         shift = sum(len(x["alt"].alt) - (x["hi"] - x["lo"]) for x in evs if x["hi"] <= t0)
                         slip_rows.append((fname, rname, t0 + shift, t1 + shift))
             write_fasta(os.path.join(a.out_dir, fname), recs)
-            haps_rows.append((si + 1, fname, ALT_W))
+            haps_rows.append((si + 1, fname, ALT_W * pur))
         for e in events:            # slippage also shows on the reference haplotype
             if e["ev"].render == "slippage" and si in e["present"]:
                 rname = f"{e['reg']['contig']}_{e['reg']['start']}"
@@ -305,6 +345,8 @@ def main(argv=None):
         for gm in genes:
             for s, e in gm.exons:
                 f.write(f"{gm.contig}\t{s}\t{e}\t{gm.id}\t{gm.strand}\n")
+    if design is not None:
+        PH.write_design(design, a.out_dir, placements)
     n_tp =sum(1 for e in events if e["ev"].role == "TP")
     print(f"placed {len(events)} events ({n_tp} TP, {len(events) - n_tp} artefact) in "
           f"{len(reg)} window(s) for {nsamp} sample(s) -> {a.out_dir}", file=sys.stderr)
