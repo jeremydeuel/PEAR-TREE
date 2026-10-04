@@ -700,6 +700,7 @@ impl Discovery {
         exclude: bool,
         mapq: u8,
         flag: u16,
+        mate: (i32, i64),
     ) {
         let mut bp = Breakpoint::new(
             side,
@@ -714,6 +715,7 @@ impl Discovery {
             mapq,
         );
         bp.flag = flag;
+        (bp.mref, bp.mpos) = mate;
         self.temporary_breakpoints.push(bp);
     }
 
@@ -1015,6 +1017,8 @@ impl Discovery {
                     ref_id: ref_id as i32,
                     start: read.reference_start,
                     end: read.reference_end,
+                    mref: mate_loc(&read).0,
+                    mpos: mate_loc(&read).1,
                 });
             }
         }
@@ -1036,6 +1040,8 @@ impl Discovery {
                     end: read.reference_end,
                     lead_soft: read.lead_soft as u32,
                     trail_soft: read.trail_soft as u32,
+                    mref: mate_loc(&read).0,
+                    mpos: mate_loc(&read).1,
                 });
             }
         }
@@ -1108,7 +1114,7 @@ impl Discovery {
             } else {
                 full.pyslice(Some(left_len as isize), None)
             };
-            self.add_breakpoint(clip, read.reference_start, &qname, clipped, unclipped, read.is_read1, read.is_forward(), exclude_flag, read.mapq, read.flag);
+            self.add_breakpoint(clip, read.reference_start, &qname, clipped, unclipped, read.is_read1, read.is_forward(), exclude_flag, read.mapq, read.flag, mate_loc(&read));
             if let Some(c) = self.sc_short.as_mut() {
                 c.hot(read.reference_start, true);
             }
@@ -1125,7 +1131,7 @@ impl Discovery {
             } else {
                 full.pyslice(None, Some(-(right_len as isize)))
             };
-            self.add_breakpoint(clip, read.reference_end, &qname, clipped, unclipped, read.is_read1, read.is_forward(), exclude_flag, read.mapq, read.flag);
+            self.add_breakpoint(clip, read.reference_end, &qname, clipped, unclipped, read.is_read1, read.is_forward(), exclude_flag, read.mapq, read.flag, mate_loc(&read));
             if let Some(c) = self.sc_short.as_mut() {
                 c.hot(read.reference_end, false);
             }
@@ -1391,6 +1397,9 @@ impl Discovery {
                         kind: ReqKind::Mate,
                         target: Target::PolyA,
                         supp: false,
+                        at_ref: l.mref,
+                        at_lo: l.mpos,
+                        at_hi: l.mpos,
                     });
                 }
                 reqs.push(MateReq {
@@ -1402,6 +1411,10 @@ impl Discovery {
                     kind: ReqKind::PolySelf,
                     target: Target::PolyA,
                     supp: false,
+                    // an unmapped poly-A read is placed at its mapped mate's position
+                    at_ref: if l.ref_id >= 0 { l.ref_id } else { l.mref },
+                    at_lo: if l.ref_id >= 0 { l.pos } else { l.mpos },
+                    at_hi: if l.ref_id >= 0 { l.pos } else { l.mpos },
                 });
             }
         }
@@ -1459,6 +1472,13 @@ impl Discovery {
         if reqs.is_empty() {
             return Ok(());
         }
+        if self.config.sidecar_indexed_fetch && !is_cram(&self.filepath) && has_bam_index(&self.filepath) {
+            if reqs.iter().all(|r| r.at_ref >= 0 && r.at_lo >= 0) {
+                return self.sidecar_fetch_indexed(&reqs);
+            }
+            let n = reqs.iter().filter(|r| r.at_ref < 0 || r.at_lo < 0).count();
+            eprintln!("evidence sidecar: {n} request(s) without a record position; linear scan instead");
+        }
         if is_cram(&self.filepath) {
             let ref_path = self.reference_path.clone();
             let mut reader = open_cram(&self.filepath, ref_path.as_deref())?;
@@ -1477,6 +1497,72 @@ impl Discovery {
                 self.sidecar_capture(&read, &reqs);
             }
         }
+        Ok(())
+    }
+
+    /// Sidecar indexed fetch: merge the requests' POS windows into regions (read through
+    /// gaps < `sidecar_fetch_gap`), then for each region seek to the first index chunk
+    /// (forward only) and read records until one starts past the region. Records are met
+    /// once each, in file order, so the captures equal the linear scan's.
+    fn sidecar_fetch_indexed(&mut self, reqs: &[MateReq]) -> io::Result<()> {
+        use noodles_core::Position;
+        let mut wins: Vec<(i32, i64, i64)> = reqs.iter().map(|r| (r.at_ref, r.at_lo.max(0), r.at_hi.max(r.at_lo.max(0)))).collect();
+        wins.sort_unstable();
+        let gap = self.config.sidecar_fetch_gap.max(0);
+        let mut regions: Vec<(i32, i64, i64)> = Vec::new();
+        for (r, lo, hi) in wins {
+            match regions.last_mut() {
+                Some(last) if last.0 == r && lo <= last.2 + gap => last.2 = last.2.max(hi),
+                _ => regions.push((r, lo, hi)),
+            }
+        }
+        let mut reader = bam::io::indexed_reader::Builder::default().build_from_path(&self.filepath)?;
+        let header = reader.read_header()?;
+        let mut record = bam::Record::default();
+        // the record in `record` that ended the previous region, and its virtual position
+        let mut pending: Option<bgzf::VirtualPosition> = None;
+        let (mut n_seek, mut n_read) = (0u64, 0u64);
+        for &(rid, lo, hi) in &regions {
+            let (Some(a), Some(b)) = (Position::new(lo as usize + 1), Position::new(hi as usize + 1)) else { continue };
+            let chunks = reader.index().query(rid as usize, (a..=b).into())?;
+            let Some(start) = chunks.iter().map(|c| c.start()).min() else { continue };
+            let mut have = match pending {
+                Some(vp) if vp >= start => true, // the buffered record is at/after the region's first chunk
+                _ => {
+                    reader.get_mut().seek(start)?;
+                    n_seek += 1;
+                    false
+                }
+            };
+            loop {
+                if !have {
+                    let vp = reader.get_mut().virtual_position();
+                    if reader.read_record(&mut record)? == 0 {
+                        pending = None;
+                        break;
+                    }
+                    n_read += 1;
+                    pending = Some(vp);
+                }
+                have = false;
+                let read = BamRead::from_record(&record, &header)?;
+                let Some(r) = read.reference_sequence_id.map(|i| i as i32) else {
+                    break; // unplaced tail: nothing requested there
+                };
+                let p = read.reference_start;
+                if r > rid || (r == rid && p > hi) {
+                    break; // keep it buffered for the next region
+                }
+                if r < rid || p < lo {
+                    continue;
+                }
+                self.sidecar_capture(&read, reqs);
+            }
+        }
+        eprintln!(
+            "evidence sidecar: indexed fetch, {} regions, {n_seek} seeks, {n_read} records read",
+            regions.len()
+        );
         Ok(())
     }
 
@@ -2290,6 +2376,15 @@ impl Discovery {
 /// Read-level drop rule shared by the clip path and the mate pass: secondary and
 /// QC-fail always, 0x400 duplicates unless `ignore_dup_flag`.
 #[inline]
+/// Raw RNEXT/PNEXT (0-based) of a read: where its mate record sits in a coordinate-sorted
+/// BAM (an unmapped mate is placed at its partner's position). (-1, -1) when unset.
+fn mate_loc(read: &BamRead) -> (i32, i64) {
+    match read.mate_ref_id {
+        Some(i) if read.mate_pos >= 0 => (i as i32, read.mate_pos),
+        _ => (-1, -1),
+    }
+}
+
 fn drop_read(read: &BamRead, ignore_dup_flag: bool) -> bool {
     read.is_secondary || read.is_qcfail || (read.is_duplicate && !ignore_dup_flag)
 }
@@ -2357,10 +2452,22 @@ fn build_short_requests(ev: &EvExtra, target: Target, idx: u32, fetch_all: bool,
     if ev.short_lite.is_empty() {
         return;
     }
-    let req = |hash, r12, kind, ref_id, pos| MateReq { hash, idx, ref_id, pos, r12, kind, target, supp: false };
+    let req = |hash, r12, kind, ref_id, pos, at: (i32, i64, i64)| MateReq {
+        hash,
+        idx,
+        ref_id,
+        pos,
+        r12,
+        kind,
+        target,
+        supp: false,
+        at_ref: at.0,
+        at_lo: at.1,
+        at_hi: at.2,
+    };
     let mut cands: Vec<(u64, u8)> = Vec::new();
     for s in &ev.short_lite {
-        out.push(req(s.frag, s.r12(), ReqKind::ShortSelf, s.ref_id, s.start));
+        out.push(req(s.frag, s.r12(), ReqKind::ShortSelf, s.ref_id, s.start, (s.ref_id, s.start, s.start)));
         if fetch_all && s.flag & FLAG_PAIRED != 0 && s.mate_r12() != 0 {
             cands.push((s.frag, s.mate_r12()));
         }
@@ -2373,9 +2480,18 @@ fn build_short_requests(ev: &EvExtra, target: Target, idx: u32, fetch_all: bool,
     };
     cands.retain(|&(f, r)| !covered(f, r));
     for (hash, r12) in select_lowest(cands, cap, |&c| c) {
-        out.push(req(hash, r12, ReqKind::Mate, -1, -1));
+        let at = ev
+            .short_lite
+            .iter()
+            .find(|s| s.frag == hash && s.mate_r12() == r12)
+            .map_or((-1, -1, -1), |s| (s.mref, s.mpos, s.mpos));
+        out.push(req(hash, r12, ReqKind::Mate, -1, -1, at));
     }
 }
+
+/// Sidecar indexed fetch: a RIGHT junction-clipped read is re-found by its alignment END,
+/// so its POS is searched up to this many bp before the breakpoint.
+const CLIP_SELF_LOOKBACK: i64 = 5000;
 
 /// Capture requests for one breakpoint side. CLIP reads: each recorded clipped read
 /// itself (ClipSelf). Mates: the legacy `has_mate` orientation (LEFT reverse / RIGHT
@@ -2385,11 +2501,26 @@ fn build_short_requests(ev: &EvExtra, target: Target, idx: u32, fetch_all: bool,
 /// anchors: each anchor itself (DiscSelf).
 fn build_requests(ev: &EvExtra, target: Target, idx: u32, ref_id: i32, fetch_all: bool, cap: usize, out: &mut Vec<MateReq>) {
     let left = target == Target::Left;
-    let req = |hash, r12, kind, ref_id, pos, supp| MateReq { hash, idx, ref_id, pos, r12, kind, target, supp };
+    let req = |hash, r12, kind, ref_id, pos, supp, at: (i32, i64, i64)| MateReq {
+        hash,
+        idx,
+        ref_id,
+        pos,
+        r12,
+        kind,
+        target,
+        supp,
+        at_ref: at.0,
+        at_lo: at.1,
+        at_hi: at.2,
+    };
     // (frag, wanted r12)
     let mut cands: Vec<(u64, u8)> = Vec::new();
     for c in &ev.clip_lite {
-        out.push(req(c.frag, c.r12(), ReqKind::ClipSelf, ref_id, c.pos, c.flag & FLAG_SUPPLEMENTARY != 0));
+        // LEFT: the breakpoint is the record's POS; RIGHT: its alignment END, so POS lies up
+        // to an aligned span before it
+        let at = if left { (ref_id, c.pos, c.pos) } else { (ref_id, c.pos - CLIP_SELF_LOOKBACK, c.pos) };
+        out.push(req(c.frag, c.r12(), ReqKind::ClipSelf, ref_id, c.pos, c.flag & FLAG_SUPPLEMENTARY != 0, at));
         if c.flag & FLAG_PAIRED == 0 || c.mate_r12() == 0 {
             continue;
         }
@@ -2400,7 +2531,7 @@ fn build_requests(ev: &EvExtra, target: Target, idx: u32, ref_id: i32, fetch_all
         }
     }
     for d in &ev.disc_lite {
-        out.push(req(d.frag, d.r12(), ReqKind::DiscSelf, d.ref_id, d.start, false));
+        out.push(req(d.frag, d.r12(), ReqKind::DiscSelf, d.ref_id, d.start, false, (d.ref_id, d.start, d.start)));
         if fetch_all {
             match d.r12() {
                 1 => cands.push((d.frag, 2)),
@@ -2413,7 +2544,20 @@ fn build_requests(ev: &EvExtra, target: Target, idx: u32, ref_id: i32, fetch_all
     cands.dedup();
     cands.retain(|&(f, r)| !ev.clip_lite.iter().any(|c| c.frag == f && c.r12() == r && c.is_primary()));
     for (hash, r12) in select_lowest(cands, cap, |&c| c) {
-        out.push(req(hash, r12, ReqKind::Mate, -1, -1, false));
+        // the mate record sits at the requesting read's RNEXT/PNEXT
+        let at = ev
+            .clip_lite
+            .iter()
+            .find(|c| c.frag == hash && c.mate_r12() == r12 && c.mref >= 0)
+            .map(|c| (c.mref, c.mpos, c.mpos))
+            .or_else(|| {
+                ev.disc_lite
+                    .iter()
+                    .find(|d| d.frag == hash && d.r12() != r12 && d.mref >= 0)
+                    .map(|d| (d.mref, d.mpos, d.mpos))
+            })
+            .unwrap_or((-1, -1, -1));
+        out.push(req(hash, r12, ReqKind::Mate, -1, -1, false, at));
     }
 }
 
@@ -2604,7 +2748,7 @@ mod tests {
     }
 
     fn clip_lite(i: u64, flag: u16) -> ClipLite {
-        ClipLite { frag: frag_hash(format!("q{i}").as_bytes()), flag, pos: 1000 }
+        ClipLite { frag: frag_hash(format!("q{i}").as_bytes()), flag, pos: 1000, mref: -1, mpos: -1 }
     }
 
     fn mates(v: &[MateReq]) -> Vec<MateReq> {
@@ -2682,9 +2826,9 @@ mod tests {
             b.ev = Some(Box::new(EvExtra::default()));
             b
         };
-        let fwd_up = DiscLite { frag: 1, flag: 0x1 | 0x40, ref_id: 0, start: 800, end: 950 };
-        let rev_down = DiscLite { frag: 2, flag: 0x1 | 0x10 | 0x80, ref_id: 0, start: 1050, end: 1200 };
-        let far = DiscLite { frag: 3, flag: 0x1 | 0x10 | 0x80, ref_id: 0, start: 1600, end: 1750 };
+        let fwd_up = DiscLite { frag: 1, flag: 0x1 | 0x40, ref_id: 0, start: 800, end: 950 , mref: -1, mpos: -1 };
+        let rev_down = DiscLite { frag: 2, flag: 0x1 | 0x10 | 0x80, ref_id: 0, start: 1050, end: 1200 , mref: -1, mpos: -1 };
+        let far = DiscLite { frag: 3, flag: 0x1 | 0x10 | 0x80, ref_id: 0, start: 1600, end: 1750 , mref: -1, mpos: -1 };
         let disc = vec![fwd_up, rev_down, far];
         let mut l = vec![mk_bp(CLIP_LEFT)];
         let mut r = vec![mk_bp(CLIP_RIGHT)];
@@ -2905,7 +3049,7 @@ mod tests {
     }
 
     fn slite(i: u64, start: i64, end: i64, lead: u32, trail: u32) -> ShortLite {
-        ShortLite { frag: frag_hash(format!("s{i}").as_bytes()), flag: 0x1 | 0x40, ref_id: 0, start, end, lead_soft: lead, trail_soft: trail }
+        ShortLite { frag: frag_hash(format!("s{i}").as_bytes()), flag: 0x1 | 0x40, ref_id: 0, start, end, lead_soft: lead, trail_soft: trail, mref: -1, mpos: -1 }
     }
 
     #[test]
@@ -2920,7 +3064,7 @@ mod tests {
         shorts.push(slite(999, 1000, 1140, 4, 0));
         shorts.sort_by_key(|r| (r.start, r.frag, r.flag));
         let mut l = vec![mk(CLIP_LEFT)];
-        l[0].ev.as_mut().unwrap().clip_lite.push(ClipLite { frag: frag_hash(b"s999"), flag: 0x1 | 0x40, pos: 1000 });
+        l[0].ev.as_mut().unwrap().clip_lite.push(ClipLite { frag: frag_hash(b"s999"), flag: 0x1 | 0x40, pos: 1000, mref: -1, mpos: -1 });
         attach_short(&mut l, &shorts, true, 3, 20, 100);
         let got: Vec<u64> = l[0].ev.as_ref().unwrap().short_lite.iter().map(|r| r.frag).collect();
         assert_eq!(got.len(), 100);

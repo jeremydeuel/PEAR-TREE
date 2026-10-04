@@ -329,6 +329,14 @@ pub struct DiscoveryConfig {
     pub short_overhang_window: i64,
     pub short_overhang_max: i64,
     pub max_short_per_breakpoint: usize,
+    /// How the sidecar pass fetches its records: false = one linear BAM scan (default),
+    /// true = index seeks to the requested records' known positions (own POS, or the
+    /// requesting read's RNEXT/PNEXT for mates), forward-only, so the records are met
+    /// in file order and the sidecar is byte-identical. Falls back to the scan for CRAM,
+    /// an unindexed BAM, or any request without a position.
+    pub sidecar_indexed_fetch: bool,
+    /// Gap (bp) below which neighbouring fetch windows are read through, not re-seeked.
+    pub sidecar_fetch_gap: i64,
 }
 
 impl Default for DiscoveryConfig {
@@ -411,6 +419,8 @@ impl Default for DiscoveryConfig {
             short_overhang_window: 3,
             short_overhang_max: 20,
             max_short_per_breakpoint: 100,
+            sidecar_indexed_fetch: false,
+            sidecar_fetch_gap: 16384,
         }
     }
 }
@@ -549,6 +559,8 @@ impl DiscoveryConfig {
             "short_overhang_window" => self.short_overhang_window = parse_num(val)?,
             "short_overhang_max" => self.short_overhang_max = parse_num(val)?,
             "max_short_per_breakpoint" => self.max_short_per_breakpoint = parse_num(val)?,
+            "sidecar_indexed_fetch" => self.sidecar_indexed_fetch = parse_bool(val)?,
+            "sidecar_fetch_gap" => self.sidecar_fetch_gap = parse_num(val)?,
             other => eprintln!("warning: ignoring unknown config key '{other}'"),
         }
         Ok(())

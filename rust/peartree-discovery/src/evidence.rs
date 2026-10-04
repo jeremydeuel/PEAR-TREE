@@ -130,6 +130,9 @@ pub struct DiscLite {
     pub ref_id: i32,
     pub start: i64,
     pub end: i64,
+    /// raw RNEXT/PNEXT (mate record position, -1 unset)
+    pub mref: i32,
+    pub mpos: i64,
 }
 
 impl DiscLite {
@@ -152,6 +155,9 @@ pub struct ClipLite {
     pub frag: u64,
     pub flag: u16,
     pub pos: i64,
+    /// raw RNEXT/PNEXT (mate record position, -1 unset)
+    pub mref: i32,
+    pub mpos: i64,
 }
 
 impl ClipLite {
@@ -203,6 +209,9 @@ pub struct ShortLite {
     pub end: i64,
     pub lead_soft: u32,
     pub trail_soft: u32,
+    /// raw RNEXT/PNEXT (mate record position, -1 unset)
+    pub mref: i32,
+    pub mpos: i64,
 }
 
 impl ShortLite {
@@ -369,6 +378,11 @@ pub struct MateReq {
     pub target: Target,
     /// raw flag bits the record must carry for ClipSelf (0x800 supplementary)
     pub supp: bool,
+    /// where the wanted record's POS lies: contig id (-1 = unknown) and a 0-based
+    /// inclusive window (sidecar indexed fetch only)
+    pub at_ref: i32,
+    pub at_lo: i64,
+    pub at_hi: i64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -720,7 +734,7 @@ mod tests {
     }
 
     fn sl(frag: u64, flag: u16, start: i64, end: i64, lead: u32, trail: u32) -> ShortLite {
-        ShortLite { frag, flag, ref_id: 0, start, end, lead_soft: lead, trail_soft: trail }
+        ShortLite { frag, flag, ref_id: 0, start, end, lead_soft: lead, trail_soft: trail, mref: -1, mpos: -1 }
     }
 
     #[test]

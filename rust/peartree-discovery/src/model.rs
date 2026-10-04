@@ -38,6 +38,10 @@ pub struct Breakpoint {
     /// raw SAM flag of the source read (0 for a synthesised consensus breakpoint); the
     /// sidecar uses it to re-find the record in the mate pass.
     pub flag: u16,
+    /// raw RNEXT/PNEXT (0-based) of the source read: where its mate record sits
+    /// (sidecar indexed fetch); -1 when unset or for a synthesised breakpoint.
+    pub mref: i32,
+    pub mpos: i64,
 }
 
 impl Breakpoint {
@@ -74,6 +78,8 @@ impl Breakpoint {
             n_frags: 1,
             ev: None,
             flag: 0,
+            mref: -1,
+            mpos: -1,
         }
     }
 }
@@ -177,7 +183,7 @@ fn merge_ev(breakpoints: &[Breakpoint], cfg: &DiscoveryConfig) -> Option<Box<EvE
     }
     let lite: Vec<ClipLite> = breakpoints
         .iter()
-        .map(|bp| ClipLite { frag: bp_frag(bp), flag: bp.flag, pos: bp.breakpoint })
+        .map(|bp| ClipLite { frag: bp_frag(bp), flag: bp.flag, pos: bp.breakpoint, mref: bp.mref, mpos: bp.mpos })
         .collect();
     let clip_lite = select_lowest(lite, cfg.max_evidence_reads_per_breakpoint, |r| (r.frag, r.flag));
     Some(Box::new(EvExtra { clip_lite, ..Default::default() }))
