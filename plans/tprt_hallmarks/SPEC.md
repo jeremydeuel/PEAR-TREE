@@ -14,7 +14,10 @@ from a format below, change this file in the same commit and say so in your repo
 - ">= 2 independent fragments per breakpoint" is enforced **after combine, pooled across all
   colonies of a patient**, and applies to **every junction including the poly-A/3' end**.
   Discovery must therefore pass single-fragment per-sample evidence through (configurable).
-- Independence is decided from the reads, **never from the 0x400 dup flag**.
+- **0x400 reads are dropped** (discovery honours markdup everywhere, incl. the poly-A path via
+  `drop_dup_in_polya_path`); combine adds a second, more lenient dedup from the reads for the
+  duplicates markdup missed. (Corrected by Jeremy 2026-10: "ignore dupmark" meant *also* dedup
+  downstream, not *keep* flagged reads.)
 - Always fetch the mate of every evidence read.
 - Consensus building must be **indel-aware**, especially in homopolymers / poly-A
   (Illumina SBS gives poly-A length jitter; the 3'-beyond-poly-A sequence must survive).
@@ -63,7 +66,7 @@ Header line, tab-separated, one row per read record:
 |---|---|
 | `locus` | the discovery locus id exactly as in the `.txt.gz` record name (`contig:L-R`) |
 | `side` | `LEFT` / `RIGHT` |
-| `role` | `CLIP` (junction-clipped read), `POLYA` (poly-A read placed by mate), `MATE` (mate of a CLIP/POLYA/DISC read), `DISC` (discordant anchor), `SPAN` |
+| `role` | `CLIP` (junction-clipped read), `POLYA` (poly-A read placed by mate), `MATE` (mate of a CLIP/POLYA/DISC read), `DISC` (discordant anchor), `SHORT` (read crossing the junction by only 1..`short_overhang_max` bases: junction-side soft clip < 12 or aligned through; collected, judged by combine), `SPAN` |
 | `frag` | 64-bit hash of qname (hex) — links a read to its mate; same fragment ⇒ same value |
 | `r12` | 1 or 2 |
 | `flag` | raw SAM flag (dup bit kept for diagnostics only) |
@@ -93,7 +96,8 @@ Caps: `max_mates_per_breakpoint` (default 50) and `max_evidence_reads_per_breakp
 - `seq`/`qual`: exactly as stored in the BAM (= reference-forward for mapped records); `*` if absent.
 - `clip_at`: offset of the junction in the stored `seq` (LEFT clip: leading soft-clip length;
   RIGHT clip: `len - trailing soft-clip length`); `-1` for non-CLIP rows.
-- Rows per locus, LEFT then RIGHT; per breakpoint side `CLIP` rows, then `DISC`, then `MATE`.
+- Rows per locus, LEFT then RIGHT; per breakpoint side `CLIP` rows, then `DISC`, then `SHORT`,
+  then `MATE`.
   A poly-A end writes `POLYA` + its anchoring `MATE` for the paired poly-A read **and** every
   other poly-A read of the same clip side within `cluster_window` (pooled poly-A end).
 - `CLIP` = every read of the clustered junction (incl. supplementary records and reads off the
@@ -106,6 +110,18 @@ Caps: `max_mates_per_breakpoint` (default 50) and `max_evidence_reads_per_breakp
 - `MATE` = the primary mate record (not supplementary). Without `fetch_all_mates`: mates of the
   legacy `has_mate` orientation only (LEFT reverse / RIGHT forward CLIP reads). With it: mates of
   every CLIP and DISC read. A mate already present as a primary CLIP record is not repeated.
+- `SHORT` (`short_overhang_evidence`, default false; true in `.tprt`) = primary, MAPQ ≥
+  `min_mapq`, non-0x400 reads of an emitted breakpoint side that (a) carry a junction-side soft clip
+  of 1..11 bases whose alignment starts (LEFT) / ends (RIGHT) within ±`short_overhang_window` (3) of
+  the breakpoint B, or (b) have no junction-side soft clip and are aligned 1..`short_overhang_max`
+  (20) bases past B into the would-be clip side while still crossing B (far-side clips allowed).
+  Fragments already present as CLIP (same frag + r12) are skipped. `clip_at` = read offset of the
+  junction computed from B and the CIGAR (also for unclipped reads; `seq[:clip_at]` is the LEFT
+  overhang, `seq[clip_at:]` the RIGHT one). Cap `max_short_per_breakpoint` (100), lowest
+  (frag, flag). With `fetch_all_mates` their primary mates are added as `MATE` rows (separate cap
+  `max_short_per_breakpoint`, so the CLIP/DISC mate subset is unchanged). Many SHORT rows are
+  reference-allele reads (e.g. reads through a TSD); combine keeps only those whose overhang
+  matches the insertion consensus and differs from the reference.
 - `SPAN` is reserved but **not emitted yet** (needs the D2 fragment-spanning-pair work, not on
   this base).
 - Caps per side: CLIP+DISC ≤ `max_evidence_reads_per_breakpoint` (CLIP first), MATE ≤
@@ -115,9 +131,10 @@ Caps: `max_mates_per_breakpoint` (default 50) and `max_evidence_reads_per_breakp
 - Locus ids are exactly the `.txt.gz` record-name prefixes; the set of loci in the sidecar
   equals the set in the `.txt.gz` (sub-floor partners of the dormant Feature-A rescue carry
   CLIP rows but no MATE/DISC).
-- `ignore_dup_flag = false` keeps the legacy asymmetry: the clip path and mate pass drop 0x400,
-  the low-MAPQ poly-A path never checked it (changing that would break byte-identity). With
-  `true`, dups are kept everywhere (clip path, poly-A, mate pass, sidecar).
+- `ignore_dup_flag = false` (default and `.tprt`): the clip path, mate pass, sidecar and every
+  pairing mode drop 0x400; the low-MAPQ poly-A path never checked it (legacy, byte-identity)
+  unless `drop_dup_in_polya_path = true` (`.tprt`), which applies the same drop rule there. With
+  `ignore_dup_flag = true`, dups are kept everywhere (diagnostics only; not the pipeline mode).
 - `min_evidence_fragments_per_sample`: distinct qname hashes among the reads supporting the
   modal position (± `evidence_window`); `adaptive_evidence` scales it like the read floor
   (`max(base, round(base·local/median))`). With floor ≤ 1 a single-read cluster takes the normal
@@ -127,9 +144,62 @@ Caps: `max_mates_per_breakpoint` (default 50) and `max_evidence_reads_per_breakp
 New discovery config keys (default values keep the current FASTQ output byte-identical):
 `evidence_sidecar` (false), `fetch_all_mates` (false), `ignore_dup_flag` (false),
 `min_evidence_fragments_per_sample` (unset ⇒ current read floor). `cluster/config.discovery.*`
-for the new pipeline mode sets: sidecar=true, fetch_all_mates=true, ignore_dup_flag=true,
-min_evidence_fragments_per_sample=1. The poly-A single-read rescue stays in discovery (it is
-the pooled rule in combine that enforces >=2).
+for the new pipeline mode sets: sidecar=true, fetch_all_mates=true, ignore_dup_flag=false,
+drop_dup_in_polya_path=true, min_evidence_fragments_per_sample=1, plus the pairing modes and
+SHORT keys below. The poly-A single-read rescue stays in discovery (it is the pooled rule in
+combine that enforces >=2).
+
+### Pairing modes and locus names (discovery → combine → annotate)
+
+The legacy pairing joins a LEFT and a RIGHT breakpoint only when `R − L` is a 2–40 bp TSD
+(`tsd_min`/`tsd_max`), else tries a poly-A read. The TPRT modes run **after** that loop, per
+contig, on the breakpoints it left unpaired (free, or only used in a Bp+polyA emission — a Bp+Bp
+pair supersedes and removes that emission). Greedy one-to-one matching ordered by mode rank,
+then |gap|, then position (deterministic); SPEC-8b applies to every pair. All keys off ⇒ output
+byte-identical (verified md5 on test_data/test.bam and a val1 sim, default and `.tprt`-minus-modes
+configs, incl. the evidence sidecar).
+
+| mode (rank) | key | gap `R − L` | extra condition | locus name |
+|---|---|---|---|---|
+| target-site deletion | `max_target_site_deletion` (0=off; 30) | `[−max, −1]` | — | `contig:L-R` (L > R) |
+| blunt / EN-independent | `allow_blunt_pairs` | `[0, tsd_min)` | — | `contig:L-R` |
+| L1-mediated deletion | `max_l1_mediated_span` (0=off; 50000) | `[−span, −max_target_site_deletion−1]` | polarised | `contig:L-R` (L > R) |
+| L1-mediated duplication | same | `(tsd_max, span]` | polarised | `contig:L-R` |
+| one-sided | `one_sided_loci` | no partner | see below | `contig:L-oneside_L` / `contig:oneside_R-R` |
+
+- **Polarised** = exactly one stored clip (junction-outward) starts with ≥ `l1_mediated_min_polya`
+  (10) bases of ≥ 80 % T (the poly-A tail seen from the junction), and the other is a complex
+  element clip (≥ 12 bp, no A/T-homopolymer start, not low-complexity).
+- **One-sided** loci: a still-unpaired breakpoint with ≥ `one_sided_min_fragments` (2) distinct
+  fragments in the sample, a poly-A/T-tail clip (`one_sided_require_polya`, `one_sided_min_polya`
+  10), passing the SPEC-8 reference-tract slippage test **always** (whatever `slippage_filter`
+  says) and a non-low-complexity flank. The missing end's token repeats the real coordinate
+  (`oneside_<pos>`); it carries no reads. Solitary poly(A/T) is inherently one-sided: its 5'
+  junction clip starts with poly-A in the non-TPRT orientation and is rejected at read level
+  (`is_adapter` homopolymer rule), exactly the reference-tract slippage signature.
+- Names stay numeric for every Bp+Bp mode; the mode is recoverable from `gap = R − L`
+  (annotate: `gap < 0` and `|gap| ≤ 30` → `TSD_DELETION`; `gap < −30` → `L1_MED_DELETION`
+  candidate; `gap ∈ {0, 1}` → blunt (`EN_INDEPENDENT` candidate if no poly-A); `gap > 40` →
+  `L1_MED_DUPLICATION` candidate **or** a long-TSD artefact — identical geometry at discovery, so
+  annotate must decide from element/poly-A/TSD-identity evidence). Far L1-mediated pairs are
+  paired directly (not as two linked one-sided loci): on the simulator the only extra calls were
+  the 4–5 `ART_LONG_TSD` loci, 0 stray pairs.
+- `clip_slippage_junction_spare` (0=off; 20): SPEC-8b never rejects a pair whose stored clip starts
+  with k structured bases (no homopolymer ≥ 8, ≥ 3 distinct bases). Short orphan-transduction tags
+  followed by a long poly-A dragged the whole-clip entropy under 1.95 (the orphan TD misses).
+- `.tprt` also turns on SENS-8 `short_polya_clip` (poly-A clip consensus shortened below 12 bp by
+  SBS homopolymer jitter — the other orphan/partnered-TD miss mode).
+- **combine**: `oneside_` tokens parse onto the Feature-A one-real-side types (`TYPE_*_DISC`,
+  `Insertion.open_side` = `'LEFT'`/`'RIGHT'` names the end without evidence); intersect keeps them,
+  one representative per name (longest real clip) with mates/files of all samples pooled; the
+  real side goes through the clean-remap and clipped-remap filters and into combined.txt.gz; not
+  genotyped yet (like Feature-A calls). Legacy Bp+polyA records stay parked unless
+  `CONFIG['combine_insertions']['keep_polya_one_sided']` (False). **Open item (evidence module,
+  integration worker):** `apply_evidence` evaluates both sides and gates on each, so a one-sided
+  locus always fails `require_independent_fragments` on its open side — it must skip
+  `ins.open_side` (and Feature-A disc ends). Short inserts (solitary poly-A, short TDs): the clip
+  runs through the insert into the far TSD/flank, so the clipped-remap filter ("clip maps within
+  1 kb") may remove them; trimming the clip at the end of the poly-A run is the fix there.
 
 ### Independence rule (combine)
 

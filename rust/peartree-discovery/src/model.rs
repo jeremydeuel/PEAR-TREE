@@ -30,6 +30,9 @@ pub struct Breakpoint {
     /// annotation; does not affect the main output.
     pub mate_dests: Vec<(Option<usize>, i64)>,
     pub n_reads: usize,
+    /// distinct fragments (qname hashes) among the reads supporting the consensus
+    /// position; 1 for a per-read or rescued breakpoint. Used by the one-sided floor.
+    pub n_frags: usize,
     /// TPRT sidecar payload (`evidence_sidecar`); None otherwise (8 bytes).
     pub ev: Option<Box<EvExtra>>,
     /// raw SAM flag of the source read (0 for a synthesised consensus breakpoint); the
@@ -68,6 +71,7 @@ impl Breakpoint {
             mate_seqs: Vec::new(),
             mate_dests: Vec::new(),
             n_reads: 1,
+            n_frags: 1,
             ev: None,
             flag: 0,
         }
@@ -243,9 +247,7 @@ pub fn join(mut breakpoints: Vec<Breakpoint>, cfg: &DiscoveryConfig, evidence_fl
         }
         if bp.bp_precise && bp.clipped.len() >= cfg.min_good_bases {
             bps.push(bp.breakpoint);
-            if frag_mode {
-                frags.push(bp_frag(bp));
-            }
+            frags.push(bp_frag(bp));
         }
     }
     if bps.is_empty() {
@@ -399,6 +401,15 @@ pub fn join(mut breakpoints: Vec<Breakpoint>, cfg: &DiscoveryConfig, evidence_fl
         0, // synthesised consensus breakpoint: mapq unused
     );
     b.mates = mates;
+    b.n_frags = {
+        let support: Vec<u64> = bps
+            .iter()
+            .zip(&frags)
+            .filter(|(&x, _)| if cfg.evidence_window > 0 { (x - best_bp).abs() <= cfg.evidence_window } else { x == best_bp })
+            .map(|(_, &f)| f)
+            .collect();
+        count_fragments(&support)
+    };
     // legacy n_reads double-counts LEFT reads at delta 0; it only feeds the Feature A
     // rescue (off by default), so the legacy value is kept unless in fragment mode.
     b.n_reads = if frag_mode { n_used } else { clipped.len() };

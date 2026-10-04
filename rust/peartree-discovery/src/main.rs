@@ -262,6 +262,31 @@ fn main() -> io::Result<()> {
     if let Some(n) = config.min_evidence_fragments_per_sample {
         eprintln!("evidence floor: {n} distinct fragment(s) per breakpoint (fragment mode)");
     }
+    if config.drop_dup_in_polya_path {
+        eprintln!("dup flag: also dropped in the low-MAPQ poly-A path");
+    }
+    if config.extra_pairing() || config.clip_slippage_junction_spare > 0 {
+        eprintln!(
+            "pairing modes: target-site deletion <= {} bp, blunt {}, L1-mediated span {} bp, one-sided {} (>= {} fragments, poly-A only {}), SPEC-8b junction spare {} bp",
+            config.max_target_site_deletion,
+            config.allow_blunt_pairs,
+            config.max_l1_mediated_span,
+            config.one_sided_loci,
+            config.one_sided_min_fragments,
+            config.one_sided_require_polya,
+            config.clip_slippage_junction_spare
+        );
+    }
+    if config.short_overhang_evidence {
+        if sidecar_on {
+            eprintln!(
+                "short-overhang evidence: ON (window +-{} bp, overhang <= {} bp, cap {} per breakpoint side)",
+                config.short_overhang_window, config.short_overhang_max, config.max_short_per_breakpoint
+            );
+        } else {
+            eprintln!("warning: short_overhang_evidence has no effect without evidence_sidecar");
+        }
+    }
     if sidecar_on {
         eprintln!(
             "evidence sidecar: ON (fetch_all_mates {}, caps: {} reads / {} mates per breakpoint side, disc span {} bp)",

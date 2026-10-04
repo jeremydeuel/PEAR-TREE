@@ -24,7 +24,42 @@ from combine_insertions_insertion import (
 )
 from collections import Counter
 
-def intersect_insertions(insertions: List[Insertion]) -> List[Insertion]:
+def _polya_to_one_sided(i: Insertion) -> Insertion:
+    """TPRT: turn a legacy Bp+polyA record (`contig:L-polyA_P` / `contig:polyA_P-R`) into a
+    one-sided locus on its real junction: the poly-A end keeps its coordinate (P, from the
+    poly-A read's mate) but no sequence, so combine remaps / filters / writes only the real
+    side, exactly like a discovery `oneside_` locus. The name is unchanged (sidecar link)."""
+    pos = i.name.rsplit(':', 1)[1]
+    start, end = pos.split('-')
+    if i.type is TYPE_RIGHT_POLYA:
+        i.right_clipped, i.right_aligned = None, None
+        i.right_pos = int(end[len('polyA_'):])
+        i.type, i.open_side = TYPE_RIGHT_DISC, 'RIGHT'
+    else:
+        i.left_clipped, i.left_aligned = None, None
+        i.left_pos = int(start[len('polyA_'):])
+        i.type, i.open_side = TYPE_LEFT_DISC, 'LEFT'
+    return i
+
+
+def _real_clip(i: Insertion):
+    return i.right_clipped if i.type is TYPE_LEFT_DISC else i.left_clipped
+
+
+def intersect_insertions(insertions: List[Insertion], keep_polya_one_sided: bool = None) -> List[Insertion]:
+    """Pool per-sample discovery records by locus name. Full (two-sided) records are merged
+    after a clip/flank agreement check. One-sided records — Feature-A discordant calls and
+    TPRT `oneside_` loci — are kept: one representative per name (longest real-side clip);
+    for `oneside_` loci the mates and source files of every sample are pooled onto it.
+    Legacy Bp+polyA records stay parked unless `keep_polya_one_sided` (default:
+    CONFIG['combine_insertions']['keep_polya_one_sided'], False), which keeps them as
+    one-sided loci on their real junction."""
+    if keep_polya_one_sided is None:
+        try:
+            from config import CONFIG
+            keep_polya_one_sided = bool(CONFIG.get('combine_insertions', {}).get('keep_polya_one_sided', False))
+        except ImportError:
+            keep_polya_one_sided = False
     full_insertions = {}
     polyA = {}
     disc = {}  # Feature A: discordant-anchored one-sided junctions
@@ -87,6 +122,12 @@ def intersect_insertions(insertions: List[Insertion]) -> List[Insertion]:
             full_insertions[name] = combined
 
     print(f"processed {len(full_insertions)} full insertions, now polyA insertions.")
+    if keep_polya_one_sided:
+        # TPRT: one-sided loci on the real junction (genome-aware filters still apply)
+        for name, hits in polyA.items():
+            for h in hits:
+                disc.setdefault(name, []).append(_polya_to_one_sided(h))
+        polyA = {}
     for name, hits in polyA.items():
         continue #dont process these for now. This need a heavy filter
         full_hit = None
@@ -132,6 +173,7 @@ def intersect_insertions(insertions: List[Insertion]) -> List[Insertion]:
     # Feature A: surface discordant-anchored one-sided calls (parked above). Each is a
     # singleton within a discovery file; keep the longest-consensus representative so the
     # downstream clean-remap / clipped-remap filters can validate the one real side.
+    n_one_sided = 0
     for name, hits in disc.items():
         rep = hits[0]
         for h in hits[1:]:
@@ -139,6 +181,22 @@ def intersect_insertions(insertions: List[Insertion]) -> List[Insertion]:
             rep_side = rep.right_clipped if rep.type is TYPE_LEFT_DISC else rep.left_clipped
             if real_side is not None and (rep_side is None or len(real_side) > len(rep_side)):
                 rep = h
+        if getattr(rep, 'open_side', None) is not None:
+            # TPRT one-sided: pool every sample's mates and files onto the representative
+            # (and the longest aligned flank of the real side).
+            n_one_sided += 1
+            for h in hits:
+                if h is rep:
+                    continue
+                rep.left_mates = rep.left_mates + h.left_mates
+                rep.right_mates = rep.right_mates + h.right_mates
+                rep.files = rep.files + [f for f in h.files if f not in rep.files]
+                if rep.type is TYPE_RIGHT_DISC and h.left_aligned is not None and len(h.left_aligned) > len(rep.left_aligned):
+                    rep.left_aligned = h.left_aligned
+                if rep.type is TYPE_LEFT_DISC and h.right_aligned is not None and len(h.right_aligned) > len(rep.right_aligned):
+                    rep.right_aligned = h.right_aligned
         full_insertions[rep.name] = rep
+    if n_one_sided:
+        print(f"kept {n_one_sided} one-sided (oneside_/poly-A) loci")
     print(f"found a total of {len(full_insertions)} insertions")
     return [i for i in full_insertions.values() if i is not None]

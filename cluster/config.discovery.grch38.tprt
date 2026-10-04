@@ -9,9 +9,11 @@
 #   fetch_all_mates = true      sidecar MATE rows for EVERY evidence read (CLIP incl.
 #                               supplementary, DISC), not only the legacy has_mate orientation.
 #                               The FASTQ :MATE records are unchanged by this key.
-#   ignore_dup_flag = true      independence is decided from the reads (combine), never from the
-#                               0x400 flag: dups are kept in the clip path, mate pass and sidecar.
-#                               CHANGES the .txt.gz (dup-supported loci now pass the floor).
+#   ignore_dup_flag = false     0x400-marked duplicates are DROPPED (clip path, mate pass, sidecar)
+#                               as before; combine adds a second, more lenient dedup for the
+#                               duplicates markdup missed (from the reads). Key kept, default false.
+#   drop_dup_in_polya_path = true  the low-MAPQ poly-A path (find_polya), which historically never
+#                               checked 0x400, now drops marked duplicates too (consistent rule).
 #   min_evidence_fragments_per_sample = 1
 #                               per-sample floor counts distinct fragments and admits ONE: single-
 #                               fragment per-colony evidence passes through; combine pools across a
@@ -34,10 +36,33 @@
 # --- TPRT-hallmark keys ---
 evidence_sidecar = true
 fetch_all_mates = true
-ignore_dup_flag = true
+ignore_dup_flag = false
+drop_dup_in_polya_path = true
 min_evidence_fragments_per_sample = 1
 max_mates_per_breakpoint = 50
 max_evidence_reads_per_breakpoint = 200
+
+# --- TPRT pairing modes (plans/tprt_hallmarks/SPEC.md, "Pairing modes and locus names") ---
+# Run AFTER the legacy TSD pairing, on breakpoints it left unpaired (a Bp+Bp pair supersedes a
+# Bp+polyA emission). Measured on test/val1 --types all --samples 2 (seed 7, pooled): TSD
+# deletion 0->10/10, EN-independent 0->10/10, L1-mediated deletion 0->10/10, duplication
+# 0->10/10, orphan TD 8->9/10, solitary poly(A) 0->1/10 (+9 one-sided). Stray calls (not at a
+# TP junction) 15 -> 25, all at simulator artefact loci (ART_LONG_TSD paired as L1DUP,
+# ART_LIGATION_PCR as one-sided poly-A) that combine's independence rule / annotate score.
+max_target_site_deletion = 30      # RIGHT up to 30 bp LEFT of LEFT (negative TSD), name L-R with L > R
+allow_blunt_pairs = true           # TSD 0..1 (EN-independent / blunt joins)
+max_l1_mediated_span = 50000       # polarised (poly-A tail + complex clip) far pairs: L1-mediated del/dup
+l1_mediated_min_polya = 10
+one_sided_loci = true              # unpaired poly-A/T-tail junctions -> contig:L-oneside_L / contig:oneside_R-R
+one_sided_min_fragments = 2        # per sample; SPEC-8 reference-tract test always applied
+one_sided_require_polya = true
+one_sided_min_polya = 10
+clip_slippage_junction_spare = 20  # SPEC-8b never rejects a pair whose clip starts with 20 bp of structure
+short_polya_clip = true            # SENS-8: poly-A clip consensus truncated by SBS jitter may be < 12 bp
+short_overhang_evidence = true     # sidecar SHORT rows (reads crossing a junction by 1..20 bp)
+short_overhang_window = 3
+short_overhang_max = 20
+max_short_per_breakpoint = 100
 
 # --- verbatim copy of config.discovery.grch38 follows ---
 # PEAR-TREE Rust discovery config for GRCh38 BAMs (Sanger canpipe output).

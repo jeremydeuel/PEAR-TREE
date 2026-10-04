@@ -211,6 +211,44 @@ impl<'a> BamRead<'a> {
         s
     }
 
+    /// Offset in the stored sequence (soft clips included) of the base aligned at reference
+    /// position `refpos` (0-based). Before the alignment: counted back into the leading
+    /// soft clip; at/after the alignment end: counted forward into the trailing soft clip
+    /// (`refpos == reference_end` gives the first trailing-clip base, the RIGHT-junction
+    /// convention); inside a deletion: the next aligned base. Clamped to [0, len].
+    pub fn query_offset_at(&self, refpos: i64) -> i64 {
+        let len = self.record_len() as i64;
+        if refpos < self.reference_start {
+            return (self.lead_soft as i64 - (self.reference_start - refpos)).clamp(0, len);
+        }
+        if refpos >= self.reference_end {
+            return (len - self.trail_soft as i64 + (refpos - self.reference_end)).clamp(0, len);
+        }
+        let (mut q, mut r) = (0i64, self.reference_start);
+        for op in self.record.cigar().iter() {
+            let Ok(op) = op else { break };
+            let n = op.len() as i64;
+            match op.kind() {
+                Kind::SoftClip | Kind::Insertion => q += n,
+                Kind::HardClip | Kind::Pad => {}
+                Kind::Match | Kind::SequenceMatch | Kind::SequenceMismatch => {
+                    if refpos < r + n {
+                        return q + (refpos - r);
+                    }
+                    q += n;
+                    r += n;
+                }
+                Kind::Deletion | Kind::Skip => {
+                    if refpos < r + n {
+                        return q;
+                    }
+                    r += n;
+                }
+            }
+        }
+        q.clamp(0, len)
+    }
+
     /// Stored sequence length (no decode).
     pub fn record_len(&self) -> usize {
         self.record.sequence().len()
