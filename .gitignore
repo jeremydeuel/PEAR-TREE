@@ -23,3 +23,4 @@ PD44579_dead_ends.md
 # clade-selection run logs (regenerable via pick_clades.R)
 cluster/trees/picked.log
 analysis/
+.claude/

@@ -114,7 +114,10 @@ def combine_insertions(input_files, insertions_genotyping_file, combined_inserti
     # consensus). Returns None when no sidecar exists -> legacy behaviour, byte-identical.
     # Imported lazily so the legacy path needs neither the module nor its edlib dependency.
     evidence = None
-    if any(os.path.exists((f[:-7] if f.endswith(".txt.gz") else f) + ".evidence.tsv.gz") for f in accepted_files):
+    # sidecar is `<sample>.txt.gz.evidence.tsv.gz` (Rust) or `<sample>.evidence.tsv.gz`
+    if any(os.path.exists(f + ".evidence.tsv.gz")
+           or os.path.exists((f[:-7] if f.endswith(".txt.gz") else f) + ".evidence.tsv.gz")
+           for f in accepted_files):
         from combine_insertions_evidence import apply_evidence
         evidence = apply_evidence(insertions, accepted_files, CONFIG['combine_insertions'])
     if evidence is not None:

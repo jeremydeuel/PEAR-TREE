@@ -55,9 +55,17 @@ EVIDENCE_TSV_COLUMNS = [
 
 
 def sidecar_path(txt_gz: str) -> str:
-    """`<sample>.txt.gz` -> `<sample>.evidence.tsv.gz`."""
+    """`<sample>.txt.gz` -> its evidence sidecar.
+
+    Rust discovery writes `<sample>.txt.gz.evidence.tsv.gz` (the cluster wrappers rename
+    `<out>.<ext>` files); `<sample>.evidence.tsv.gz` is also accepted. Returns the existing
+    one, else the Rust name."""
+    rust = txt_gz + ".evidence.tsv.gz"
     stem = txt_gz[:-7] if txt_gz.endswith(".txt.gz") else txt_gz
-    return stem + ".evidence.tsv.gz"
+    alt = stem + ".evidence.tsv.gz"
+    if not os.path.exists(rust) and os.path.exists(alt):
+        return alt
+    return rust
 
 
 def sample_name(txt_gz: str) -> str:
