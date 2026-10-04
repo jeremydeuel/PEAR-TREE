@@ -474,10 +474,22 @@ pub fn write_row<W: Write>(w: &mut W, locus: &str, side: &str, r: &EvRec, names:
 }
 
 /// Open sidecar writer + header names, threaded through `Discovery::output`.
+/// With `collect` set, `output` is a dry run: no rows are written, the emitted loci's
+/// breakpoints and poly-A reads are marked instead (the sidecar pass then fetches
+/// records for exactly those).
 pub struct Sidecar<'a> {
     pub w: &'a mut dyn Write,
     pub names: Vec<String>,
     pub stats: SidecarStats,
+    pub collect: Option<Emitted>,
+}
+
+/// Which final LEFT / RIGHT breakpoints and poly-A reads `output` emits (by index).
+#[derive(Clone, Debug, Default)]
+pub struct Emitted {
+    pub left: Vec<bool>,
+    pub right: Vec<bool>,
+    pub polya: Vec<bool>,
 }
 
 impl Sidecar<'_> {

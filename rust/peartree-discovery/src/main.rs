@@ -302,6 +302,12 @@ fn main() -> io::Result<()> {
     d.set_reference_path(reference);
     d.discovery()?;
     mem::phase("after discovery (extract+find_mates+cluster)");
+    // TPRT: fetch the sidecar's per-read records for exactly the loci output will emit
+    // (a dry run of output, then one more BAM pass). No-op unless evidence_sidecar.
+    if sidecar_on {
+        d.sidecar_pass()?;
+        mem::phase("after sidecar pass");
+    }
 
     let file = File::create(&out)?;
     let encoder = GzEncoder::new(BufWriter::new(file), Compression::default());
@@ -321,7 +327,7 @@ fn main() -> io::Result<()> {
     let names = if sidecar_on { d.reference_names()? } else { Vec::new() };
     let mut sidecar = ev_writer
         .as_mut()
-        .map(|w| evidence::Sidecar { w, names, stats: Default::default() });
+        .map(|w| evidence::Sidecar { w, names, stats: Default::default(), collect: None });
     d.output(&mut writer, &mut hallmarks, sidecar.as_mut())?;
     mem::phase("after output");
     // Feature A: append discordant-anchored calls (no-op unless discordant_anchor).

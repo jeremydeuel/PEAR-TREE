@@ -19,6 +19,9 @@ pub struct PolyABreakpoint {
     pub ev: Option<Box<PaEv>>,
     /// TPRT sidecar: compact identity of this read (set at extract when enabled).
     pub sc: Option<PaLite>,
+    /// TPRT sidecar: the legacy mate pass routed a primary mate record to this read
+    /// (`apply_mate_record`); the sidecar pass then captures that mate as its MATE row.
+    pub sc_mate_routed: bool,
 }
 
 fn contains(haystack: &[u8], needle: &[u8]) -> bool {
@@ -108,6 +111,7 @@ impl PolyABreakpoint {
             clip,
             ev: None,
             sc: None,
+            sc_mate_routed: false,
         }
     }
 

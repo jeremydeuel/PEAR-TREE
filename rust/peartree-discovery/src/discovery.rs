@@ -17,7 +17,7 @@ use crate::config::*;
 use crate::coverage::Coverage;
 use crate::evidence::{
     frag_hash, select_lowest, short_candidate, DiscLite, EvExtra, EvRec, MateReq, PaLite, ReqKind, Role, ShortCollector,
-    ShortLite, Sidecar, Target,
+    ShortLite, Sidecar, Target, Emitted,
     FLAG_PAIRED, FLAG_REVERSE, FLAG_SUPPLEMENTARY,
 };
 use crate::exons::GeneModel;
@@ -1214,12 +1214,6 @@ impl Discovery {
         // Feature B: only pay for mate-destination capture when a consumer is enabled.
         let capture_dests = self.config.splice_hallmark || self.config.discordant_anchor;
         let min_mapq = self.config.min_mapq;
-        // TPRT sidecar: hash-keyed capture requests (mates + discordant anchors) for the
-        // breakpoints that can still be emitted. Empty unless `evidence_sidecar`.
-        let reqs = if self.config.evidence_sidecar { self.sidecar_prepare()? } else { Vec::new() };
-        if !reqs.is_empty() {
-            eprintln!("evidence sidecar: {} mate-pass capture requests", reqs.len());
-        }
         if is_cram(&self.filepath) {
             let ref_path = self.reference_path.clone();
             let mut reader = open_cram(&self.filepath, ref_path.as_deref())?;
@@ -1227,9 +1221,6 @@ impl Discovery {
             for result in reader.records(&header) {
                 let rec = result?;
                 let read = BamRead::from_record(&rec, &header)?;
-                if !reqs.is_empty() {
-                    self.sidecar_capture(&read, &reqs);
-                }
                 self.apply_mate_record(&read, &read1_mates, &read2_mates, &qmap, capture_dests, min_mapq);
             }
         } else {
@@ -1238,9 +1229,6 @@ impl Discovery {
             let mut record = bam::Record::default();
             while reader.read_record(&mut record)? != 0 {
                 let read = BamRead::from_record(&record, &header)?;
-                if !reqs.is_empty() {
-                    self.sidecar_capture(&read, &reqs);
-                }
                 self.apply_mate_record(&read, &read1_mates, &read2_mates, &qmap, capture_dests, min_mapq);
             }
         }
@@ -1254,7 +1242,7 @@ impl Discovery {
     /// only on plausible loci; (2) build the sorted capture requests: mates (the
     /// `has_mate` orientation, or every CLIP/DISC read with `fetch_all_mates`), capped at
     /// `max_mates_per_breakpoint` by lowest fragment hash, plus each DISC anchor itself.
-    fn sidecar_prepare(&mut self) -> io::Result<Vec<MateReq>> {
+    fn sidecar_prepare(&mut self, emitted: Option<&Emitted>) -> io::Result<Vec<MateReq>> {
         let names = self.reference_names()?;
         let name_id: FxHashMap<&str, i32> = names.iter().enumerate().map(|(i, n)| (n.as_str(), i as i32)).collect();
         let slack: i64 = 1000; // mate start vs end + read length, generous
@@ -1337,6 +1325,16 @@ impl Discovery {
         };
         let lone_ok = |b: &Breakpoint| c.one_sided_loci && one_sided_ok(c, b);
         let mut keep_l = vec![false; self.final_left_breakpoints.len()];
+        let mut keep_r = vec![false; self.final_right_breakpoints.len()];
+        if let Some(e) = emitted {
+            // exact: the loci output emits (dry run)
+            for (i, b) in self.final_left_breakpoints.iter().enumerate() {
+                keep_l[i] = b.ev.is_some() && e.left[i];
+            }
+            for (i, b) in self.final_right_breakpoints.iter().enumerate() {
+                keep_r[i] = b.ev.is_some() && e.right[i];
+            }
+        } else {
         for (i, b) in self.final_left_breakpoints.iter().enumerate() {
             let (rn, p) = (b.reference_name.as_str(), b.breakpoint);
             keep_l[i] = b.ev.is_some()
@@ -1346,7 +1344,6 @@ impl Discovery {
                     || far_partner(b, &r_tail, &r_cx)
                     || lone_ok(b));
         }
-        let mut keep_r = vec![false; self.final_right_breakpoints.len()];
         for (i, b) in self.final_right_breakpoints.iter().enumerate() {
             let (rn, p) = (b.reference_name.as_str(), b.breakpoint);
             keep_r[i] = b.ev.is_some()
@@ -1355,6 +1352,7 @@ impl Discovery {
                     || any_in(pa_pos.get(rn), p - far - slack, p + slack)
                     || far_partner(b, &l_tail, &l_cx)
                     || lone_ok(b));
+        }
         }
         if self.config.evidence_sidecar {
             let kl = keep_l.iter().filter(|&&k| k).count();
@@ -1371,12 +1369,32 @@ impl Discovery {
         let mut reqs: Vec<MateReq> = Vec::new();
         for (i, pa) in self.polya.iter_mut().enumerate() {
             let Some(l) = pa.sc else { continue };
-            let Some(n) = (l.mref >= 0).then(|| names.get(l.mref as usize)).flatten() else { continue };
-            let (lo, hi) = (l.mpos - far - slack, l.mpos + far + slack);
-            if any_in(klpos.get(n.as_str()), lo, hi) || any_in(krpos.get(n.as_str()), lo, hi) {
+            let want = match emitted {
+                Some(e) => e.polya[i],
+                None => {
+                    let Some(n) = (l.mref >= 0).then(|| names.get(l.mref as usize)).flatten() else { continue };
+                    let (lo, hi) = (l.mpos - far - slack, l.mpos + far + slack);
+                    any_in(klpos.get(n.as_str()), lo, hi) || any_in(krpos.get(n.as_str()), lo, hi)
+                }
+            };
+            if want {
                 pa.ev = Some(Box::default());
+                let hash = frag_hash(pa.qname.as_bytes());
+                if pa.sc_mate_routed {
+                    // the anchoring primary mate (legacy mate-pass routing, recorded)
+                    reqs.push(MateReq {
+                        hash,
+                        idx: i as u32,
+                        ref_id: -1,
+                        pos: -1,
+                        r12: if pa.is_read1 { 2 } else { 1 },
+                        kind: ReqKind::Mate,
+                        target: Target::PolyA,
+                        supp: false,
+                    });
+                }
                 reqs.push(MateReq {
-                    hash: frag_hash(pa.qname.as_bytes()),
+                    hash,
                     idx: i as u32,
                     ref_id: l.ref_id,
                     pos: l.pos,
@@ -1407,6 +1425,59 @@ impl Discovery {
         }
         reqs.sort_by_key(|r| (r.hash, r.target as u8, r.idx));
         Ok(reqs)
+    }
+
+    /// TPRT sidecar pass, after the legacy mate pass: a dry run of `output` marks the
+    /// breakpoints and poly-A reads of every locus it will emit, capture requests are
+    /// built for exactly those, and one more linear BAM pass fetches the records. (The
+    /// old capture inside the mate pass had to guess the emitted set before poly-A reads
+    /// were placed; at 30x its superset kept ~87% of all breakpoints: 32M requests,
+    /// 28 GB.) With `discordant_anchor` the rescue's loci are not covered by the dry
+    /// run, so the conservative superset rule is used instead.
+    pub fn sidecar_pass(&mut self) -> io::Result<()> {
+        let emitted = if self.config.discordant_anchor {
+            None
+        } else {
+            let mut sink = io::sink();
+            let mut out_sink = io::sink();
+            let mut hm: Vec<u8> = Vec::new();
+            let mut sc = Sidecar {
+                w: &mut sink,
+                names: Vec::new(),
+                stats: Default::default(),
+                collect: Some(Emitted {
+                    left: vec![false; self.final_left_breakpoints.len()],
+                    right: vec![false; self.final_right_breakpoints.len()],
+                    polya: vec![false; self.polya.len()],
+                }),
+            };
+            self.output(&mut out_sink, &mut hm, Some(&mut sc))?;
+            sc.collect
+        };
+        let reqs = self.sidecar_prepare(emitted.as_ref())?;
+        eprintln!("evidence sidecar: {} capture requests (sidecar pass)", reqs.len());
+        if reqs.is_empty() {
+            return Ok(());
+        }
+        if is_cram(&self.filepath) {
+            let ref_path = self.reference_path.clone();
+            let mut reader = open_cram(&self.filepath, ref_path.as_deref())?;
+            let header = reader.read_header()?;
+            for result in reader.records(&header) {
+                let rec = result?;
+                let read = BamRead::from_record(&rec, &header)?;
+                self.sidecar_capture(&read, &reqs);
+            }
+        } else {
+            let mut reader = open_bam(&self.filepath, self.bam_threads)?;
+            let header = reader.read_header()?;
+            let mut record = bam::Record::default();
+            while reader.read_record(&mut record)? != 0 {
+                let read = BamRead::from_record(&record, &header)?;
+                self.sidecar_capture(&read, &reqs);
+            }
+        }
+        Ok(())
     }
 
     /// TPRT sidecar, per mate-pass record: capture a primary record matching a request
@@ -1449,7 +1520,11 @@ impl Discovery {
             match q.target {
                 Target::PolyA => {
                     if let Some(e) = self.polya[q.idx as usize].ev.as_mut() {
-                        e.read = Some(r);
+                        if role == Role::Mate {
+                            e.mate = Some(r);
+                        } else {
+                            e.read = Some(r);
+                        }
                     }
                 }
                 Target::Left | Target::Right => {
@@ -1482,6 +1557,28 @@ impl Discovery {
         pa_left: &[&PolyABreakpoint],
         pa_right: &[&PolyABreakpoint],
     ) -> io::Result<()> {
+        if let Some(c) = sc.collect.as_mut() {
+            let fl = self.final_left_breakpoints.as_ptr() as usize;
+            let fr = self.final_right_breakpoints.as_ptr() as usize;
+            let fp = self.polya.as_ptr() as usize;
+            let bsz = std::mem::size_of::<Breakpoint>();
+            let psz = std::mem::size_of::<PolyABreakpoint>();
+            for (is_left, e, pas) in [(true, left, pa_left), (false, right, pa_right)] {
+                match e {
+                    Emit::Bp(b) => {
+                        let (base, v) = if is_left { (fl, &mut c.left) } else { (fr, &mut c.right) };
+                        v[(*b as *const Breakpoint as usize - base) / bsz] = true;
+                    }
+                    Emit::Pa(_) => {
+                        for pa in pas.iter().take(self.config.max_evidence_reads_per_breakpoint) {
+                            c.polya[(*pa as *const PolyABreakpoint as usize - fp) / psz] = true;
+                        }
+                    }
+                    Emit::Disc(_) | Emit::Open(_) => {}
+                }
+            }
+            return Ok(());
+        }
         let locus = locus_name(left, right);
         sc.stats.loci += 1;
         for (side, e, pas) in [("LEFT", left, pa_left), ("RIGHT", right, pa_right)] {
@@ -1550,11 +1647,10 @@ impl Discovery {
         match bpref {
             BpRef::PolyA(i) => {
                 self.polya[i].set_mate(read, min_mapq);
-                // TPRT sidecar: keep the anchoring PRIMARY mate record of the poly-A read.
-                if !read.is_supplementary {
-                    if let Some(e) = self.polya[i].ev.as_mut() {
-                        e.mate = Some(EvRec::from_read(read, Role::Mate, -1));
-                    }
+                // TPRT sidecar: the anchoring PRIMARY mate of the poly-A read is captured
+                // in the sidecar pass (only if this read's locus is emitted).
+                if !read.is_supplementary && self.config.evidence_sidecar {
+                    self.polya[i].sc_mate_routed = true;
                 }
             }
             BpRef::Left(i) | BpRef::Right(i) => {
