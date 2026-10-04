@@ -638,7 +638,10 @@ cmd_annotate() {
     load_env
     cd "$RUNDIR"
     log "annotating $PATIENT_ID"
-    "$VENV/bin/python" "$PT_ROOT/tools/annotate_v2.py" "$PATIENT_ID" "$PATIENT_ID.annotated.csv.gz"
+    # annotate_v2 imports `src.config` and `tools.rte` -> the repo root must be importable; run
+    # from $RUNDIR, sys.path[0] is tools/ only (ModuleNotFoundError: src, PD37449 arm A 2026-10-04)
+    PYTHONPATH="$PT_ROOT${PYTHONPATH:+:$PYTHONPATH}" \
+        "$VENV/bin/python" "$PT_ROOT/tools/annotate_v2.py" "$PATIENT_ID" "$PATIENT_ID.annotated.csv.gz"
     if [ -s "$PATIENT_ID.annotated.csv.gz" ]; then
         mkdir -p "$RESULTS_DIR/$PATIENT_ID"
         cp -f "$PATIENT_ID.annotated.csv.gz" "$RESULTS_DIR/$PATIENT_ID/"
