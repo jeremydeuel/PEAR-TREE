@@ -5,6 +5,7 @@
 #   bash cluster/fleet.sh plan            # dry run: worklist, skip-list, capacity — no jobs
 #   bash cluster/fleet.sh run [PAT...]    # steps 1-9 for all GRCh38 patients (or the named ones)
 #   bash cluster/fleet.sh status          # fleet-wide progress table
+#   bash cluster/fleet.sh samples PAT     # print PAT's GRCh38-WGS sample<TAB>proj list (no side effects)
 #
 # Wraps cluster/pipeline.sh (the per-patient stage->discover->combine->genotype->
 # combine_genotypes DAG). fleet.sh adds the pre-flight (clean scratch, capacity),
@@ -48,6 +49,17 @@ die() { echo "ERROR: $*" >&2; exit 1; }
 #   mixed (some GRCh38, some not)    -> mixed_partial.tsv     remap-queue (partial tree if forced)
 #   none  (no GRCh38 WGS colony)     -> skip_non_grch38.tsv   remap-queue
 # INCLUDE_MIXED=1 promotes the mixed patients' GRCh38 subset into patients.txt anyway.
+# The ONE rule for "which colonies of a patient run": colonies.tsv rows with assembly==GRCh38
+# and ds~WGS, as sample<TAB>proj. Shared by build_worklist and `samples` (cluster/tprt/run_ab.sh).
+# colonies.tsv cols: donor proj ds readlen mapped assembly sample
+grch38_wgs_samples() {
+    awk -F'\t' 'NR>2 && $6=="GRCh38" && $3 ~ /WGS/ && $7!="" && $2!="" {print $7"\t"$2}' "$1" | sort -u
+}
+
+patient_colonies_tsv() {   # patient_colonies_tsv <PAT> -> path(s) of patients/<organ>/<PAT>/colonies.tsv
+    find "$PATIENTS_DIR" -mindepth 3 -maxdepth 3 -path "*/$1/colonies.tsv" | sort
+}
+
 build_worklist() {
     mkdir -p "$FLEET_DIR/worklist"
     : > "$FLEET_DIR/patients.txt"
@@ -56,9 +68,7 @@ build_worklist() {
     local f pat g w
     while IFS= read -r f; do
         pat="$(basename "$(dirname "$f")")"
-        # colonies.tsv cols: donor proj ds readlen mapped assembly sample
-        awk -F'\t' 'NR>2 && $6=="GRCh38" && $3 ~ /WGS/ && $7!="" && $2!="" {print $7"\t"$2}' "$f" \
-            | sort -u > "$FLEET_DIR/worklist/$pat.samples.tsv"
+        grch38_wgs_samples "$f" > "$FLEET_DIR/worklist/$pat.samples.tsv"
         g="$(wc -l < "$FLEET_DIR/worklist/$pat.samples.tsv" | tr -d ' ')"
         w="$(awk -F'\t' 'NR>2 && $3 ~ /WGS/ && $7!="" {print $7}' "$f" | sort -u | wc -l | tr -d ' ')"
         if [ "$g" -eq 0 ]; then
@@ -217,6 +227,12 @@ case "${1:-}" in
         capacity_gate "$n"                # step 2 (hard stop)
         run_fleet "$@"                    # steps 3-7,9 (per-patient DAGs) submitted
         staging_final_sweep               # step 9 report
+        ;;
+    samples)
+        pat="${2:?usage: fleet.sh samples <PATIENT_ID>}"
+        mapfile -t cts < <(patient_colonies_tsv "$pat")
+        [ "${#cts[@]}" -eq 1 ] || die "expected exactly one patients/*/$pat/colonies.tsv under $PATIENTS_DIR, found ${#cts[@]}"
+        grch38_wgs_samples "${cts[0]}"
         ;;
     status)
         [ -d "$FLEET_DIR" ] || die "no fleet dir $FLEET_DIR — run 'fleet.sh plan' or 'run' first"
