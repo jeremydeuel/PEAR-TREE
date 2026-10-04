@@ -292,20 +292,38 @@ cmd_stage_discover() {
     local BAM; BAM="$(bam_path "$PROJ" "$SAMPLE")"
     if [ ! -s "$BAM" ]; then
         log "$SAMPLE: staging from iRODS project $PROJ -> $(dirname "$BAM")"
-        module load dataImportExport >/dev/null 2>&1 || true
-        # stageBam.pl is ASYNCHRONOUS: it prints the file list, submits its own LSF transfer
-        # job ("Job <N> is submitted to queue <normal>.") and returns at once. Waiting on that
-        # job is mandatory -- without it every colony looked "missing" 13 s after start
-        # (PD37449 pilot, 2026-10-04). Layout: stageBam.pl itself appends
-        # <proj>/<sample>/mapped_sample/ to -o (= bam_path); the file list it PRINTS shows a flat
-        # <-o>/mapped_sample/ path, which is NOT where the transfer writes. Do not "fix" -o.
+        # Three stageBam.pl traps, all hit on the PD37449 pilot (2026-10-04):
+        #  1. ASYNC: it submits its own LSF transfer job ("Job <N> is submitted to queue <normal>.")
+        #     and returns at once -> wait on that job, else every colony looks "missing".
+        #  2. CONCURRENCY: 10 tasks calling it at the same second with the same -o crossed their
+        #     requests (lo0006's task listed + transferred lo0016) -> 20 duplicate transfers,
+        #     18 failed, 7 colonies never requested. So: a PRIVATE -o per sample, submissions
+        #     serialised under flock, and the printed sample name is verified.
+        #  3. PERL: the submitting shell's modules leak into the job (samtools-1.19 -> perl 5.38);
+        #     dataImportExport's perl 5.36 then dies on "ListUtil.c: loadable library and perl
+        #     binaries are mismatched". So: a clean subshell (module purge, PERL* unset).
+        # Layout: stageBam.pl appends <proj>/<sample>/mapped_sample/ to -o; the file list it
+        # PRINTS shows a flat <-o>/mapped_sample/ path, which is not where the transfer writes.
+        local PRIV="$STAGING_ROOT/.stagebam/$SAMPLE"
+        rm -rf "$PRIV"; mkdir -p "$PRIV"
         local so rc=0
-        so="$(stageBam.pl --lustre 126 --types m --sample "$SAMPLE" --project "$PROJ" -o "$STAGING_ROOT" -fo 2>&1)" || rc=$?
+        so="$( {
+            command -v flock >/dev/null 2>&1 && exec 9>"$STAGING_ROOT/.stagebam.lock" && flock -w 1800 9
+            unset PERL5LIB PERLLIB PERL_LOCAL_LIB_ROOT PERL_MB_OPT PERL_MM_OPT
+            module purge >/dev/null 2>&1 || true
+            module load dataImportExport >/dev/null 2>&1 || true
+            stageBam.pl --lustre 126 --types m --sample "$SAMPLE" --project "$PROJ" -o "$PRIV" -fo
+        } 2>&1 )" || rc=$?
         printf '%s\n' "$so"
         if grep -qE 'total files 0\b' <<<"$so"; then
             : > "$RUNDIR/missing/$SAMPLE"      # iRODS has nothing for this sample: legit no-data
             log "$SAMPLE: iRODS lists no files for project $PROJ -> skipping (not an error)"
-            exit 0
+            rm -rf "$PRIV"; exit 0
+        fi
+        # the listed sample must be OURS (trap 2); stageBam prints it on its own line
+        if ! grep -qx "$SAMPLE" <<<"$so"; then
+            log "$SAMPLE: stageBam.pl did not list this sample (listed: $(grep -xE 'PD[0-9]+[a-z]+_?[a-z0-9]*' <<<"$so" | paste -sd, -)) -- refusing"
+            exit 1
         fi
         local tj; tj="$(sed -n 's/^Job <\([0-9]*\)> is submitted.*/\1/p' <<<"$so" | tail -1)"
         if [ -n "$tj" ]; then
@@ -314,9 +332,23 @@ cmd_stage_discover() {
         elif [ "$rc" -ne 0 ]; then
             log "$SAMPLE: stageBam.pl failed (rc=$rc) and submitted no transfer job"; exit 1
         fi
-        # the transfer job can end before lustre shows the final file; allow a short grace period
-        local t=0
-        while [ ! -s "$BAM" ] && [ "$t" -lt "${STAGE_GRACE_S:-600}" ]; do sleep 30; t=$((t+30)); done
+        # find the published BAM in the private dir (never the tmpExportData/ progress copy),
+        # allowing lustre a short grace period, then move the set into bam_path's directory
+        local t=0 got=""
+        while [ -z "$got" ] && [ "$t" -le "${STAGE_GRACE_S:-600}" ]; do
+            for c in "$PRIV/$PROJ/$SAMPLE/mapped_sample/$SAMPLE.sample.dupmarked.bam" \
+                     "$PRIV/mapped_sample/$SAMPLE.sample.dupmarked.bam"; do
+                [ -s "$c" ] && { got="$c"; break; }
+            done
+            [ -n "$got" ] || { sleep 30; t=$((t+30)); }
+        done
+        if [ -n "$got" ]; then
+            mkdir -p "$(dirname "$BAM")"
+            for f in "$got" "$got.bai" "$got.bas" "$got.met.gz"; do
+                [ -e "$f" ] && mv -f "$f" "$(dirname "$BAM")/"
+            done
+            rm -rf "$PRIV"
+        fi
     fi
 
     if [ ! -s "$BAM" ]; then
