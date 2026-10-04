@@ -10,11 +10,18 @@ Activation (all under CONFIG['annotate']):
     remap_2bit         remap genome (hs1) for exon-junction cores and novel-source identity
     remap_index        minimap2 index/FASTA of the remap genome (novel-source locator)
     remap_rmsk         RepeatMasker .out / rmsk.txt of the remap genome (novel-source rule)
-    exon_annotation    exon track on the remap genome (already used by annotate_v2)
+    exon_annotation    exon track on the clip-remap genome (already used by annotate_v2 for the
+                       pseudogene CANDIDATE genes; hs1 in a real run)
+    rte_exon_annotation  exon track on `remap_2bit` used for the exon-exon junction cores; default
+                       exon_annotation (they differ only in the E2E, whose clip remap is a reduced
+                       GRCh38 while remap_2bit is hs1)
     rte_score          {'weights': {...}, 'thresholds': {...}} overrides of score.py
     rte_structure / rte_assembly / rte_transduction / rte_pseudogene   option overrides
     rte_recurrence_max (3) loci sharing one truncation signature before 'recurrence' fires
-    rte_premrna_window (1_000_000) bp around the site searched for pre-mRNA templates
+    rte_premrna_window (1_000_000) bp around the site searched for pre-mRNA templates (gene model)
+    rte_wide_window    (10_000) bp either side of the site in which an unexplained insert piece
+                       is looked up as a local template (TEMPLATED_LOCAL <= 250 bp away, beyond
+                       that a co-inserted local pre-mRNA, PREMRNA_COINSERT)
     rte_max_reads      (400) reads per insertion used for the assembly
 """
 from __future__ import annotations
@@ -29,7 +36,7 @@ from .hallmarks import (split_junction, polya_info, locate_site, target_site, en
                         slippage_context, foldback, parse_locus)
 from .inputs import read_evidence_tsv, read_reads_fa, InsertionEvidence
 from .library import RteLibrary
-from .pseudogene import ExonJunctionIndex, load_exons_by_gene
+from .pseudogene import ExonJunctionIndex, load_exons_by_gene, load_gene_strands
 from .record import RteRecord
 from .score import ScoreInput, score
 from .structure import classify
@@ -55,6 +62,12 @@ class InsertionInput:
         except Exception:
             pass
         for g, _side, _n in getattr(ins, "splice_hits", []) or []:
+            if g not in genes:
+                genes.append(g)
+        # every gene with an exon under a clip remap is a candidate for the exon-exon junction
+        # search: the junction read is the proof, the candidate list only bounds the search
+        # (_pseudogene() also wants a poly-A on the clip, which a jittered tail can miss)
+        for g, _s, _e in (getattr(ins, "left_exons", []) or []) + (getattr(ins, "right_exons", []) or []):
             if g not in genes:
                 genes.append(g)
         sv = None
@@ -100,9 +113,12 @@ class RteAnnotator:
             rmsk = cfg.get("remap_rmsk")
         self.novel = NovelSourceFinder(self.lib, cfg.get("rte_transduction"), rmsk, locator,
                                        self.remap, cohort_l1)
-        if exons_by_gene is None and cfg.get("exon_annotation") and os.path.exists(str(cfg.get("exon_annotation"))):
-            exons_by_gene = load_exons_by_gene(cfg["exon_annotation"])
-        self.exon_index = ExonJunctionIndex(exons_by_gene or {}, self.remap, cfg.get("rte_pseudogene"))
+        exon_track = cfg.get("rte_exon_annotation") or cfg.get("exon_annotation")
+        if exons_by_gene is None and exon_track and os.path.exists(str(exon_track)):
+            exons_by_gene = load_exons_by_gene(exon_track)
+        strands = load_gene_strands(exon_track) if exon_track and os.path.exists(str(exon_track)) else {}
+        self.exon_index = ExonJunctionIndex(exons_by_gene or {}, self.remap, cfg.get("rte_pseudogene"),
+                                            strands)
         self.gene_model = gene_model
         self.evidence = {}
 
@@ -165,6 +181,10 @@ class RteAnnotator:
             pts = [p for p in (site.L, site.R) if p is not None]
             ctx.window_start = max(0, min(pts) - w)
             ctx.window_seq = self.genome.fetch(site.contig, ctx.window_start, max(pts) + w)
+            ww = int(self.cfg.get("rte_wide_window", 10000))
+            if ww > w:
+                ctx.wide_start = max(0, min(pts) - ww)
+                ctx.wide_seq = self.genome.fetch(site.contig, ctx.wide_start, max(pts) + ww)
         junction_seqs = {}
         if left_str:
             junction_seqs["LEFT"] = (left_str, (len(li), len(left_str)))
@@ -183,7 +203,9 @@ class RteAnnotator:
             seqs += [(f"{r.role}|{r.sample}|{r.frag}", r.seq) for r in reads]
             pg_hits = self.exon_index.find(inp.pseudogene_genes, seqs)
         call = classify(asm, self.lib, ctx, self.cfg.get("rte_structure"), self.novel,
-                        self._premrna_fn(site), (inp.pseudogene_genes, pg_hits), inp.legacy_class)
+                        self._premrna_fn(site),
+                        (inp.pseudogene_genes, pg_hits, self._pseudogene_structure_fn(inp.pseudogene_genes)),
+                        inp.legacy_class)
         rte_elem = call.element in ("L1", "ALU", "SVA")
         # ---- site-level tags. Discovery pairing modes (SPEC "Pairing modes and locus names")
         # are recoverable from the locus-name geometry gap = R - L: [-30, -1] target-site
@@ -196,14 +218,20 @@ class RteAnnotator:
         if gap is not None and -md <= gap < 0:
             call.add("TSD_DELETION")
         if rte_elem:
-            sv_intra = inp.sv is not None and inp.sv[0] == 2
+            # an intrachromosomal clip partner explained by a co-inserted local template /
+            # pre-mRNA is that template, not an L1-mediated rearrangement (E2E: 3/5
+            # PREMRNA_COINSERT TPs were tagged L1_MED_DUPLICATION)
+            sv_intra = (inp.sv is not None and inp.sv[0] == 2
+                        and not {"PREMRNA_COINSERT", "TEMPLATED_LOCAL"} & set(call.tags))
             polarised = pa.length >= 10 and not pa.both_sided and "CHIMERIC_ENDS" not in call.tags
             if (gap is not None and gap < -md) or (sv_intra and (gap or 0) <= 0):
                 call.add("L1_MED_DELETION")
             elif (sv_intra and (gap or 0) > 0) or (gap is not None and gap > 40 and polarised):
                 call.add("L1_MED_DUPLICATION")
-            if (pa.length < 10 and (site.tsd_len is None or site.tsd_len <= 0)
-                    and call.three_prime_truncated and call.structure != "FULL_LENGTH"):
+            # EN-independent (Morrish 2002): no poly-A, no TSD (blunt = gap 0/1, SPEC pairing
+            # modes), 3' end short of the consensus end
+            if (pa.length < 10 and (site.tsd_len is None or site.tsd_len <= 1)
+                    and call.three_prime_short and call.structure != "FULL_LENGTH"):
                 call.add("EN_INDEPENDENT")
         # ---- beyond poly-A on the 3' side
         side3 = "LEFT" if strand >= 0 else "RIGHT"
@@ -262,6 +290,22 @@ class RteAnnotator:
             novel_tier=(call.source.tier if call.source is not None else ""))
         self._score(rec)
         return rec
+
+    def _pseudogene_structure_fn(self, genes):
+        """FULL_LENGTH / TRUNCATED_5P of a proven pseudogene from the inserted sequence at the
+        5' junction (element-sense layouts) against the spliced transcript."""
+        if not genes:
+            return None
+        tol = int((self.cfg.get("rte_structure") or {}).get("pseudogene_full_length_tol", 15))
+
+        def fn(layouts):
+            seqs = []
+            for lay in sorted(layouts, key=lambda l: l.role != "JUNCTION"):
+                segs = lay.segments
+                if len(segs) >= 2 and segs[0].kind == "REF":
+                    seqs.append(lay.seq[segs[0].q_en:])
+            return self.exon_index.structure(genes, seqs, tol=tol)
+        return fn
 
     @staticmethod
     def _cap_reads(reads, cap):

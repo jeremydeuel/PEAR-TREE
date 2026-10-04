@@ -1259,6 +1259,7 @@ class VariantAnnotationContainer:
         This function read sthe genotyping file, calculates the number of tips with insertions, artefacts and wild-type calls, updates the Insertion object with these numbers and filteres insertions with at least one heterozygous or homozygous call.
         """
         print(f"reading genotyping file {self.genotyping_file}...")
+        present = self.present_calls()
         titles = None
         with gzip.open(self.genotyping_file, 'rt') as ifh:
             for line in ifh:
@@ -1270,11 +1271,25 @@ class VariantAnnotationContainer:
                 line = line.split(";", maxsplit=len(titles))
                 title = line[0]
                 if title in self.insertions.keys():
-                    self.insertions[title].nins = sum([1 for gt in line if gt in ('heterozygous','homozygous')])
+                    self.insertions[title].nins = sum([1 for gt in line if gt in present])
                     self.insertions[title].nart = sum([1 for gt in line if gt == "artefact"])
                     self.insertions[title].nwt = sum([1 for gt in line if gt == "wild-type"])
         self.insertions = {key: value for key, value in self.insertions.items() if value.nins>0}
         print(f"imported genotypes, found {len(self.insertions)} insertions with one or more tips containing insertions.")
+
+    @staticmethod
+    def present_calls():
+        """Genotype labels that make a colony a carrier. Legacy: heterozygous / homozygous only.
+        The genotyper's `insertion` call (presence certain, zygosity indeterminate -- what the
+        low-coverage one-sided loci and far L1DEL/L1DUP pairs typically get with the .tprt
+        genotyping keys) counts too in the TPRT pipeline mode (CONFIG['annotate']['rte_library']
+        set) or when CONFIG['annotate']['count_insertion_call'] says so; otherwise those loci
+        had nins == 0 and were dropped here. Default (no rte keys) stays byte-identical."""
+        a = CONFIG['annotate']
+        use = a.get('count_insertion_call')
+        if use is None:
+            use = bool(a.get('rte_library'))
+        return ('heterozygous', 'homozygous', 'insertion') if use else ('heterozygous', 'homozygous')
 
     def generate_fasta_file(self):
         """

@@ -158,11 +158,13 @@ def main():
             for c in dcalls[s]:
                 if match(c, r):
                     explained_disc.add((s, c))
-        cand = [n for n in ev if match(parse_name(n), r)]
+        # deterministic pick (sets iterate in hash order): two-sided loci first, then by name
+        pick = lambda names: sorted(names, key=lambda n: (parse_name(n)[3], n))  # noqa: E731
+        cand = pick([n for n in ev if match(parse_name(n), r)])
         r["ev_name"] = cand[0] if cand else None
         r["pooled"] = bool(cand) and any(
             all(ev[n].get(sd, {}).get("supported") == "1" for sd in ("LEFT", "RIGHT")) for n in cand)
-        cc = [n for n in comb if match(parse_name(n), r)]
+        cc = pick([n for n in comb if match(parse_name(n), r)])
         r["comb_name"] = cc[0] if cc else None
         explained_comb.update(cc)
         r["ann"] = annot.get(r["comb_name"]) if r["comb_name"] else None

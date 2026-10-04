@@ -52,8 +52,13 @@ echo "[$(ts)] 4. combine/annotate references: bowtie2 index of the reduced refer
 REF="$OUT/ref/reduced.fa"
 [ -f "$OUT/ref/reduced.1.bt2" ] || bowtie2-build --threads "$THREADS" "$REF" "$OUT/ref/reduced" > "$OUT/ref/bt2.log" 2>&1
 "$PY" "$DIR/make_refs.py" --ref "$REF" --hg38-rmsk "$GENOMES/hg38.rmsk.txt.gz" --out-dir "$OUT/ref"
+# pseudogene parents: the simulator's own gene models, on hs1 (junction cores) and placed on the
+# reduced reference (clip-exon candidates) -- truth and annotate use the same exons
+"$PY" "$DIR/make_gene_track.py" --donor-dir "$OUT/donor" --hs1-2bit "$GENOMES/hs1.2bit" --ref "$REF" \
+    --out-hs1 "$OUT/ref/genes.hs1.tsv" --out-ref "$OUT/ref/genes.ref.tsv"
 "$PY" "$DIR/make_config.py" --repo "$REPO" --out "$OUT/pyconf/config.py" --ref-dir "$OUT/ref" \
-    --hg38-2bit "$GENOMES/hg38.2bit" --hs1-2bit "$GENOMES/hs1.2bit" --workdir "$OUT/annot"
+    --hg38-2bit "$GENOMES/hg38.2bit" --hs1-2bit "$GENOMES/hs1.2bit" --workdir "$OUT/annot" \
+    --exon-ref "$OUT/ref/genes.ref.tsv" --exon-hs1 "$OUT/ref/genes.hs1.tsv"
 [ -f "$REPO/test/fullstack/annotate/peartree_rte.hmm.h3m" ] || bash "$REPO/test/fullstack/annotate/build_hmm.sh"
 
 echo "[$(ts)] 5. combine_insertions (.tprt python config)"

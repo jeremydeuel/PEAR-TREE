@@ -298,7 +298,14 @@ def main(argv=None):
             if s.id in src_used:
                 src_recs[f"hs1src_{s.id}"] = s.flank5 + s.element_seq + s.tail + s.flank3
     write_fasta(os.path.join(a.out_dir, "sources_hs1.fa"), src_recs)
-    n_tp = sum(1 for e in events if e["ev"].role == "TP")
+    # the pseudogene-parent gene models actually used (synthetic or from --gene-model), in the
+    # tools/build_gene_model.py track format (contig start end gene strand, 0-based half-open,
+    # hs1): annotate gets the SAME exons as truth (test/e2e/make_gene_track.py)
+    with open(os.path.join(a.out_dir, "genes_hs1.tsv"), "w") as f:
+        for gm in genes:
+            for s, e in gm.exons:
+                f.write(f"{gm.contig}\t{s}\t{e}\t{gm.id}\t{gm.strand}\n")
+    n_tp =sum(1 for e in events if e["ev"].role == "TP")
     print(f"placed {len(events)} events ({n_tp} TP, {len(events) - n_tp} artefact) in "
           f"{len(reg)} window(s) for {nsamp} sample(s) -> {a.out_dir}", file=sys.stderr)
 

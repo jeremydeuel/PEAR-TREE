@@ -388,6 +388,17 @@ are documented in `tools/rte/annotator.py`.
   accepted and counted for `supported`.
 - reads FASTA: every sequence, mates included, is in allele-forward (= reference-forward)
   orientation, so a mate's strand on the element consensus is the element strand.
+- Annotate round 2 (E2E_REPORT "Annotate round 2"): `TD5P_SOURCE=<id>` is emitted with TD5P;
+  ORPHAN_TD carries TD3P; an exon-exon junction read makes the element PSEUDOGENE even when an
+  Alu/L1 piece sits in the mRNA (`rte_detail rte_in_mrna=`), structure from the 5' insert vs the
+  spliced transcript; a local template <= 250 bp from a breakpoint is TEMPLATED_LOCAL, 250 bp -
+  `rte_wide_window` (10 kb) PREMRNA_COINSERT (`premrna=local:...`, no gene model needed); a
+  sense>anti switch read behind a sense 5' piece is INVERTED_5P_SWITCH; an inverted copy of the
+  5' flank abutting the junction is FOLDBACK_INVDUP_5P. Tag evidence thresholds live in
+  `tools/rte/structure.py` DEFAULTS (`td_*`, `templated_*`). New config keys:
+  `rte_exon_annotation` (exon track on `remap_2bit` for the junction cores; default
+  `exon_annotation`), `rte_wide_window`, `count_insertion_call` (annotate_v2 counts the
+  genotyper's `insertion` call as a carrier; default = on iff `rte_library` is set).
 
 ### TPRT point system (annotate, `tools/rte/score.py`) — design targets
 

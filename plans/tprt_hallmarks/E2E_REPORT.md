@@ -308,3 +308,170 @@ conservative). (2) annotate_v2's `read_genotyping` counts only het/hom as carrie
 one-sided loci reading `insertion` everywhere would be dropped there (annotate-owned).
 (3) The Python oracle genotyper (`src/genotype.py`) was not extended and rejects `oneside_`
 names; the cluster uses the Rust binary.
+
+## Annotate round 2 (annotate worker, 2026-10-04)
+
+Same discovery + combine output as the final run above (`$SP/work/e2e/combine`, copied); only
+`annotate_v2` + `tools/rte` re-run (`test/e2e/run_annotate_e2e.py` + `score_e2e.py`). Harness fix
+first: `score_e2e.py` picked the combined name of an event from a Python `set` (hash order ->
+element/structure counts moved by +-3 between identical runs); it now prefers two-sided names, then
+sorts by name. "base" below = `tprt-hallmarks` 4681f72 re-scored with that deterministic scorer
+(120/99/56 instead of the 118/96/55 quoted above).
+
+### Pseudogene parents: the same exons for truth and annotate
+
+The simulator built its pseudogene parents as synthetic GT..AG genes on real hs1 chr22 sequence
+(no `--gene-model`), so no public track contains them. `test/fullstack/donor_types.py` now writes
+them (`donor/genes_hs1.tsv`, build_gene_model format); `test/e2e/make_gene_track.py` reads that, or
+for older runs recovers the exons from the truth `EXON<n>[gene]` parts (34 exons / 8 genes here),
+and writes (a) the hs1 track for the exon-exon junction cores (new key `rte_exon_annotation`,
+because `remap_2bit` is hs1) and (b) the same exons placed on the E2E clip-remap reference (reduced
+GRCh38) for annotate_v2's clip-exon candidates (`exon_annotation`). `run_e2e.sh` does both.
+**Real runs** use ONE hs1 track for both (the clip-remap genome is hs1; `rte_exon_annotation`
+defaults to `exon_annotation`):
+
+```bash
+curl -O https://hgdownload.soe.ucsc.edu/goldenPath/hs1/bigZips/genes/hs1.ncbiRefSeq.gtf.gz
+python tools/build_gene_model.py --curated hs1.ncbiRefSeq.gtf.gz hs1.gene_model.tsv.gz
+# CONFIG['annotate']['exon_annotation'] = <staged>/hs1.gene_model.tsv.gz ; ['remap_2bit'] = <staged>/hs1.2bit
+```
+
+(28,776 genes / 252,903 merged exon rows; checked locally, e.g. the GAPDH transcript 5' end; the
+file lives in `$SP/genes`, not the repo, and still has to be staged on the farm.) PSEUDOGENE
+requires an exon-exon junction read; the no-junction decoy gets `PSEUDOGENE_CANDIDATE` only (0/8
+decoys called PSEUDOGENE).
+
+### Per-type accuracy (135 combined TPs; base -> round 2)
+
+| variant | comb | element | structure | tag recall | extra tags | T/L/U/A (r2) |
+|---|---|---|---|---|---|---|
+| ALU_YA5 | 8 | 8/8 -> 8/8 | 8/8 -> 8/8 | . | 6 -> 0 | 8/0/0/0 |
+| ALU_YB8 | 7 | 7/7 -> 7/7 | 7/7 -> 7/7 | . | 0 -> 0 | 7/0/0/0 |
+| EN_INDEPENDENT | 8 | 8/8 -> 8/8 | 8/8 -> 8/8 | 4/8 -> 8/8 | 1 -> 0 | 0/0/8/0 |
+| FOLDBACK_INVDUP_5P | 3 | 3/3 -> 3/3 | 1/3 -> 1/3 | 0/3 -> 2/3 | 2 -> 0 | 3/0/0/0 |
+| L1_FULL | 6 | 6/6 -> 6/6 | 6/6 -> 6/6 | . | 1 -> 0 | 6/0/0/0 |
+| L1_INV | 7 | 7/7 -> 7/7 | 5/7 -> 5/7 | . | 0 -> 0 | 5/2/0/0 |
+| L1_INV_SWITCH | 8 | 8/8 -> 8/8 | 0/8 -> 4/8 | . | 4 -> 0 | 8/0/0/0 |
+| L1_MED_DELETION | 7 | 7/7 -> 7/7 | 6/7 -> 6/7 | 6/7 -> 6/7 | 0 -> 0 | 5/1/1/0 |
+| L1_MED_DUPLICATION | 5 | 5/5 -> 5/5 | 4/5 -> 4/5 | 4/5 -> 4/5 | 0 -> 0 | 2/0/3/0 |
+| L1_TD3P | 8 | 8/8 -> 8/8 | 8/8 -> 8/8 | 15/16 -> 14/16 | 0 -> 0 | 8/0/0/0 |
+| L1_TRUNC | 7 | 7/7 -> 7/7 | 7/7 -> 7/7 | . | 2 -> 0 | 7/0/0/0 |
+| L1_TSD_DELETION | 6 | 6/6 -> 6/6 | 5/6 -> 5/6 | 5/6 -> 5/6 | 4 -> 0 | 4/1/1/0 |
+| ORPHAN_TD3P | 5 | 5/5 -> 5/5 | 5/5 -> 5/5 | 5/10 -> 10/10 | 2 -> 0 | 5/0/0/0 |
+| POLYA_ONLY | 4 | 1/4 -> 1/4 | 3/4 -> 4/4 | . | 0 -> 0 | 2/1/1/0 |
+| PREMRNA_COINSERT | 5 | 5/5 -> 5/5 | 0/5 -> 0/5 | 0/5 -> 5/5 | 6 -> 1 | 3/1/1/0 |
+| PSEUDOGENE | 6 | 0/6 -> 5/6 | 0/6 -> 5/6 | 0/6 -> 5/6 | 8 -> 2 | 6/0/0/0 |
+| PSEUDOGENE_DECOY | 8 | 3/8 -> 5/8 | 6/8 -> 6/8 | . | 6 -> 7 (4 = PSEUDOGENE_CANDIDATE) | 8/0/0/0 |
+| SVA_E | 6 | 6/6 -> 6/6 | 6/6 -> 6/6 | . | 0 -> 0 | 5/0/1/0 |
+| SVA_F | 7 | 7/7 -> 7/7 | 7/7 -> 7/7 | . | 3 -> 0 | 7/0/0/0 |
+| SVA_TD3P | 5 | 5/5 -> 5/5 | 5/5 -> 5/5 | 10/10 -> 10/10 | 3 -> 3 | 3/0/2/0 |
+| SVA_TD5P | 7 | 6/7 -> 6/7 | 0/7 -> 6/7 | 6/14 -> 12/14 | 5 -> 2 | 5/1/1/0 |
+| TEMPLATED_LOCAL | 2 | 2/2 -> 2/2 | 2/2 -> 2/2 | 1/2 -> 1/2 | 1 -> 1 | 1/0/0/1 |
+| **all TP** | 135 | **120 -> 127** | **99 -> 115** | **56/92 -> 82/92** | **54 -> 16** | 108/7/19/1 |
+
+Strand unchanged (133/135). TPRT-score AUC (TP vs unexplained) fit 0.940 -> 0.928, eval 0.900 ->
+0.900 (no weight changed; the 8 EN_INDEPENDENT TPs are UNCERTAIN by design).
+
+### Per-tag precision / recall (combined TPs) and tags on the 252 unexplained loci
+
+| tag | base TP/FP/FN | r2 TP/FP/FN | base P / R | r2 P / R | on unexplained (base -> r2) |
+|---|---|---|---|---|---|
+| TD3P | 13/18/5 | 17/3/1 | 0.42 / 0.72 | 0.85 / 0.94 | 57 -> 20 |
+| TD3P_SOURCE | 17/8/1 | 17/0/1 | 0.68 / 0.94 | 1.00 / 0.94 | 48 -> 17 |
+| TD5P | 6/1/1 | 6/1/1 | 0.86 / 0.86 | 0.86 / 0.86 | 1 -> 1 |
+| TEMPLATED_LOCAL | 1/16/1 | 1/0/1 | 0.06 / 0.50 | 1.00 / 0.50 | 39 -> 17 |
+| PREMRNA_COINSERT | 0/0/5 | 5/2/0 | - / 0.00 | 0.71 / 1.00 | 0 -> 7 |
+| EN_INDEPENDENT | 4/0/4 | 8/0/0 | 1.00 / 0.50 | 1.00 / 1.00 | 2 -> 2 |
+| L1_MED_DUPLICATION | 4/7/1 | 4/1/1 | 0.36 / 0.80 | 0.80 / 0.80 | 9 -> 7 |
+| FOLDBACK_INVDUP_5P | 0/0/3 | 2/0/1 | - / 0.00 | 1.00 / 0.67 | 0 -> 1 |
+| EXON_JUNCTION | 0/0/6 | 5/0/1 | - / 0.00 | 1.00 / 0.83 | 0 -> 7 (see "Remaining" 1) |
+| TSD_DELETION / L1_MED_DELETION / CHIMERIC_ENDS | 5/2/1, 6/0/1, 0/2/0 | unchanged | | | |
+
+The 3 remaining TD3P FPs: 2 PSEUDOGENE_DECOY events called ALU (an exon starting with an Alu 3'
+end + tail, then gene sequence before the insertion's poly-A) and 1 PSEUDOGENE without a
+candidate gene.
+
+### What was wrong, per systematic miss (and the fix)
+
+* **L1_INV_SWITCH 0/8 -> 4/8.** The simulated shape is `sense switch piece | inverted piece
+  (further 3') | sense body | polyA`; the 5' junction reads REF|sense, so it was TRUNCATED_5P. New:
+  a read joining a sense piece (at/after the 5' junction piece) to an anti-sense piece lying further
+  3' on the consensus -> INVERTED_5P_SWITCH (`detail switch=`). The other 4 have a 300-480 bp switch
+  piece that no read crosses (fragments ~350 bp): undecidable from these reads.
+* **SVA_TD5P structure 0/7 -> 6/7.** The 5' junction reads REF | source 5' flank, longer than a
+  fragment, so no read joins it to the hexamer -> 5P_UNRESOLVED. A 5' transduction means
+  transcription started upstream, so the SVA is complete: FULL_LENGTH when the 5' junction piece is a
+  sense FLANK5P. `TD5P_SOURCE=<id>` is now emitted (truth had it, annotate never did: 6 tag misses).
+* **PREMRNA_COINSERT tags 0/5 -> 5/5** (structure still 0/5). The simulator copies local sequence
+  400-2400 bp from the site to the 5' end (no gene involved); annotate only looked for a host-gene hit
+  between element and poly-A, and only with a gene model. New: unexplained pieces are looked up in a
+  +-10 kb window (`rte_wide_window`); a local template whose near end is > 250 bp away ->
+  PREMRNA_COINSERT (`premrna=local:...`), <= 250 bp -> TEMPLATED_LOCAL. That template also stopped
+  producing `L1_MED_DUPLICATION` (3 FPs) via annotate_v2's intrachromosomal-SV clip partner.
+  Structure: no read joins the 225-620 bp template to the L1 -> 5P_UNRESOLVED.
+* **PSEUDOGENE 0/6 -> 5/6.** Besides the missing track, the synthetic parents were cut from
+  repeat-rich chr22, so exons carry Alu pieces and 3/6 were called ALU. An exon-exon junction read
+  now wins over an element class (`rte_in_mrna=` keeps the class; TD/templated/pre-mRNA tags read
+  from mRNA pieces are dropped); structure from the 5' insert vs the spliced transcript (5/6).
+  Candidates = every gene with an exon under a clip remap, not only `_pseudogene()`'s (that one
+  needs a clip poly-A). Remaining miss: event 105 (no candidate gene).
+* **FOLDBACK_INVDUP_5P 0/3 -> 2/3**: a 5' junction read REF | LOCAL on the opposite strand whose
+  template ends within 12 bp of the junction on the flank side (>= 2 fragments) is a fold-back of the
+  5' flank (was TEMPLATED_LOCAL). **EN_INDEPENDENT 4/8 -> 8/8**: a blunt pair has gap 0 **or 1**
+  (SPEC) and the 3' end had to be >= 60 bp short; now >= 20 bp. **ORPHAN_TD3P** now carries TD3P.
+
+### Over-tagging: causes and the tightened rules
+
+* **Poly-A tail noise** (most TD3P and TEMPLATED_LOCAL FPs): SBS jitter + low-quality bases after a
+  long poly-A split one tail into `POLYA | junk | POLYA`; the junk became the "unexplained segment
+  before the poly-A" (TD3P), and read poly-A aligned to a reference A-run 100-500 bp away became a
+  LOCAL "template". `assembly._smooth_polya` merges a tail (pieces <= 20 bp between same-base runs,
+  or non-flank pieces >= 60 % the tail base); templates/tags must not be low complexity.
+* **TD3P** (unexplained tag): >= 30 bp, complex, directly before the TAIL poly-A (followed by REF /
+  read end, not an A-run inside genomic sequence), in >= 2 fragments (`td_frags`).
+  **TD3P_SOURCE**: a flank hit >= 30 bp, or >= 20 bp at >= 95 % identity in the tail position; not
+  an element end (short hits that also match a consensus: an L1 3' end inside some 15 kb flank);
+  seen from the 3' junction side; no class element after it. (Tried and rejected: requiring unmasked
+  flank sequence -- `flanks_3p.fa` is ~53 % soft-masked in its first kb; it killed 8 true sources.)
+* **TEMPLATED_LOCAL**: >= 20 bp, >= 90 % identity, complex, not inside the TSD +- 5 bp, near end
+  <= 250 bp from a breakpoint, >= 2 fragments; a REF split by a read indel / homopolymer is merged
+  back into one flank (was a "template"); a LOCAL piece >= 30 bp that also matches an element
+  consensus (the insert next to a reference copy of its family) is ELEMENT.
+* 5' junction reads whose REF piece does not end at a breakpoint (a reference element elsewhere in
+  the window) no longer pick the 5' element class (a CHIMERIC_ENDS source).
+
+### Threshold changes on the held-out split (events by id parity; P = TP/called, R = TP/truth)
+
+Each row re-runs annotate with ONE threshold reverted / loosened (rest = round 2 final):
+
+| threshold | value | fit | eval | unexplained loci |
+|---|---|---|---|---|
+| (base, all old logic) | - | TD3P 7/16 P, 7/11 R | TD3P 6/15 P, 6/7 R | TD3P 57 |
+| **round 2 final** | td_min_fragments 2, td_min_bp 30, flank 30 or 20@0.95 | TD3P 11/11, 11/11 | TD3P 6/9, 6/7 | TD3P 20, TD3P_SOURCE 17 |
+| td_min_fragments | 1 | TD3P 10/12, 10/11 | TD3P 6/12, 6/7 | TD3P 30 |
+| td_min_bp | 20 | TD3P 10/12, 10/11 | TD3P 6/10, 6/7 | TD3P 27 |
+| td_min_flank_bp | 20 (any identity) | TD3P 11/11, 11/11 | TD3P 6/9, 6/7 | TD3P_SOURCE 29 |
+| templated_min_fragments | 1 (final 2) | TEMPLATED 0/4 P (final 0/0) | 2/3 P, 2/2 R (final 1/1, 1/2) | TEMPLATED 29 (final 17) |
+| en_independent_3p_tolerance | 60 (old; final 20) | EN_IND 3/4 R (final 4/4) | 4/4 R (final 4/4) | 2 |
+
+(The td_* ablations were run before the short-flank rule was added; with it, final fit TD3P is
+11/11.) All final values were set a priori from the task spec (N = 30 bp, >= 2 fragments, 20 bp,
+90 %, 250 bp) and confirmed by these ablations; the one rule found by looking at an event is the
+short tail-position flank hit (fit-half event 42): +1 TP on fit, nothing on eval, and no extra
+unexplained TD3P_SOURCE (the plain 20 bp floor adds 12). Unchanged: TSD_DELETION (2 FP: templated /
+SVA TD5P breakpoint geometry), the decoy element (2 truth-UNKNOWN decoys called ALU), POLYA_ONLY
+(3/4 one-sided loci called UNKNOWN/ALU).
+
+### Remaining
+
+1. **Parent-gene splice ghosts**: 6 unexplained far L1DEL/L1DUP loci now read PSEUDOGENE +
+   EXON_JUNCTION (3 TPRT/LIKELY). Their breakpoints sit on exon boundaries of the parent gene: reads
+   of the processed pseudogene map back to the parent and are clipped at the splice sites. Flag them
+   (both breakpoints = exon boundaries of the candidate gene on the DISCOVERY genome; needs the
+   discovery-genome gene model) -- not done.
+2. L1_INV 2/7 5P_UNRESOLVED, L1_INV_SWITCH 4/8, PREMRNA structure 0/5: the informative junction is
+   farther than a fragment from every evidence read.
+3. annotate_v2 now counts the genotyper's `insertion` call as a carrier in TPRT mode (`rte_library`
+   set, or explicit `count_insertion_call`); the legacy default is unchanged (point (2) above).
+   One-sided (`contig:L-oneside_L`) and far-pair names join `genotypes.csv.gz` by exact title
+   (tested). The E2E numbers above use stub genotypes (every locus het), so they are unaffected.

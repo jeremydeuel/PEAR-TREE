@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import gzip
 
-from .sequtil import edlib_best
+from .sequtil import edlib_best, rc
 
 DEFAULTS = {"exon_junction_overhang": 20, "exon_junction_max_edits": 2,
             "exon_junction_min_intron": 30, "exon_junction_skip": 1}
@@ -39,6 +39,20 @@ def load_exons_by_gene(path):
     return genes
 
 
+def load_gene_strands(path):
+    """gene -> '+'/'-' from the optional 5th column of the exon track ('' when absent)."""
+    out = {}
+    op = gzip.open if str(path).endswith(".gz") else open
+    with op(path, "rt") as fh:
+        for line in fh:
+            if not line.strip() or line.startswith("#"):
+                continue
+            f = line.rstrip("\n").split("\t")
+            if len(f) >= 5 and f[4] in ("+", "-"):
+                out.setdefault(f[3], f[4])
+    return out
+
+
 def _merge(ivs):
     out = []
     for c, s, e in ivs:
@@ -50,12 +64,45 @@ def _merge(ivs):
 
 
 class ExonJunctionIndex:
-    def __init__(self, exons_by_gene: dict, genome, cfg=None):
+    def __init__(self, exons_by_gene: dict, genome, cfg=None, strands=None):
         self.cfg = dict(DEFAULTS)
         self.cfg.update(cfg or {})
         self.exons = exons_by_gene
         self.genome = genome
+        self.strands = strands or {}
         self._cores = {}
+        self._mrna = {}
+
+    def mrna(self, gene):
+        """Spliced transcript of `gene` (merged exons, gene sense when the strand is known,
+        else genomic forward) from the remap genome; '' without a genome."""
+        if gene not in self._mrna:
+            ex = self.exons.get(gene, [])
+            seq = "".join(self.genome.fetch(c, s, e) for c, s, e in ex) if self.genome is not None else ""
+            self._mrna[gene] = rc(seq) if self.strands.get(gene) == "-" else seq
+        return self._mrna[gene]
+
+    def structure(self, genes, five_prime_seqs, tol=15, probe=25):
+        """FULL_LENGTH when the inserted sequence at the 5' junction starts within `tol` bp of
+        the transcript 5' end, TRUNCATED_5P when it starts further in, None when it is not found
+        (or no 5' junction sequence). five_prime_seqs: inserted sequences right after the 5'
+        junction flank, element (= mRNA) sense, best first."""
+        for g in genes:
+            m = self.mrna(g)
+            if not m:
+                continue
+            for q in five_prime_seqs:
+                if len(q) < probe:
+                    continue
+                q = q[:probe]
+                stranded = g in self.strands
+                r = edlib_best(q, m, max_frac=0.1, both_strands=not stranded)
+                if r is None:
+                    continue
+                _, ts, te, strand = r
+                start = ts if strand > 0 else len(m) - te
+                return "FULL_LENGTH" if start <= tol else "TRUNCATED_5P"
+        return None
 
     def cores(self, gene):
         if gene in self._cores:
