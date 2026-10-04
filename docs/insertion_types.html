@@ -1,0 +1,1673 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Retrotransposition insertion types</title>
+<meta name="description" content="Catalogue of somatic retrotransposition insertion types with genomic and short-read figures, frequencies and PEAR-TREE vocabulary.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&amp;family=Source+Sans+3:wght@400;600;700&amp;display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#fbfaf7; --panel:#ffffff; --ink:#1d232b; --muted:#5b6672; --line:#d9dde2; --accent:#2b5fb8;
+  --c-flank:#a7b0ba; --c-flank2:#5e6d7f; --c-tsd:#f0a33a; --c-l1:#2f66d0; --c-l1inv:#16a2a2;
+  --c-alu:#2f9a58; --c-sva:#c0408f; --c-polya:#d43c3c; --c-td:#8a56e8; --c-exon:#c9971c; --c-exonb:#e3bd55;
+  --c-intron:#efdfa8; --c-local:#a65a2c; --c-gap:#9aa3ad; --c-onfill:#ffffff; --c-ondark:#1d232b;
+  --b-in:#1f7a46; --b-in-bg:#e2f3e8; --b-part:#8a5a00; --b-part-bg:#fbefd2; --b-out:#8b2b2b; --b-out-bg:#f8e1e1;
+  --b-art:#4a4f7a; --b-art-bg:#e6e7f4;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#13171c; --panel:#1b2128; --ink:#e4e8ec; --muted:#9aa5b1; --line:#2e3640; --accent:#7aa7f5;
+    --c-flank:#6f7a86; --c-flank2:#9fb0c4; --c-tsd:#f3b55c; --c-l1:#5d8ef0; --c-l1inv:#33c4c4;
+    --c-alu:#4cc17b; --c-sva:#e06ab2; --c-polya:#f06464; --c-td:#a983ff; --c-exon:#dcae3a; --c-exonb:#efd27e;
+    --c-intron:#6e6440; --c-local:#d07d4b; --c-gap:#6f7a86; --c-onfill:#0f1317; --c-ondark:#0f1317;
+    --b-in:#7fd8a2; --b-in-bg:#173322; --b-part:#f2c56b; --b-part-bg:#3a2d10; --b-out:#f29a9a; --b-out-bg:#3b1a1a;
+    --b-art:#b9bdf0; --b-art-bg:#262a4a;
+  }
+}
+:root[data-theme="dark"]{
+    --bg:#13171c; --panel:#1b2128; --ink:#e4e8ec; --muted:#9aa5b1; --line:#2e3640; --accent:#7aa7f5;
+    --c-flank:#6f7a86; --c-flank2:#9fb0c4; --c-tsd:#f3b55c; --c-l1:#5d8ef0; --c-l1inv:#33c4c4;
+    --c-alu:#4cc17b; --c-sva:#e06ab2; --c-polya:#f06464; --c-td:#a983ff; --c-exon:#dcae3a; --c-exonb:#efd27e;
+    --c-intron:#6e6440; --c-local:#d07d4b; --c-gap:#6f7a86; --c-onfill:#0f1317; --c-ondark:#0f1317;
+    --b-in:#7fd8a2; --b-in-bg:#173322; --b-part:#f2c56b; --b-part-bg:#3a2d10; --b-out:#f29a9a; --b-out-bg:#3b1a1a;
+    --b-art:#b9bdf0; --b-art-bg:#262a4a;
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.55 "Source Sans 3",system-ui,-apple-system,"Segoe UI",sans-serif}
+code{overflow-wrap:anywhere;font-family:"JetBrains Mono",ui-monospace,Menlo,monospace;font-size:.86em;background:color-mix(in srgb,var(--line) 45%,transparent);padding:.05em .3em;border-radius:4px}
+a{color:var(--accent)}
+.wrap{display:grid;grid-template-columns:minmax(0,1fr);max-width:1240px;margin:0 auto;padding:0 16px}
+nav.toc{border-bottom:1px solid var(--line);padding:12px 0;font-size:.9rem}
+nav.toc ul{margin:0;padding:0;list-style:none;columns:2;column-gap:1.5em}
+nav.toc li{break-inside:avoid;margin:2px 0;padding-left:1.8em;text-indent:-1.8em}
+nav.toc .tn{display:inline-block;min-width:1.8em;text-indent:0;color:var(--muted);font-variant-numeric:tabular-nums}
+@media (max-width:520px){nav.toc ul{columns:1}}
+nav.toc a{text-decoration:none;color:var(--ink)}
+nav.toc a:hover{color:var(--accent)}
+nav.toc .h{font-weight:700;margin:0 0 6px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;font-size:.75rem}
+main{min-width:0;padding-bottom:64px}
+@media (min-width:1020px){
+  .wrap{grid-template-columns:250px minmax(0,1fr);gap:36px}
+  nav.toc{position:sticky;top:0;align-self:start;max-height:100vh;overflow:auto;border-bottom:0;border-right:1px solid var(--line);padding:24px 12px 24px 0}
+  nav.toc ul{columns:1}
+}
+header h1{font-size:2rem;line-height:1.2;margin:28px 0 6px}
+header p.sub{color:var(--muted);margin:0 0 16px}
+h2{font-size:1.4rem;margin:48px 0 8px;padding-top:8px;border-top:1px solid var(--line);display:flex;flex-wrap:wrap;align-items:baseline;gap:10px}
+h2 .n{color:var(--muted);font-variant-numeric:tabular-nums;min-width:1.6em}
+h3{font-size:1rem;margin:18px 0 6px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
+.badge{font-size:.72rem;font-weight:700;padding:.15em .6em;border-radius:999px;letter-spacing:.03em;white-space:nowrap}
+.badge.in{color:var(--b-in);background:var(--b-in-bg)}
+.badge.partial{color:var(--b-part);background:var(--b-part-bg)}
+.badge.out{color:var(--b-out);background:var(--b-out-bg)}
+.badge.art{color:var(--b-art);background:var(--b-art-bg)}
+figure{margin:14px 0;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px 12px}
+figure{overflow-x:auto}
+figure svg{width:100%;min-width:560px;height:auto;display:block}
+figcaption{font-size:.86rem;color:var(--muted);margin-top:6px}
+.freq{background:var(--panel);border-left:3px solid var(--c-tsd);padding:8px 12px;border-radius:0 8px 8px 0;font-size:.93rem}
+.vocab{font-size:.9rem}
+ul.pts{margin:4px 0;padding-left:1.2em}
+ul.pts li{margin:3px 0}
+.legend{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:6px 18px;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px 14px;font-size:.88rem}
+.legend span.sw{display:inline-block;width:26px;height:12px;border-radius:2px;vertical-align:-1px;margin-right:8px}
+.sw.k-gap{background:transparent!important;border:1.5px dashed var(--c-gap)}
+.legend .rd{grid-column:1/-1;color:var(--muted);border-top:1px solid var(--line);padding-top:8px;margin-top:4px}
+.tbl{overflow-x:auto;border:1px solid var(--line);border-radius:10px;background:var(--panel)}
+table{border-collapse:collapse;width:100%;font-size:.86rem;min-width:760px}
+th,td{text-align:left;vertical-align:top;padding:7px 10px;border-bottom:1px solid var(--line)}
+th{position:sticky;top:0;background:var(--panel);font-weight:700}
+ol.refs li{margin:6px 0;font-size:.9rem}
+.note{font-size:.9rem;color:var(--muted)}
+.cols{display:grid;grid-template-columns:1fr;gap:12px}
+@media (min-width:760px){.cols{grid-template-columns:1fr 1fr}}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px 14px;font-size:.92rem}
+/* SVG classes */
+svg text{font-family:"Source Sans 3",system-ui,sans-serif}
+.lt{font-size:13px;font-weight:700;fill:var(--ink)}
+.lt2{font-size:11px;fill:var(--muted);font-style:italic}
+.mk{font-size:11px;fill:var(--muted)}
+.mkl{stroke:var(--muted);stroke-width:.7;stroke-dasharray:2 2}
+.bl{font-size:12px;fill:var(--ink)}
+.it{font-size:10px;fill:var(--c-onfill);font-weight:700}
+.itd{font-size:10px;fill:var(--c-ondark);font-weight:700}
+.sep{stroke:var(--line);stroke-width:1}
+.k-flank,.r-al,.sw.k-flank{fill:var(--c-flank);background:var(--c-flank)}
+.k-flank2,.sw.k-flank2{fill:var(--c-flank2);background:var(--c-flank2)}
+.k-tsd,.r-tsd,.sw.k-tsd{fill:var(--c-tsd);background:var(--c-tsd)}
+.k-l1,.r-l1,.sw.k-l1{fill:var(--c-l1);background:var(--c-l1)}
+.k-l1inv,.r-l1inv,.sw.k-l1inv{fill:var(--c-l1inv);background:var(--c-l1inv)}
+.k-alu,.r-alu,.sw.k-alu{fill:var(--c-alu);background:var(--c-alu)}
+.k-sva,.r-sva,.sw.k-sva{fill:var(--c-sva);background:var(--c-sva)}
+.k-polya,.r-polya,.sw.k-polya{fill:var(--c-polya);background:var(--c-polya)}
+.k-td,.r-td,.sw.k-td{fill:var(--c-td);background:var(--c-td)}
+.k-exon,.r-exon,.sw.k-exon{fill:var(--c-exon);background:var(--c-exon)}
+.k-exonb,.r-exonb{fill:var(--c-exonb)}
+.k-intron,.r-intron,.sw.k-intron{fill:var(--c-intron);background:var(--c-intron)}
+.k-local,.r-local,.sw.k-local{fill:var(--c-local);background:var(--c-local)}
+.gapr{fill:none;stroke:var(--c-gap);stroke-width:1.4;stroke-dasharray:4 3}
+.gapl{stroke:var(--c-gap);stroke-width:1}
+.r-clip2{fill:var(--c-flank2)}
+.rh{fill:var(--muted)}
+.pl{stroke:var(--muted);stroke-width:1}
+.pld{stroke:var(--muted);stroke-width:1;stroke-dasharray:3 2}
+</style>
+</head>
+<body>
+<div class="wrap">
+<nav class="toc" aria-label="Contents"><p class="h">Contents</p><ul><li><a href='#intro'><span class='tn'></span>How to read this page</a></li><li><a href='#vocab'><span class='tn'></span>Vocabulary &amp; evidence</a></li><li><a href='#structure'><span class='tn'></span>5′ structure classes</a></li><li><a href='#t1'><span class='tn'>1</span>Solo-L1</a></li><li><a href='#t2'><span class='tn'>2</span>Partnered 3′ transduction</a></li><li><a href='#t3'><span class='tn'>3</span>Orphan 3′ transduction</a></li><li><a href='#t4'><span class='tn'>4</span>Alu, SVA, SVA 5′ TD</a></li><li><a href='#t5'><span class='tn'>5</span>Processed pseudogene</a></li><li><a href='#t6'><span class='tn'>6</span>Solitary poly(A/T)</a></li><li><a href='#t7'><span class='tn'>7</span>L1-mediated deletion</a></li><li><a href='#t8'><span class='tn'>8</span>L1-mediated duplication / fold-back</a></li><li><a href='#t9'><span class='tn'>9</span>RT-mediated rearrangements</a></li><li><a href='#t10'><span class='tn'>10</span>Reciprocal translocation (2 L1s)</a></li><li><a href='#t11'><span class='tn'>11</span>Chimeric bridges</a></li><li><a href='#t12'><span class='tn'>12</span>Reciprocal inversion / complex</a></li><li><a href='#t13'><span class='tn'>13</span>Twin priming + switching</a></li><li><a href='#t14'><span class='tn'>14</span>Templated local insertion</a></li><li><a href='#t15'><span class='tn'>15</span>Co-inserted pre-mRNA</a></li><li><a href='#t16'><span class='tn'>16</span>Fold-back inv-dup 5′ of site</a></li><li><a href='#tA'><span class='tn'>A</span>Target-site deletion</a></li><li><a href='#tB'><span class='tn'>B</span>EN-independent insertion</a></li><li><a href='#artefacts'><span class='tn'>✕</span>Artefacts that mimic MEIs</a></li><li><a href='#summary'><span class='tn'></span>Summary table</a></li><li><a href='#refs'><span class='tn'></span>References</a></li></ul></nav>
+<main>
+
+<header>
+<h1>Retrotransposition insertion types</h1>
+<p class="sub">Shared reference for the PEAR-TREE caller, the simulators and annotation — what each insertion
+type looks like in the genome and in short reads, how often it occurs, and how PEAR-TREE names and scores it.
+Branch <code>tprt-hallmarks</code>; vocabulary per <code>plans/tprt_hallmarks/SPEC.md</code>.</p>
+</header>
+<section id="intro">
+<h2>How to read this page</h2>
+<p>Every figure has the same two lanes. The <b>top lane</b> is the insertion allele (not to scale): grey
+flanks, orange TSD boxes, the element as an arrow pointing 5′→3′, the poly(A) tail in red, transduced
+source flank in violet, inverted segments in teal, deletions as dashed boxes. The <b>bottom lane</b>
+shows the short-read evidence drawn on the same coordinates.</p>
+<div class="legend"><div><span class='sw k-flank'></span>flank at the site (aligned)</div><div><span class='sw k-flank2'></span>flank of another locus / chromosome</div><div><span class='sw k-tsd'></span>target-site duplication (TSD)</div><div><span class='sw k-l1'></span>L1, sense</div><div><span class='sw k-l1inv'></span>L1, inverted segment</div><div><span class='sw k-alu'></span>Alu</div><div><span class='sw k-sva'></span>SVA</div><div><span class='sw k-polya'></span>poly(A/T) tail</div><div><span class='sw k-td'></span>transduced flank of a source element</div><div><span class='sw k-exon'></span>exon (pseudogene / pre-mRNA)</div><div><span class='sw k-intron'></span>intron (unspliced)</div><div><span class='sw k-local'></span>local sequence (templated / fold-back copy)</div><div><span class='sw k-gap'></span>deleted / absent sequence</div>
+<div class="rd">One legend for every figure. Colours are CSS custom properties and switch with the dark theme.</div></div>
+<figure id="fkey"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 142" role="img" aria-labelledby="fkey-t"><title id="fkey-t">Grey read segments align at this locus; coloured segments are soft-clipped or (for a whole read) a mate that maps elsewhere, coloured by what they contain. Solid line = concordant pair, dashed = discordant pair; arrowheads give read strand.</title>
+<text class="lt" x="10" y="15.0">how reads are drawn (insertion-allele coordinates)</text>
+<rect class="k-flank" x="10.0" y="48.0" width="231.7" height="10"/>
+<rect class="k-tsd" x="241.7" y="42.0" width="30.9" height="22"/>
+<text class="itd" text-anchor="middle" x="257.1" y="56.3">TSD</text>
+<polygon class="k-l1" points="272.6,40.0 476.8,40.0 488.8,53.0 476.8,66.0 272.6,66.0"/>
+<text class="it" x="277.6" y="56.5">5′</text>
+<text class="it" x="466.8" y="56.5">3′</text>
+<rect class="k-polya" x="488.8" y="45.0" width="38.6" height="16"/>
+<text class="it" text-anchor="middle" x="508.1" y="56.3">A(n)</text>
+<rect class="k-tsd" x="527.4" y="42.0" width="30.9" height="22"/>
+<text class="itd" text-anchor="middle" x="542.9" y="56.3">TSD</text>
+<rect class="k-flank" x="558.3" y="48.0" width="231.7" height="10"/>
+<text class="bl" x="109.0" y="83.0">flank</text>
+<text class="bl" x="357.2" y="83.0">element</text>
+<text class="bl" x="657.4" y="83.0">flank</text>
+<text class="lt2" x="10" y="98.0">short reads</text>
+<line class="pld" x1="202.6" y1="110.0" x2="332.6" y2="110.0"/>
+<rect class="r-al" x="140.6" y="106.0" width="62.0" height="8"/>
+<polygon class="rh" points="202.6,106.0 206.6,110.0 202.6,114.0"/>
+<rect class="r-l1" x="332.6" y="106.0" width="62.0" height="8"/>
+<polygon class="rh" points="332.6,106.0 328.6,110.0 332.6,114.0"/>
+<rect class="r-tsd" x="241.7" y="119.0" width="30.9" height="8"/>
+<rect class="r-l1" x="272.6" y="119.0" width="31.0" height="8"/>
+<polygon class="rh" points="303.6,119.0 307.6,123.0 303.6,127.0"/>
+<line class="pl" x1="552.2" y1="110.0" x2="665.2" y2="110.0"/>
+<rect class="r-polya" x="490.2" y="106.0" width="37.2" height="8"/>
+<rect class="r-tsd" x="527.4" y="106.0" width="24.8" height="8"/>
+<polygon class="rh" points="552.2,106.0 556.2,110.0 552.2,114.0"/>
+<rect class="r-al" x="665.2" y="106.0" width="62.0" height="8"/>
+<polygon class="rh" points="665.2,106.0 661.2,110.0 665.2,114.0"/>
+</svg><figcaption>Grey read segments align at this locus; coloured segments are soft-clipped or (for a whole read) a mate that maps elsewhere, coloured by what they contain. Solid line = concordant pair, dashed = discordant pair; arrowheads give read strand.</figcaption></figure>
+<p class="note">Frequencies come from different settings and are not interchangeable: Zumalave 2026 selected 10
+tumours with &gt; 100 somatic events each (6,418 events, long + short reads); PCAWG (Rodriguez-Martin 2020) is
+2,954 cancer genomes with short reads (19,166 events); Nam 2023 is ~1,200 resolved events in clonally expanded
+normal colorectal cells — the setting closest to PEAR-TREE's colony data; Szak 2002 and Ewing 2013 describe
+germline/reference copies.</p>
+</section>
+
+<section id="vocab">
+<h2>Vocabulary and evidence</h2>
+<div class="cols">
+<div class="card"><b>TPRT hallmarks</b>
+<ul class="pts"><li><b>TSD</b> — target-site duplication, typically 4–25 bp (in vivo average ~14 bp), A-rich.</li>
+<li><b>EN motif</b> — the L1 endonuclease nick, consensus 5′-TTTT/AA-3′ (a preference, not a fixed sequence: even the most used single 7-mer, TTTTT/AA, accounts for &lt; 10% of insertions).</li>
+<li><b>poly(A)</b> at the 3′ end, on the strand consistent with element orientation (poly(T) when the element is on the minus strand).</li>
+<li><b>5′ truncation / inversion</b> as products of early termination and twin priming.</li></ul></div>
+<div class="card"><b>PEAR-TREE output (SPEC)</b>
+<ul class="pts"><li><code>element</code>: L1, ALU, SVA, PSEUDOGENE, POLYA_ONLY, ORPHAN_TD, NON_TPRT, UNKNOWN</li>
+<li><code>structure</code>: FULL_LENGTH, TRUNCATED_5P, INVERTED_5P, INVERTED_5P_SWITCH, 5P_UNRESOLVED</li>
+<li><code>tags</code>: TD3P, TD5P, TD3P_SOURCE=…, NOVEL_SOURCE, TEMPLATED_LOCAL, PREMRNA_COINSERT, TSD_DELETION, EN_INDEPENDENT, L1_MED_DELETION, L1_MED_DUPLICATION, FOLDBACK_INVDUP_5P, CHIMERIC_ENDS, EXON_JUNCTION</li>
+<li>evidence roles: CLIP, POLYA, MATE, DISC, SPAN; a junction is supported with ≥ 2 independent fragments pooled over all colonies of a patient — the poly-A end included; independence is decided from the reads, never from the duplicate flag.</li>
+<li><code>tprt_call</code>: TPRT / LIKELY_TPRT / UNCERTAIN / ARTEFACT_LIKE from the additive <code>tprt_score</code>.</li></ul></div>
+</div>
+</section>
+
+<section id="structure">
+<h2>5′ structure classes</h2>
+<p>The 3′ end (poly-A junction) is shared by all TPRT insertions; what differs is the 5′ end. <code>structure</code>
+is only assigned when the 5′ junction is covered (clip consensus or mates), otherwise <code>5P_UNRESOLVED</code>.</p>
+<div class="tbl"><table><thead><tr><th>structure</th><th>5′ junction evidence</th><th>mechanism</th><th>frequency (Zumalave 2026 solo-L1)</th></tr></thead><tbody>
+<tr><td><code>FULL_LENGTH</code></td><td>5′ clip reaches the start of the L1 5′ UTR, same strand as the 3′ end</td><td>complete reverse transcription</td><td>0.3% (10/3,611)</td></tr>
+<tr><td><code>TRUNCATED_5P</code></td><td>5′ clip starts at an internal L1 coordinate, same strand</td><td>early termination of TPRT</td><td>49% of truncated (1,762/3,598)</td></tr>
+<tr><td><code>INVERTED_5P</code></td><td>5′ clip/mates are L1 on the opposite strand; inversion junction inside the insert</td><td>twin priming (± internal del/dup)</td><td>51% of truncated (1,836/3,598)</td></tr>
+<tr><td><code>INVERTED_5P_SWITCH</code></td><td>extra orientation change or coordinate jump inside the 5′ part</td><td>twin priming with 5′/3′ switching</td><td>23 of 1,836 inverted</td></tr>
+<tr><td><code>5P_UNRESOLVED</code></td><td>no 5′ junction coverage</td><td>—</td><td>—</td></tr>
+</tbody></table></div>
+<p class="note">Figures for the first four classes are in <a href="#t1">type 1</a> and <a href="#t13">type 13</a>.</p>
+</section>
+
+<section id="t1">
+<h2><span class="n">1</span>Solo-L1 (full-length, 5′-truncated, 5′-inverted) <span class="badge in">in scope</span></h2>
+<p>An L1 RNA is reverse-transcribed at its own insertion site by target-primed reverse transcription
+    (TPRT): the L1 endonuclease nicks the bottom strand at a T-rich motif (consensus 5′-TTTT/AA-3′), the
+    exposed 3′-OH primes cDNA synthesis on the RNA poly(A) tail, and a staggered second nick creates the
+    target-site duplication (TSD). Because reverse transcription usually stops early, almost all somatic
+    copies keep only the 3′ end of L1 (5′ truncation). In <b>twin priming</b> the second DNA end of the
+    break anneals internally on the same RNA and primes a second cDNA, so the 5′ part is inverted relative
+    to the 3′ part; at the inversion point a short internal deletion (poly-dT cDNA stopped short of the
+    internal primer) or duplication (it ran past it) is common.</p>
+<figure id="f1a"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 168" role="img" aria-labelledby="f1a-t"><title id="f1a-t">Full-length L1: TSD on both sides, poly-A at the 3′ junction, the 5′ clip is L1 position ~1.</title>
+<text class="lt" x="10" y="15.0">insertion allele — full-length L1 (FULL_LENGTH)</text>
+<text class="mk" x="120.9" y="33.0">5′ junction</text>
+<line class="mkl" x1="154.7" y1="35.0" x2="154.7" y2="39.0"/>
+<text class="mk" x="555.9" y="33.0">3′ junction · EN nick TTTT/AA</text>
+<line class="mkl" x1="645.3" y1="35.0" x2="645.3" y2="39.0"/>
+<rect class="k-flank" x="10.0" y="48.0" width="112.6" height="10"/>
+<rect class="k-tsd" x="122.6" y="42.0" width="32.2" height="22"/>
+<text class="itd" text-anchor="middle" x="138.7" y="56.3">TSD</text>
+<polygon class="k-l1" points="154.7,40.0 593.1,40.0 605.1,53.0 593.1,66.0 154.7,66.0"/>
+<text class="it" x="159.7" y="56.5">5′</text>
+<text class="it" x="583.1" y="56.5">3′</text>
+<rect class="k-polya" x="605.1" y="45.0" width="40.2" height="16"/>
+<text class="it" text-anchor="middle" x="625.2" y="56.3">A(n)</text>
+<rect class="k-tsd" x="645.3" y="42.0" width="32.2" height="22"/>
+<text class="itd" text-anchor="middle" x="661.3" y="56.3">TSD</text>
+<rect class="k-flank" x="677.4" y="48.0" width="112.6" height="10"/>
+<text class="bl" x="289.2" y="83.0">L1HS ~6.0 kb, intact 5′ UTR</text>
+<text class="lt2" x="10" y="98.0">short reads</text>
+<line class="pl" x1="72.0" y1="110.0" x2="136.1" y2="110.0"/>
+<rect class="r-tsd" x="136.1" y="106.0" width="18.6" height="8"/>
+<rect class="r-l1" x="154.7" y="106.0" width="43.4" height="8"/>
+<polygon class="rh" points="136.1,106.0 132.1,110.0 136.1,114.0"/>
+<rect class="r-al" x="10.0" y="106.0" width="62.0" height="8"/>
+<polygon class="rh" points="72.0,106.0 76.0,110.0 72.0,114.0"/>
+<line class="pld" x1="114.7" y1="123.0" x2="224.7" y2="123.0"/>
+<rect class="r-al" x="52.7" y="119.0" width="62.0" height="8"/>
+<polygon class="rh" points="114.7,119.0 118.7,123.0 114.7,127.0"/>
+<rect class="r-l1" x="224.7" y="119.0" width="62.0" height="8"/>
+<polygon class="rh" points="224.7,119.0 220.7,123.0 224.7,127.0"/>
+<rect class="r-al" x="120.6" y="132.0" width="1.9" height="8"/>
+<rect class="r-tsd" x="122.6" y="132.0" width="32.2" height="8"/>
+<rect class="r-l1" x="154.7" y="132.0" width="27.9" height="8"/>
+<polygon class="rh" points="182.6,132.0 186.6,136.0 182.6,140.0"/>
+<line class="pld" x1="585.3" y1="110.0" x2="685.3" y2="110.0"/>
+<rect class="r-l1" x="523.3" y="106.0" width="62.0" height="8"/>
+<polygon class="rh" points="585.3,106.0 589.3,110.0 585.3,114.0"/>
+<rect class="r-al" x="685.3" y="106.0" width="62.0" height="8"/>
+<polygon class="rh" points="685.3,106.0 681.3,110.0 685.3,114.0"/>
+<line class="pl" x1="663.9" y1="123.0" x2="728.0" y2="123.0"/>
+<rect class="r-l1" x="601.9" y="119.0" width="3.2" height="8"/>
+<rect class="r-polya" x="605.1" y="119.0" width="40.2" height="8"/>
+<rect class="r-tsd" x="645.3" y="119.0" width="18.6" height="8"/>
+<polygon class="rh" points="663.9,119.0 667.9,123.0 663.9,127.0"/>
+<rect class="r-al" x="728.0" y="119.0" width="62.0" height="8"/>
+<polygon class="rh" points="728.0,119.0 724.0,123.0 728.0,127.0"/>
+<line class="pl" x1="669.1" y1="136.0" x2="728.0" y2="136.0"/>
+<rect class="r-polya" x="607.1" y="132.0" width="38.2" height="8"/>
+<rect class="r-tsd" x="645.3" y="132.0" width="23.8" height="8"/>
+<polygon class="rh" points="669.1,132.0 673.1,136.0 669.1,140.0"/>
+<rect class="r-al" x="728.0" y="132.0" width="62.0" height="8"/>
+<polygon class="rh" points="728.0,132.0 724.0,136.0 728.0,140.0"/>
+<rect class="r-polya" x="614.3" y="145.0" width="31.0" height="8"/>
+<rect class="r-tsd" x="645.3" y="145.0" width="31.0" height="8"/>
+<polygon class="rh" points="676.3,145.0 680.3,149.0 676.3,153.0"/>
+</svg><figcaption>Full-length L1: TSD on both sides, poly-A at the 3′ junction, the 5′ clip is L1 position ~1.</figcaption></figure><figure id="f1b"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 168" role="img" aria-labelledby="f1b-t"><title id="f1b-t">5′-truncated L1: the 5′ clip starts at an internal L1 coordinate (the truncation point).</title>
+<text class="lt" x="10" y="15.0">insertion allele — 5′-truncated L1 (TRUNCATED_5P)</text>
+<text class="mk" x="149.0" y="33.0">5′ junction = truncation point</text>
+<line class="mkl" x1="241.4" y1="35.0" x2="241.4" y2="39.0"/>
+<text class="mk" x="497.0" y="33.0">3′ junction (poly-A)</text>
+<line class="mkl" x1="558.6" y1="35.0" x2="558.6" y2="39.0"/>
+<rect class="k-flank" x="10.0" y="48.0" width="188.6" height="10"/>
+<rect class="k-tsd" x="198.6" y="42.0" width="42.9" height="22"/>
+<text class="itd" text-anchor="middle" x="220.0" y="56.3">TSD</text>
+<polygon class="k-l1" points="241.4,40.0 486.6,40.0 498.6,53.0 486.6,66.0 241.4,66.0"/>
+<text class="it" x="246.4" y="56.5">5′</text>
+<text class="it" x="476.6" y="56.5">3′</text>
+<rect class="k-polya" x="498.6" y="45.0" width="60.0" height="16"/>
+<text class="it" text-anchor="middle" x="528.6" y="56.3">A(n)</text>
+<rect class="k-tsd" x="558.6" y="42.0" width="42.9" height="22"/>
+<text class="itd" text-anchor="middle" x="580.0" y="56.3">TSD</text>
+<rect class="k-flank" x="601.4" y="48.0" width="188.6" height="10"/>
+<text class="bl" x="265.8" y="83.0">L1 3′ end only (median ~0.5 kb)</text>
+<text class="lt2" x="10" y="98.0">short reads</text>
+<line class="pl" x1="109.8" y1="110.0" x2="222.8" y2="110.0"/>
+<rect class="r-tsd" x="222.8" y="106.0" width="18.6" height="8"/>
+<rect class="r-l1" x="241.4" y="106.0" width="43.4" height="8"/>
+<polygon class="rh" points="222.8,106.0 218.8,110.0 222.8,114.0"/>
+<rect class="r-al" x="47.8" y="106.0" width="62.0" height="8"/>
+<polygon class="rh" points="109.8,106.0 113.8,110.0 109.8,114.0"/>
+<line class="pld" x1="201.4" y1="123.0" x2="311.4" y2="123.0"/>
+<rect class="r-al" x="139.4" y="119.0" width="59.1" height="8"/>
+<rect class="r-tsd" x="198.6" y="119.0" width="2.9" height="8"/>
+<polygon class="rh" points="201.4,119.0 205.4,123.0 201.4,127.0"/>
+<rect class="r-l1" x="311.4" y="119.0" width="62.0" height="8"/>
+<polygon class="rh" points="311.4,119.0 307.4,123.0 311.4,127.0"/>
+<rect class="r-tsd" x="207.3" y="132.0" width="34.1" height="8"/>
+<rect class="r-l1" x="241.4" y="132.0" width="27.9" height="8"/>
+<polygon class="rh" points="269.3,132.0 273.3,136.0 269.3,140.0"/>
+<line class="pld" x1="498.6" y1="110.0" x2="598.6" y2="110.0"/>
+<rect class="r-l1" x="436.6" y="106.0" width="62.0" height="8"/>
+<polygon class="rh" points="498.6,106.0 502.6,110.0 498.6,114.0"/>
+<rect class="r-tsd" x="598.6" y="106.0" width="2.9" height="8"/>
+<rect class="r-al" x="601.4" y="106.0" width="59.1" height="8"/>
+<polygon class="rh" points="598.6,106.0 594.6,110.0 598.6,114.0"/>
+<line class="pl" x1="562.6" y1="123.0" x2="673.6" y2="123.0"/>
+<rect class="r-polya" x="500.6" y="119.0" width="58.0" height="8"/>
+<rect class="r-tsd" x="558.6" y="119.0" width="4.0" height="8"/>
+<polygon class="rh" points="562.6,119.0 566.6,123.0 562.6,127.0"/>
+<rect class="r-al" x="673.6" y="119.0" width="62.0" height="8"/>
+<polygon class="rh" points="673.6,119.0 669.6,123.0 673.6,127.0"/>
+<line class="pl" x1="577.2" y1="136.0" x2="690.2" y2="136.0"/>
+<rect class="r-polya" x="515.2" y="132.0" width="43.4" height="8"/>
+<rect class="r-tsd" x="558.6" y="132.0" width="18.6" height="8"/>
+<polygon class="rh" points="577.2,132.0 581.2,136.0 577.2,140.0"/>
+<rect class="r-al" x="690.2" y="132.0" width="62.0" height="8"/>
+<polygon class="rh" points="690.2,132.0 686.2,136.0 690.2,140.0"/>
+<rect class="r-polya" x="527.6" y="145.0" width="31.0" height="8"/>
+<rect class="r-tsd" x="558.6" y="145.0" width="31.0" height="8"/>
+<polygon class="rh" points="589.6,145.0 593.6,149.0 589.6,153.0"/>
+</svg><figcaption>5′-truncated L1: the 5′ clip starts at an internal L1 coordinate (the truncation point).</figcaption></figure><figure id="f1c"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 182" role="img" aria-labelledby="f1c-t"><title id="f1c-t">5′-inverted L1 (twin priming): the 5′ clip and its mates read L1 on the opposite strand to the 3′ end.</title>
+<text class="lt" x="10" y="15.0">insertion allele — 5′-inverted L1, twin priming (INVERTED_5P)</text>
+<text class="mk" x="36.1" y="33.0">5′ junction (clip = L1, reverse strand)</text>
+<line class="mkl" x1="156.2" y1="35.0" x2="156.2" y2="52.0"/>
+<text class="mk" x="220.9" y="46.0">inversion junction (median 5.15 kb on L1)</text>
+<line class="mkl" x1="347.2" y1="48.0" x2="347.2" y2="52.0"/>
+<text class="mk" x="609.9" y="33.0">3′ junction</text>
+<line class="mkl" x1="643.8" y1="35.0" x2="643.8" y2="52.0"/>
+<rect class="k-flank" x="10.0" y="61.0" width="113.8" height="10"/>
+<rect class="k-tsd" x="123.8" y="55.0" width="32.5" height="22"/>
+<text class="itd" text-anchor="middle" x="140.0" y="69.3">TSD</text>
+<polygon class="k-l1inv" points="156.2,66.0 168.2,53.0 335.0,53.0 335.0,79.0 168.2,79.0"/>
+<text class="it" x="161.2" y="69.5">3′</text>
+<text class="it" x="313.0" y="69.5">5′</text>
+<line class="gapl" x1="335.0" y1="66.0" x2="359.4" y2="66.0"/>
+<rect class="gapr" x="336.0" y="57.0" width="22.4" height="18" rx="3"/>
+<polygon class="k-l1" points="359.4,53.0 591.1,53.0 603.1,66.0 591.1,79.0 359.4,79.0"/>
+<text class="it" x="364.4" y="69.5">5′</text>
+<text class="it" x="581.1" y="69.5">3′</text>
+<rect class="k-polya" x="603.1" y="58.0" width="40.6" height="16"/>
+<text class="it" text-anchor="middle" x="623.4" y="69.3">A(n)</text>
+<rect class="k-tsd" x="643.8" y="55.0" width="32.5" height="22"/>
+<text class="itd" text-anchor="middle" x="660.0" y="69.3">TSD</text>
+<rect class="k-flank" x="676.2" y="61.0" width="113.8" height="10"/>
+<text class="bl" x="131.4" y="96.0">inverted 5′ part (internal primer)</text>
+<line class="mkl" x1="347.2" y1="80.0" x2="347.2" y2="101.0"/>
+<text class="bl" x="303.5" y="110.0">i-del / i-dup</text>
+<text class="bl" x="383.8" y="96.0">forward part (poly-dT primer)</text>
+<text class="lt2" x="10" y="125.0">short reads</text>
+<line class="pl" x1="72.0" y1="137.0" x2="137.7" y2="137.0"/>
+<rect class="r-tsd" x="137.7" y="133.0" width="18.6" height="8"/>
+<rect class="r-l1inv" x="156.2" y="133.0" width="43.4" height="8"/>
+<polygon class="rh" points="137.7,133.0 133.7,137.0 137.7,141.0"/>
+<rect class="r-al" x="10.0" y="133.0" width="62.0" height="8"/>
+<polygon class="rh" points="72.0,133.0 76.0,137.0 72.0,141.0"/>
+<line class="pld" x1="116.2" y1="150.0" x2="216.2" y2="150.0"/>
+<rect class="r-al" x="54.2" y="146.0" width="62.0" height="8"/>
+<polygon class="rh" points="116.2,146.0 120.2,150.0 116.2,154.0"/>
+<rect class="r-l1inv" x="216.2" y="146.0" width="62.0" height="8"/>
+<polygon class="rh" points="216.2,146.0 212.2,150.0 216.2,154.0"/>
+<rect class="r-al" x="122.2" y="159.0" width="1.6" height="8"/>
+<rect class="r-tsd" x="123.8" y="159.0" width="32.5" height="8"/>
+<rect class="r-l1inv" x="156.2" y="159.0" width="27.9" height="8"/>
+<polygon class="rh" points="184.2,159.0 188.2,163.0 184.2,167.0"/>
+<rect class="r-l1inv" x="304.0" y="133.0" width="31.0" height="8"/>
+<rect class="r-l1" x="359.4" y="133.0" width="6.6" height="8"/>
+<polygon class="rh" points="366.0,133.0 370.0,137.0 366.0,141.0"/>
+<line class="pld" x1="593.8" y1="137.0" x2="683.8" y2="137.0"/>
+<rect class="r-l1" x="531.8" y="133.0" width="62.0" height="8"/>
+<polygon class="rh" points="593.8,133.0 597.8,137.0 593.8,141.0"/>
+<rect class="r-al" x="683.8" y="133.0" width="62.0" height="8"/>
+<polygon class="rh" points="683.8,133.0 679.8,137.0 683.8,141.0"/>
+<rect class="r-l1" x="572.1" y="146.0" width="31.0" height="8"/>
+<rect class="r-polya" x="603.1" y="146.0" width="31.0" height="8"/>
+<polygon class="rh" points="634.1,146.0 638.1,150.0 634.1,154.0"/>
+<line class="pl" x1="668.5" y1="163.0" x2="728.0" y2="163.0"/>
+<rect class="r-polya" x="606.5" y="159.0" width="37.2" height="8"/>
+<rect class="r-tsd" x="643.8" y="159.0" width="24.8" height="8"/>
+<polygon class="rh" points="668.5,159.0 672.5,163.0 668.5,167.0"/>
+<rect class="r-al" x="728.0" y="159.0" width="62.0" height="8"/>
+<polygon class="rh" points="728.0,159.0 724.0,163.0 728.0,167.0"/>
+</svg><figcaption>5′-inverted L1 (twin priming): the 5′ clip and its mates read L1 on the opposite strand to the 3′ end.</figcaption></figure>
+<h3>Reported frequency</h3><p class="freq">Zumalave 2026 (10 high-rate tumours, 6,418 events): 56% of all events (3,611); of 5′-truncated solo-L1s 49% 5′-deletion only and 51% 5′-inverted; full-length only 0.3% (10/3,611). Of inverted copies 66% carry an internal deletion (median 14.5 bp), 17% an internal duplication (median 22 bp). PCAWG: 14,967/19,166 (78%). Nam 2023 normal colon: 89% solo-L1 (1,063/1,198), 29.5% with a short 5′ inversion. Tubio 2014: ~5% of non-inverted cancer L1s full-length.</p>
+<h3>How PEAR-TREE detects it</h3><ul class='pts'><li>discovery: CLIP reads at both junctions; POLYA reads placed by their mate on the 3′ side; DISC anchors whose mates hit L1</li><li>annotate: element <code>L1</code>; <code>structure</code> from the 5′ clip consensus — <code>FULL_LENGTH</code> (clip reaches L1 5′ UTR start), <code>TRUNCATED_5P</code>, <code>INVERTED_5P</code> (5′ clip/mates on the opposite strand), else <code>5P_UNRESOLVED</code></li><li>score: TSD 4–25 bp with identity; poly-A ≥ 10 on the strand-consistent side; EN motif at the nick; 5′/3′ class concordant; identity to an active L1HS; twin-priming junction ≥ 590 bp into L1; ≥ 2 independent fragments per junction pooled over colonies</li></ul>
+<p class="vocab"><b>Vocabulary:</b> <code>element=L1; structure=FULL_LENGTH | TRUNCATED_5P | INVERTED_5P | 5P_UNRESOLVED</code></p>
+</section>
+<section id="t2">
+<h2><span class="n">2</span>Partnered 3′ transduction <span class="badge in">in scope</span></h2>
+<p>Transcription of a source L1 reads through its weak polyadenylation signal and stops at a downstream
+    site, so the RNA carries unique flanking sequence after the L1 3′ end. The new copy therefore reads
+    <i>L1 → (source poly-A, often short) → source 3′ flank → poly-A</i>. The transduced segment is a barcode
+    for the source element. Zumalave et al. showed that the strength of the canonical vs. downstream
+    polyadenylation sites of a source decides whether it makes mostly solo-L1s or mostly transductions.</p>
+<figure id="f2"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 194" role="img" aria-labelledby="f2-t"><title id="f2-t">Partnered transduction: the 3′ clip contains the poly-A followed by unique sequence whose mates map to the source locus.</title>
+<text class="lt" x="10" y="15.0">insertion allele — partnered 3′ transduction (element L1, tag TD3P)</text>
+<text class="mk" x="312.1" y="33.0">source L1 poly-A (short / absent)</text>
+<line class="mkl" x1="413.8" y1="35.0" x2="413.8" y2="52.0"/>
+<text class="mk" x="513.8" y="46.0">3′ junction: clip = A(n) then source flank</text>
+<line class="mkl" x1="643.2" y1="48.0" x2="643.2" y2="52.0"/>
+<rect class="k-flank" x="10.0" y="61.0" width="110.1" height="10"/>
+<rect class="k-tsd" x="120.1" y="55.0" width="36.7" height="22"/>
+<text class="itd" text-anchor="middle" x="138.5" y="69.3">TSD</text>
+<polygon class="k-l1" points="156.8,53.0 383.4,53.0 395.4,66.0 383.4,79.0 156.8,79.0"/>
+<text class="it" x="161.8" y="69.5">5′</text>
+<text class="it" x="373.4" y="69.5">3′</text>
+<rect class="k-polya" x="395.4" y="58.0" width="36.7" height="16"/>
+<text class="it" text-anchor="middle" x="413.8" y="69.3">A</text>
+<polygon class="k-td" points="432.1,56.0 585.3,56.0 597.3,66.0 585.3,76.0 432.1,76.0"/>
+<rect class="k-polya" x="597.3" y="58.0" width="45.9" height="16"/>
+<text class="it" text-anchor="middle" x="620.2" y="69.3">A(n)</text>
+<rect class="k-tsd" x="643.2" y="55.0" width="36.7" height="22"/>
+<text class="itd" text-anchor="middle" x="661.5" y="69.3">TSD</text>
+<rect class="k-flank" x="679.9" y="61.0" width="110.1" height="10"/>
+<text class="bl" x="219.0" y="96.0">L1 (5′-truncated)</text>
+<text class="bl" x="407.2" y="96.0">transduced 3′ flank of source L1</text>
+<text class="lt2" x="10" y="111.0">short reads</text>
+<line class="pl" x1="72.0" y1="123.0" x2="138.2" y2="123.0"/>
+<rect class="r-tsd" x="138.2" y="119.0" width="18.6" height="8"/>
+<rect class="r-l1" x="156.8" y="119.0" width="43.4" height="8"/>
+<polygon class="rh" points="138.2,119.0 134.2,123.0 138.2,127.0"/>
+<rect class="r-al" x="10.0" y="119.0" width="62.0" height="8"/>
+<polygon class="rh" points="72.0,119.0 76.0,123.0 72.0,127.0"/>
+<line class="pld" x1="116.8" y1="136.0" x2="226.8" y2="136.0"/>
+<rect class="r-al" x="54.8" y="132.0" width="62.0" height="8"/>
+<polygon class="rh" points="116.8,132.0 120.8,136.0 116.8,140.0"/>
+<rect class="r-l1" x="226.8" y="132.0" width="62.0" height="8"/>
+<polygon class="rh" points="226.8,132.0 222.8,136.0 226.8,140.0"/>
+<rect class="r-tsd" x="122.7" y="145.0" width="34.1" height="8"/>
+<rect class="r-l1" x="156.8" y="145.0" width="27.9" height="8"/>
+<polygon class="rh" points="184.7,145.0 188.7,149.0 184.7,153.0"/>
+<line class="pld" x1="499.1" y1="123.0" x2="587.1" y2="123.0"/>
+<rect class="r-td" x="437.1" y="119.0" width="62.0" height="8"/>
+<polygon class="rh" points="499.1,119.0 503.1,123.0 499.1,127.0"/>
+<rect class="r-td" x="587.1" y="119.0" width="10.2" height="8"/>
+<rect class="r-polya" x="597.3" y="119.0" width="45.9" height="8"/>
+<rect class="r-tsd" x="643.2" y="119.0" width="5.9" height="8"/>
+<polygon class="rh" points="587.1,119.0 583.1,123.0 587.1,127.0"/>
+<line class="pld" x1="583.2" y1="136.0" x2="683.2" y2="136.0"/>
+<rect class="r-td" x="521.2" y="132.0" width="62.0" height="8"/>
+<polygon class="rh" points="583.2,132.0 587.2,136.0 583.2,140.0"/>
+<rect class="r-al" x="683.2" y="132.0" width="62.0" height="8"/>
+<polygon class="rh" points="683.2,132.0 679.2,136.0 683.2,140.0"/>
+<line class="pl" x1="661.3" y1="149.0" x2="728.0" y2="149.0"/>
+<rect class="r-polya" x="599.3" y="145.0" width="43.9" height="8"/>
+<rect class="r-tsd" x="643.2" y="145.0" width="18.1" height="8"/>
+<polygon class="rh" points="661.3,145.0 665.3,149.0 661.3,153.0"/>
+<rect class="r-al" x="728.0" y="145.0" width="62.0" height="8"/>
+<polygon class="rh" points="728.0,145.0 724.0,149.0 728.0,153.0"/>
+<line class="pl" x1="661.8" y1="162.0" x2="728.0" y2="162.0"/>
+<rect class="r-polya" x="599.8" y="158.0" width="43.4" height="8"/>
+<rect class="r-tsd" x="643.2" y="158.0" width="18.6" height="8"/>
+<polygon class="rh" points="661.8,158.0 665.8,162.0 661.8,166.0"/>
+<rect class="r-al" x="728.0" y="158.0" width="62.0" height="8"/>
+<polygon class="rh" points="728.0,158.0 724.0,162.0 728.0,166.0"/>
+<rect class="r-polya" x="612.2" y="171.0" width="31.0" height="8"/>
+<rect class="r-tsd" x="643.2" y="171.0" width="31.0" height="8"/>
+<polygon class="rh" points="674.2,171.0 678.2,175.0 674.2,179.0"/>
+</svg><figcaption>Partnered transduction: the 3′ clip contains the poly-A followed by unique sequence whose mates map to the source locus.</figcaption></figure>
+<h3>Reported frequency</h3><p class="freq">Zumalave 2026: 1,535 partnered (24% of 6,418). Tubio 2014: transductions 24% of somatic L1s (655/2,756), about half partnered. Nam 2023 normal colon: only 1% (11/1,198). PCAWG: 3,669 transductions (partnered + orphan, 19%). Transduced segments reach 12 kb but are mostly short.</p>
+<h3>How PEAR-TREE detects it</h3><ul class='pts'><li>discovery: the 3′ CLIP/POLYA reads carry poly-A then non-L1 sequence; DISC mates on the 3′ side map with high MAPQ to another chromosome (translocation-like)</li><li>combine: indel-aware consensus must keep the sequence <i>beyond</i> the poly-A (<code>beyond_polya</code>)</li><li>annotate: element <code>L1</code>, tag <code>TD3P</code> + <code>TD3P_SOURCE=&lt;id&gt;</code> from <code>flanks_3p.fa</code>, or <code>NOVEL_SOURCE</code> under the novel-source rule</li><li>score: covered 3′-beyond-poly-A sequence (extra points with ≥ 2 independent fragments); the 3′ tag being the transduced flank of exactly the element at the 5′ end counts as concordant</li></ul>
+<p class="vocab"><b>Vocabulary:</b> <code>element=L1; tags=TD3P,TD3P_SOURCE=…</code></p>
+</section>
+<section id="t3">
+<h2><span class="n">3</span>Orphan 3′ transduction <span class="badge in">in scope</span></h2>
+<p>The same read-through transcript, but reverse transcription is so 5′-truncated that no L1 sequence
+    is copied: only unique downstream sequence of a source plus a poly-A lands at the new site. With
+    short reads it looks like a small unique-sequence insertion or a fake translocation to the source
+    locus; the poly-A, TSD and EN motif are what identify it as retrotransposition.</p>
+<figure id="f3"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 168" role="img" aria-labelledby="f3-t"><title id="f3-t">Orphan transduction: no L1 at all; both junction clips and mates are unique sequence from the source flank.</title>
+<text class="lt" x="10" y="15.0">insertion allele — orphan 3′ transduction (element ORPHAN_TD)</text>
+<text class="mk" x="66.1" y="33.0">5′ junction: clip maps uniquely (MAPQ high) to source flank</text>
+<line class="mkl" x1="247.8" y1="35.0" x2="247.8" y2="39.0"/>
+<rect class="k-flank" x="10.0" y="48.0" width="190.2" height="10"/>
+<rect class="k-tsd" x="200.2" y="42.0" width="47.6" height="22"/>
+<text class="itd" text-anchor="middle" x="224.0" y="56.3">TSD</text>
+<polygon class="k-td" points="247.8,43.0 483.1,43.0 495.1,53.0 483.1,63.0 247.8,63.0"/>
+<rect class="k-polya" x="495.1" y="45.0" width="57.1" height="16"/>
+<text class="it" text-anchor="middle" x="523.7" y="56.3">A(n)</text>
+<rect class="k-tsd" x="552.2" y="42.0" width="47.6" height="22"/>
+<text class="itd" text-anchor="middle" x="576.0" y="56.3">TSD</text>
+<rect class="k-flank" x="599.8" y="48.0" width="190.2" height="10"/>
+<text class="bl" x="213.5" y="83.0">unique 3′ flank of a source L1 (no L1 sequence)</text>
+<text class="lt2" x="10" y="98.0">short reads</text>
+<line class="pl" x1="116.2" y1="110.0" x2="229.2" y2="110.0"/>
+<rect class="r-tsd" x="229.2" y="106.0" width="18.6" height="8"/>
+<rect class="r-td" x="247.8" y="106.0" width="43.4" height="8"/>
+<polygon class="rh" points="229.2,106.0 225.2,110.0 229.2,114.0"/>
+<rect class="r-al" x="54.2" y="106.0" width="62.0" height="8"/>
+<polygon class="rh" points="116.2,106.0 120.2,110.0 116.2,114.0"/>
+<line class="pld" x1="207.8" y1="123.0" x2="317.8" y2="123.0"/>
+<rect class="r-al" x="145.8" y="119.0" width="54.4" height="8"/>
+<rect class="r-tsd" x="200.2" y="119.0" width="7.6" height="8"/>
+<polygon class="rh" points="207.8,119.0 211.8,123.0 207.8,127.0"/>
+<rect class="r-td" x="317.8" y="119.0" width="62.0" height="8"/>
+<polygon class="rh" points="317.8,119.0 313.8,123.0 317.8,127.0"/>
+<rect class="r-tsd" x="213.7" y="132.0" width="34.1" height="8"/>
+<rect class="r-td" x="247.8" y="132.0" width="27.9" height="8"/>
+<polygon class="rh" points="275.7,132.0 279.7,136.0 275.7,140.0"/>
+<line class="pld" x1="492.2" y1="110.0" x2="592.2" y2="110.0"/>
+<rect class="r-td" x="430.2" y="106.0" width="62.0" height="8"/>
+<polygon class="rh" points="492.2,106.0 496.2,110.0 492.2,114.0"/>
+<rect class="r-tsd" x="592.2" y="106.0" width="7.6" height="8"/>
+<rect class="r-al" x="599.8" y="106.0" width="54.4" height="8"/>
+<polygon class="rh" points="592.2,106.0 588.2,110.0 592.2,114.0"/>
+<line class="pl" x1="559.1" y1="123.0" x2="670.1" y2="123.0"/>
+<rect class="r-polya" x="497.1" y="119.0" width="55.1" height="8"/>
+<rect class="r-tsd" x="552.2" y="119.0" width="6.9" height="8"/>
+<polygon class="rh" points="559.1,119.0 563.1,123.0 559.1,127.0"/>
+<rect class="r-al" x="670.1" y="119.0" width="62.0" height="8"/>
+<polygon class="rh" points="670.1,119.0 666.1,123.0 670.1,127.0"/>
+<line class="pl" x1="570.8" y1="136.0" x2="683.8" y2="136.0"/>
+<rect class="r-polya" x="508.8" y="132.0" width="43.4" height="8"/>
+<rect class="r-tsd" x="552.2" y="132.0" width="18.6" height="8"/>
+<polygon class="rh" points="570.8,132.0 574.8,136.0 570.8,140.0"/>
+<rect class="r-al" x="683.8" y="132.0" width="62.0" height="8"/>
+<polygon class="rh" points="683.8,132.0 679.8,136.0 683.8,140.0"/>
+<rect class="r-polya" x="521.2" y="145.0" width="31.0" height="8"/>
+<rect class="r-tsd" x="552.2" y="145.0" width="31.0" height="8"/>
+<polygon class="rh" points="583.2,145.0 587.2,149.0 583.2,153.0"/>
+</svg><figcaption>Orphan transduction: no L1 at all; both junction clips and mates are unique sequence from the source flank.</figcaption></figure>
+<h3>Reported frequency</h3><p class="freq">Zumalave 2026: 705 (11% of 6,418). Tubio 2014: 333/655 transductions (≈12% of all somatic L1). Nam 2023 normal colon: 124/1,198 (10%) — orphans far outnumber partnered events there.</p>
+<h3>How PEAR-TREE detects it</h3><ul class='pts'><li>discovery: CLIP reads whose clips map uniquely elsewhere (not to a repeat) — must not be dropped by an element filter; POLYA reads on the 3′ side</li><li>annotate: element <code>ORPHAN_TD</code>, <code>TD3P_SOURCE=&lt;id&gt;</code>; the segment must lie within 15 kb downstream (strand-aware) of a source L1, otherwise it is not an orphan transduction</li><li>score: poly-A + TSD + EN motif carry the call because there is no element sequence; concordance = 5′ clip and 3′ tag map to the same source flank</li></ul>
+<p class="vocab"><b>Vocabulary:</b> <code>element=ORPHAN_TD; tags=TD3P_SOURCE=…</code></p>
+</section>
+<section id="t4">
+<h2><span class="n">4</span>Alu and SVA insertions; SVA 5′ transduction <span class="badge in">in scope</span></h2>
+<p>Alu (~0.3 kb) and SVA (a few kb; hexamer, Alu-like, VNTR and SINE-R modules) are non-autonomous:
+    they are mobilised in trans by L1 ORF2p, so they carry the same TPRT hallmarks (TSD, poly-A, EN motif).
+    An Alu is shorter than a sequencing fragment, so read pairs often span the whole insert. SVAs driven by
+    an upstream cellular promoter can carry <b>5′ transductions</b> — upstream flank (frequently an exon of
+    the host gene, e.g. the MAST2-driven SVA_F group) placed in front of the SVA.</p>
+<figure id="f4a"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 168" role="img" aria-labelledby="f4a-t"><title id="f4a-t">Alu: both junctions in one fragment; spanning pairs and reads entirely inside the Alu.</title>
+<text class="lt" x="10" y="15.0">insertion allele — Alu (element ALU) ~0.3 kb, shorter than a fragment</text>
+<rect class="k-flank" x="10.0" y="48.0" width="230.5" height="10"/>
+<rect class="k-tsd" x="240.5" y="42.0" width="44.3" height="22"/>
+<text class="itd" text-anchor="middle" x="262.6" y="56.3">TSD</text>
+<polygon class="k-alu" points="284.8,40.0 450.0,40.0 462.0,53.0 450.0,66.0 284.8,66.0"/>
+<text class="it" x="289.8" y="56.5">5′</text>
+<text class="it" x="440.0" y="56.5">3′</text>
+<rect class="k-polya" x="462.0" y="45.0" width="53.2" height="16"/>
+<text class="it" text-anchor="middle" x="488.6" y="56.3">A(n)</text>
+<rect class="k-tsd" x="515.2" y="42.0" width="44.3" height="22"/>
+<text class="itd" text-anchor="middle" x="537.4" y="56.3">TSD</text>
+<rect class="k-flank" x="559.5" y="48.0" width="230.5" height="10"/>
+<text class="bl" x="289.4" y="83.0">AluY (left/right monomer)</text>
+<text class="lt2" x="10" y="98.0">short reads</text>
+<line class="pl" x1="153.2" y1="110.0" x2="266.2" y2="110.0"/>
+<rect class="r-tsd" x="266.2" y="106.0" width="18.6" height="8"/>
+<rect class="r-alu" x="284.8" y="106.0" width="43.4" height="8"/>
+<polygon class="rh" points="266.2,106.0 262.2,110.0 266.2,114.0"/>
+<rect class="r-al" x="91.2" y="106.0" width="62.0" height="8"/>
+<polygon class="rh" points="153.2,106.0 157.2,110.0 153.2,114.0"/>
+<line class="pl" x1="210.5" y1="123.0" x2="579.5" y2="123.0"/>
+<rect class="r-al" x="148.5" y="119.0" width="62.0" height="8"/>
+<polygon class="rh" points="210.5,119.0 214.5,123.0 210.5,127.0"/>
+<rect class="r-al" x="579.5" y="119.0" width="62.0" height="8"/>
+<polygon class="rh" points="579.5,119.0 575.5,123.0 579.5,127.0"/>
+<line class="pld" x1="244.8" y1="136.0" x2="354.8" y2="136.0"/>
+<rect class="r-al" x="182.8" y="132.0" width="57.7" height="8"/>
+<rect class="r-tsd" x="240.5" y="132.0" width="4.3" height="8"/>
+<polygon class="rh" points="244.8,132.0 248.8,136.0 244.8,140.0"/>
+<rect class="r-alu" x="354.8" y="132.0" width="62.0" height="8"/>
+<polygon class="rh" points="354.8,132.0 350.8,136.0 354.8,140.0"/>
+<rect class="r-tsd" x="250.7" y="145.0" width="34.1" height="8"/>
+<rect class="r-alu" x="284.8" y="145.0" width="27.9" height="8"/>
+<polygon class="rh" points="312.7,145.0 316.7,149.0 312.7,153.0"/>
+<line class="pld" x1="455.2" y1="110.0" x2="555.2" y2="110.0"/>
+<rect class="r-alu" x="393.2" y="106.0" width="62.0" height="8"/>
+<polygon class="rh" points="455.2,106.0 459.2,110.0 455.2,114.0"/>
+<rect class="r-tsd" x="555.2" y="106.0" width="4.3" height="8"/>
+<rect class="r-al" x="559.5" y="106.0" width="57.7" height="8"/>
+<polygon class="rh" points="555.2,106.0 551.2,110.0 555.2,114.0"/>
+<line class="pl" x1="533.8" y1="136.0" x2="646.8" y2="136.0"/>
+<rect class="r-polya" x="471.8" y="132.0" width="43.4" height="8"/>
+<rect class="r-tsd" x="515.2" y="132.0" width="18.6" height="8"/>
+<polygon class="rh" points="533.8,132.0 537.8,136.0 533.8,140.0"/>
+<rect class="r-al" x="646.8" y="132.0" width="62.0" height="8"/>
+<polygon class="rh" points="646.8,132.0 642.8,136.0 646.8,140.0"/>
+<rect class="r-polya" x="484.2" y="145.0" width="31.0" height="8"/>
+<rect class="r-tsd" x="515.2" y="145.0" width="31.0" height="8"/>
+<polygon class="rh" points="546.2,145.0 550.2,149.0 546.2,153.0"/>
+</svg><figcaption>Alu: both junctions in one fragment; spanning pairs and reads entirely inside the Alu.</figcaption></figure><figure id="f4b"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 182" role="img" aria-labelledby="f4b-t"><title id="f4b-t">SVA with 5′ transduction: the 5′ clip is unique upstream sequence of the source SVA, not SVA.</title>
+<text class="lt" x="10" y="15.0">insertion allele — SVA with 5′ transduction (element SVA, tag TD5P)</text>
+<text class="mk" x="10.0" y="33.0">5′ junction: clip = source upstream (often a gene exon 1)</text>
+<line class="mkl" x1="150.2" y1="35.0" x2="150.2" y2="39.0"/>
+<rect class="k-flank" x="10.0" y="48.0" width="105.2" height="10"/>
+<rect class="k-tsd" x="115.2" y="42.0" width="35.1" height="22"/>
+<text class="itd" text-anchor="middle" x="132.7" y="56.3">TSD</text>
+<polygon class="k-td" points="150.2,43.0 243.4,43.0 255.4,53.0 243.4,63.0 150.2,63.0"/>
+<polygon class="k-sva" points="255.4,40.0 594.0,40.0 606.0,53.0 594.0,66.0 255.4,66.0"/>
+<text class="it" x="260.4" y="56.5">5′</text>
+<text class="it" x="584.0" y="56.5">3′</text>
+<rect class="k-polya" x="606.0" y="45.0" width="43.8" height="16"/>
+<text class="it" text-anchor="middle" x="627.9" y="56.3">A(n)</text>
+<rect class="k-tsd" x="649.8" y="42.0" width="35.1" height="22"/>
+<text class="itd" text-anchor="middle" x="667.3" y="56.3">TSD</text>
+<rect class="k-flank" x="684.8" y="48.0" width="105.2" height="10"/>
+<text class="bl" x="108.7" y="83.0">upstream flank of source SVA</text>
+<line class="mkl" x1="430.7" y1="67.0" x2="430.7" y2="88.0"/>
+<text class="bl" x="276.1" y="97.0">SVA: CCCTCT hexamer · Alu-like · VNTR · SINE-R</text>
+<text class="lt2" x="10" y="112.0">short reads</text>
+<line class="pl" x1="72.0" y1="124.0" x2="131.6" y2="124.0"/>
+<rect class="r-tsd" x="131.6" y="120.0" width="18.6" height="8"/>
+<rect class="r-td" x="150.2" y="120.0" width="43.4" height="8"/>
+<polygon class="rh" points="131.6,120.0 127.6,124.0 131.6,128.0"/>
+<rect class="r-al" x="10.0" y="120.0" width="62.0" height="8"/>
+<polygon class="rh" points="72.0,120.0 76.0,124.0 72.0,128.0"/>
+<line class="pld" x1="110.2" y1="137.0" x2="220.2" y2="137.0"/>
+<rect class="r-al" x="48.2" y="133.0" width="62.0" height="8"/>
+<polygon class="rh" points="110.2,133.0 114.2,137.0 110.2,141.0"/>
+<rect class="r-td" x="220.2" y="133.0" width="35.2" height="8"/>
+<rect class="r-sva" x="255.4" y="133.0" width="26.8" height="8"/>
+<polygon class="rh" points="220.2,133.0 216.2,137.0 220.2,141.0"/>
+<rect class="r-tsd" x="116.1" y="146.0" width="34.1" height="8"/>
+<rect class="r-td" x="150.2" y="146.0" width="27.9" height="8"/>
+<polygon class="rh" points="178.1,146.0 182.1,150.0 178.1,154.0"/>
+<line class="pld" x1="589.8" y1="124.0" x2="689.8" y2="124.0"/>
+<rect class="r-sva" x="527.8" y="120.0" width="62.0" height="8"/>
+<polygon class="rh" points="589.8,120.0 593.8,124.0 589.8,128.0"/>
+<rect class="r-al" x="689.8" y="120.0" width="62.0" height="8"/>
+<polygon class="rh" points="689.8,120.0 685.8,124.0 689.8,128.0"/>
+<line class="pl" x1="668.4" y1="137.0" x2="728.0" y2="137.0"/>
+<rect class="r-polya" x="606.4" y="133.0" width="43.4" height="8"/>
+<rect class="r-tsd" x="649.8" y="133.0" width="18.6" height="8"/>
+<polygon class="rh" points="668.4,133.0 672.4,137.0 668.4,141.0"/>
+<rect class="r-al" x="728.0" y="133.0" width="62.0" height="8"/>
+<polygon class="rh" points="728.0,133.0 724.0,137.0 728.0,141.0"/>
+<line class="pl" x1="670.0" y1="150.0" x2="728.0" y2="150.0"/>
+<rect class="r-polya" x="608.0" y="146.0" width="41.8" height="8"/>
+<rect class="r-tsd" x="649.8" y="146.0" width="20.2" height="8"/>
+<polygon class="rh" points="670.0,146.0 674.0,150.0 670.0,154.0"/>
+<rect class="r-al" x="728.0" y="146.0" width="62.0" height="8"/>
+<polygon class="rh" points="728.0,146.0 724.0,150.0 728.0,154.0"/>
+<rect class="r-polya" x="618.8" y="159.0" width="31.0" height="8"/>
+<rect class="r-tsd" x="649.8" y="159.0" width="31.0" height="8"/>
+<polygon class="rh" points="680.8,159.0 684.8,163.0 680.8,167.0"/>
+</svg><figcaption>SVA with 5′ transduction: the 5′ clip is unique upstream sequence of the source SVA, not SVA.</figcaption></figure>
+<h3>Reported frequency</h3><p class="freq">Zumalave 2026: Alu 119 (2%), SVA 6 (&lt;0.1%). PCAWG: Alu 130, SVA 23 (together &lt;1%). SVA 5′ transductions: ~8% of all reference SVAs (Damert 2009, germline); no somatic rate available.</p>
+<h3>How PEAR-TREE detects it</h3><ul class='pts'><li>discovery: as for L1; SPAN pairs (D2 flag) help very short inserts</li><li>annotate: element <code>ALU</code> / <code>SVA</code>; tag <code>TD5P</code> when the 5′ clip maps to <code>flanks_5p_sva.fa</code></li><li>score: identity to young AluY / SVA_E-F consensus; old subfamily only scores negative</li></ul>
+<p class="vocab"><b>Vocabulary:</b> <code>element=ALU | SVA; tags=TD5P</code></p>
+</section>
+<section id="t5">
+<h2><span class="n">5</span>Processed pseudogene <span class="badge in">in scope</span></h2>
+<p>L1 ORF2p occasionally reverse-transcribes a spliced cellular mRNA. The new copy has a TSD and a
+    poly-A like an L1 insertion, but its body is exons joined without introns. Discordant mates map to the
+    exons of the source gene, which alone would look like many small deletions at the source; the
+    <b>exon–exon junction</b> read (a read aligned in exon <i>n</i> whose clip is exon <i>n+1</i>) is the proof
+    that the inserted sequence is processed mRNA.</p>
+<figure id="f5"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 181" role="img" aria-labelledby="f5-t"><title id="f5-t">Processed pseudogene: reads across exon boundaries clip exactly at splice sites; insertion junctions carry TSD and poly-A.</title>
+<text class="lt" x="10" y="15.0">insertion allele — processed pseudogene (element PSEUDOGENE, tag EXON_JUNCTION)</text>
+<text class="mk" x="214.7" y="33.0">exon–exon junction (no intron)</text>
+<line class="mkl" x1="307.1" y1="35.0" x2="307.1" y2="52.0"/>
+<text class="mk" x="363.1" y="46.0">exon–exon junction</text>
+<line class="mkl" x1="418.6" y1="48.0" x2="418.6" y2="52.0"/>
+<rect class="k-flank" x="10.0" y="61.0" width="130.0" height="10"/>
+<rect class="k-tsd" x="140.0" y="55.0" width="37.1" height="22"/>
+<text class="itd" text-anchor="middle" x="158.6" y="69.3">TSD</text>
+<polygon class="k-exon" points="177.1,56.0 295.1,56.0 307.1,66.0 295.1,76.0 177.1,76.0"/>
+<polygon class="k-exonb" points="307.1,56.0 406.6,56.0 418.6,66.0 406.6,76.0 307.1,76.0"/>
+<polygon class="k-exon" points="418.6,56.0 555.1,56.0 567.1,66.0 555.1,76.0 418.6,76.0"/>
+<rect class="k-polya" x="567.1" y="58.0" width="55.7" height="16"/>
+<text class="it" text-anchor="middle" x="595.0" y="69.3">A(n)</text>
+<rect class="k-tsd" x="622.9" y="55.0" width="37.1" height="22"/>
+<text class="itd" text-anchor="middle" x="641.4" y="69.3">TSD</text>
+<rect class="k-flank" x="660.0" y="61.0" width="130.0" height="10"/>
+<text class="bl" x="222.0" y="96.0">exon 1</text>
+<text class="bl" x="342.7" y="96.0">exon 2</text>
+<text class="bl" x="442.5" y="96.0">exon 3 (3′ UTR)</text>
+<text class="lt2" x="10" y="111.0">short reads</text>
+<line class="pl" x1="72.0" y1="123.0" x2="158.5" y2="123.0"/>
+<rect class="r-tsd" x="158.5" y="119.0" width="18.6" height="8"/>
+<rect class="r-exon" x="177.1" y="119.0" width="43.4" height="8"/>
+<polygon class="rh" points="158.5,119.0 154.5,123.0 158.5,127.0"/>
+<rect class="r-al" x="10.0" y="119.0" width="62.0" height="8"/>
+<polygon class="rh" points="72.0,119.0 76.0,123.0 72.0,127.0"/>
+<line class="pld" x1="137.1" y1="136.0" x2="247.1" y2="136.0"/>
+<rect class="r-al" x="75.1" y="132.0" width="62.0" height="8"/>
+<polygon class="rh" points="137.1,132.0 141.1,136.0 137.1,140.0"/>
+<rect class="r-exon" x="247.1" y="132.0" width="60.0" height="8"/>
+<rect class="r-exonb" x="307.1" y="132.0" width="2.0" height="8"/>
+<polygon class="rh" points="247.1,132.0 243.1,136.0 247.1,140.0"/>
+<rect class="r-tsd" x="143.0" y="145.0" width="34.1" height="8"/>
+<rect class="r-exon" x="177.1" y="145.0" width="27.9" height="8"/>
+<polygon class="rh" points="205.0,145.0 209.0,149.0 205.0,153.0"/>
+<rect class="r-exon" x="276.1" y="119.0" width="31.0" height="8"/>
+<rect class="r-exonb" x="307.1" y="119.0" width="31.0" height="8"/>
+<polygon class="rh" points="338.1,119.0 342.1,123.0 338.1,127.0"/>
+<rect class="r-exonb" x="390.7" y="119.0" width="27.9" height="8"/>
+<rect class="r-exon" x="418.6" y="119.0" width="34.1" height="8"/>
+<polygon class="rh" points="452.7,119.0 456.7,123.0 452.7,127.0"/>
+<line class="pld" x1="562.9" y1="123.0" x2="662.9" y2="123.0"/>
+<rect class="r-exon" x="500.9" y="119.0" width="62.0" height="8"/>
+<polygon class="rh" points="562.9,119.0 566.9,123.0 562.9,127.0"/>
+<rect class="r-al" x="662.9" y="119.0" width="62.0" height="8"/>
+<polygon class="rh" points="662.9,119.0 658.9,123.0 662.9,127.0"/>
+<line class="pl" x1="631.1" y1="136.0" x2="728.0" y2="136.0"/>
+<rect class="r-polya" x="569.1" y="132.0" width="53.7" height="8"/>
+<rect class="r-tsd" x="622.9" y="132.0" width="8.3" height="8"/>
+<polygon class="rh" points="631.1,132.0 635.1,136.0 631.1,140.0"/>
+<rect class="r-al" x="728.0" y="132.0" width="62.0" height="8"/>
+<polygon class="rh" points="728.0,132.0 724.0,136.0 728.0,140.0"/>
+<line class="pl" x1="641.5" y1="149.0" x2="728.0" y2="149.0"/>
+<rect class="r-polya" x="579.5" y="145.0" width="43.4" height="8"/>
+<rect class="r-tsd" x="622.9" y="145.0" width="18.6" height="8"/>
+<polygon class="rh" points="641.5,145.0 645.5,149.0 641.5,153.0"/>
+<rect class="r-al" x="728.0" y="145.0" width="62.0" height="8"/>
+<polygon class="rh" points="728.0,145.0 724.0,149.0 728.0,153.0"/>
+<rect class="r-polya" x="591.9" y="158.0" width="31.0" height="8"/>
+<rect class="r-tsd" x="622.9" y="158.0" width="31.0" height="8"/>
+<polygon class="rh" points="653.9,158.0 657.9,162.0 653.9,166.0"/>
+</svg><figcaption>Processed pseudogene: reads across exon boundaries clip exactly at splice sites; insertion junctions carry TSD and poly-A.</figcaption></figure>
+<h3>Reported frequency</h3><p class="freq">Zumalave 2026: 133 (2%), up to 31 in one tumour. PCAWG: 274 (1.4%), 70 of them in a single pancreatic tumour. Germline (Ewing 2013): 48 gene retrocopy insertions in 1000 Genomes data, exon–exon junctions recovered for 39.</p>
+<h3>How PEAR-TREE detects it</h3><ul class='pts'><li>discovery: CLIP at both insertion junctions with clips that map to a gene; poly-A reads</li><li>annotate: element <code>PSEUDOGENE</code> + tag <code>EXON_JUNCTION</code> when the consensus/reads.fa contain a junction joining two annotated exons at their splice sites (exon track on hs1)</li><li>score: exon–exon junction is a positive feature; without it the call stays <code>UNCERTAIN</code></li></ul>
+<p class="vocab"><b>Vocabulary:</b> <code>element=PSEUDOGENE; tags=EXON_JUNCTION</code></p>
+</section>
+<section id="t6">
+<h2><span class="n">6</span>Solitary poly(A/T) insertion <span class="badge in">in scope</span></h2>
+<p>An extreme 5′ truncation: reverse transcription copies only the RNA poly(A) tail before the
+    second strand is resolved, leaving a TSD-flanked poly(A) (or poly(T) on the minus strand) with no
+    element sequence. It is the hardest true type because a poly-A clip is also the commonest artefact
+    signature (see <a href="#a2">poly-A slippage</a>).</p>
+<figure id="f6"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 141" role="img" aria-labelledby="f6-t"><title id="f6-t">Solitary poly(A/T): both junction clips are A(n) and the TSD is the only other hallmark.</title>
+<text class="lt" x="10" y="15.0">insertion allele — solitary poly(A/T) (element POLYA_ONLY)</text>
+<text class="mk" x="278.5" y="33.0">5′ junction: clip = A(n)</text>
+<line class="mkl" x1="352.4" y1="35.0" x2="352.4" y2="52.0"/>
+<text class="mk" x="373.6" y="46.0">3′ junction: clip = A(n)</text>
+<line class="mkl" x1="447.6" y1="48.0" x2="447.6" y2="52.0"/>
+<rect class="k-flank" x="10.0" y="61.0" width="285.4" height="10"/>
+<rect class="k-tsd" x="295.4" y="55.0" width="57.1" height="22"/>
+<text class="itd" text-anchor="middle" x="323.9" y="69.3">TSD</text>
+<rect class="k-polya" x="352.4" y="58.0" width="95.1" height="16"/>
+<text class="it" text-anchor="middle" x="400.0" y="69.3">A(n) only</text>
+<rect class="k-tsd" x="447.6" y="55.0" width="57.1" height="22"/>
+<text class="itd" text-anchor="middle" x="476.1" y="69.3">TSD</text>
+<rect class="k-flank" x="504.6" y="61.0" width="285.4" height="10"/>
+<text class="lt2" x="10" y="97.0">short reads</text>
+<line class="pl" x1="192.9" y1="109.0" x2="305.9" y2="109.0"/>
+<rect class="r-tsd" x="305.9" y="105.0" width="46.5" height="8"/>
+<rect class="r-polya" x="352.4" y="105.0" width="15.5" height="8"/>
+<polygon class="rh" points="305.9,105.0 301.9,109.0 305.9,113.0"/>
+<rect class="r-al" x="130.9" y="105.0" width="62.0" height="8"/>
+<polygon class="rh" points="192.9,105.0 196.9,109.0 192.9,113.0"/>
+<rect class="r-tsd" x="315.2" y="118.0" width="37.2" height="8"/>
+<rect class="r-polya" x="352.4" y="118.0" width="24.8" height="8"/>
+<polygon class="rh" points="377.2,118.0 381.2,122.0 377.2,126.0"/>
+<rect class="r-polya" x="422.8" y="105.0" width="24.8" height="8"/>
+<rect class="r-tsd" x="447.6" y="105.0" width="37.2" height="8"/>
+<polygon class="rh" points="484.8,105.0 488.8,109.0 484.8,113.0"/>
+<line class="pl" x1="494.1" y1="122.0" x2="607.1" y2="122.0"/>
+<rect class="r-polya" x="432.1" y="118.0" width="15.5" height="8"/>
+<rect class="r-tsd" x="447.6" y="118.0" width="46.5" height="8"/>
+<polygon class="rh" points="494.1,118.0 498.1,122.0 494.1,126.0"/>
+<rect class="r-al" x="607.1" y="118.0" width="62.0" height="8"/>
+<polygon class="rh" points="607.1,118.0 603.1,122.0 607.1,126.0"/>
+</svg><figcaption>Solitary poly(A/T): both junction clips are A(n) and the TSD is the only other hallmark.</figcaption></figure>
+<h3>Reported frequency</h3><p class="freq">Zumalave 2026: 157 (2% of 6,418). Not reported separately in PCAWG or Nam 2023.</p>
+<h3>How PEAR-TREE detects it</h3><ul class='pts'><li>discovery: CLIP reads with A(n) clips on both sides; the single-read poly-A rescue passes single fragments through</li><li>annotate: element <code>POLYA_ONLY</code></li><li>score: requires a real TSD and EN motif plus ≥ 2 independent fragments at each end; negative if the site is an A-rich reference tract (slippage context)</li></ul>
+<p class="vocab"><b>Vocabulary:</b> <code>element=POLYA_ONLY</code></p>
+</section>
+<section id="t7">
+<h2><span class="n">7</span>L1-mediated deletion <span class="badge in">in scope</span></h2>
+<p>The L1 cDNA, primed at the original target site, pairs with a 3′ overhang of a distant pre-existing
+    break upstream instead of the second nick; aberrant repair removes everything in between. The insertion
+    keeps a poly-A and EN motif at the 3′ end but has <b>no TSD</b>; the 5′ end joins via 1–5 bp
+    microhomology. Short reads show a one-sided cluster (no reciprocal cluster within ~500 bp) plus a
+    copy-number loss.</p>
+<figure id="f7"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 266" role="img" aria-labelledby="f7-t"><title id="f7-t">L1-mediated deletion: the two junction clusters are far apart on the reference and copy number drops between them.</title>
+<text class="lt" x="10" y="15.0">reference</text>
+<rect class="k-flank" x="10.0" y="48.0" width="200.0" height="10"/>
+<line class="gapl" x1="210.0" y1="53.0" x2="550.0" y2="53.0"/>
+<rect class="gapr" x="211.0" y="44.0" width="338.0" height="18" rx="3"/>
+<rect class="k-flank" x="550.0" y="48.0" width="40.0" height="10"/>
+<rect class="k-flank" x="590.0" y="48.0" width="200.0" height="10"/>
+<text class="bl" x="106.6" y="83.0">A</text>
+<text class="bl" x="279.2" y="83.0">deleted segment 0.5 kb – 53 Mb</text>
+<text class="bl" x="549.8" y="83.0">target</text>
+<text class="bl" x="686.6" y="83.0">B</text>
+<line class="sep" x1="10" y1="96.0" x2="790" y2="96.0"/>
+<text class="lt" x="10" y="113.0">insertion allele — L1-mediated deletion (tag L1_MED_DELETION)</text>
+<text class="mk" x="111.4" y="131.0">5′: 1–5 bp microhomology, no TSD</text>
+<line class="mkl" x1="210.0" y1="133.0" x2="210.0" y2="137.0"/>
+<text class="mk" x="508.4" y="131.0">3′: EN motif, poly-A</text>
+<line class="mkl" x1="570.0" y1="133.0" x2="570.0" y2="137.0"/>
+<rect class="k-flank" x="10.0" y="146.0" width="200.0" height="10"/>
+<polygon class="k-l1" points="210.0,138.0 498.0,138.0 510.0,151.0 498.0,164.0 210.0,164.0"/>
+<text class="it" x="215.0" y="154.5">5′</text>
+<text class="it" x="488.0" y="154.5">3′</text>
+<rect class="k-polya" x="510.0" y="143.0" width="60.0" height="16"/>
+<text class="it" text-anchor="middle" x="540.0" y="154.3">A(n)</text>
+<rect class="k-flank" x="570.0" y="146.0" width="220.0" height="10"/>
+<text class="bl" x="56.2" y="181.0">A (upstream DSB)</text>
+<text class="bl" x="313.0" y="181.0">L1 (no 5′ TSD)</text>
+<text class="bl" x="599.4" y="181.0">B (original target site)</text>
+<text class="lt2" x="10" y="196.0">short reads</text>
+<line class="pl" x1="78.4" y1="208.0" x2="191.4" y2="208.0"/>
+<rect class="r-al" x="191.4" y="204.0" width="18.6" height="8"/>
+<rect class="r-l1" x="210.0" y="204.0" width="43.4" height="8"/>
+<polygon class="rh" points="191.4,204.0 187.4,208.0 191.4,212.0"/>
+<rect class="r-al" x="16.4" y="204.0" width="62.0" height="8"/>
+<polygon class="rh" points="78.4,204.0 82.4,208.0 78.4,212.0"/>
+<line class="pld" x1="170.0" y1="221.0" x2="280.0" y2="221.0"/>
+<rect class="r-al" x="108.0" y="217.0" width="62.0" height="8"/>
+<polygon class="rh" points="170.0,217.0 174.0,221.0 170.0,225.0"/>
+<rect class="r-l1" x="280.0" y="217.0" width="62.0" height="8"/>
+<polygon class="rh" points="280.0,217.0 276.0,221.0 280.0,225.0"/>
+<rect class="r-al" x="175.9" y="230.0" width="34.1" height="8"/>
+<rect class="r-l1" x="210.0" y="230.0" width="27.9" height="8"/>
+<polygon class="rh" points="237.9,230.0 241.9,234.0 237.9,238.0"/>
+<line class="pld" x1="510.0" y1="208.0" x2="610.0" y2="208.0"/>
+<rect class="r-l1" x="448.0" y="204.0" width="62.0" height="8"/>
+<polygon class="rh" points="510.0,204.0 514.0,208.0 510.0,212.0"/>
+<rect class="r-al" x="610.0" y="204.0" width="62.0" height="8"/>
+<polygon class="rh" points="610.0,204.0 606.0,208.0 610.0,212.0"/>
+<line class="pl" x1="574.0" y1="221.0" x2="685.0" y2="221.0"/>
+<rect class="r-polya" x="512.0" y="217.0" width="58.0" height="8"/>
+<rect class="r-al" x="570.0" y="217.0" width="4.0" height="8"/>
+<polygon class="rh" points="574.0,217.0 578.0,221.0 574.0,225.0"/>
+<rect class="r-al" x="685.0" y="217.0" width="62.0" height="8"/>
+<polygon class="rh" points="685.0,217.0 681.0,221.0 685.0,225.0"/>
+<line class="pl" x1="588.6" y1="234.0" x2="701.6" y2="234.0"/>
+<rect class="r-polya" x="526.6" y="230.0" width="43.4" height="8"/>
+<rect class="r-al" x="570.0" y="230.0" width="18.6" height="8"/>
+<polygon class="rh" points="588.6,230.0 592.6,234.0 588.6,238.0"/>
+<rect class="r-al" x="701.6" y="230.0" width="62.0" height="8"/>
+<polygon class="rh" points="701.6,230.0 697.6,234.0 701.6,238.0"/>
+<rect class="r-polya" x="539.0" y="243.0" width="31.0" height="8"/>
+<rect class="r-al" x="570.0" y="243.0" width="31.0" height="8"/>
+<polygon class="rh" points="601.0,243.0 605.0,247.0 601.0,251.0"/>
+</svg><figcaption>L1-mediated deletion: the two junction clusters are far apart on the reference and copy number drops between them.</figcaption></figure>
+<h3>Reported frequency</h3><p class="freq">PCAWG: 90 events, 0.5 kb – 53.4 Mb; 5′ microhomology (median 3 bp) in 75% (47/63) resolved junctions; EN motif at the 3′ end in 82% (74/90); 8% (7/90) EN-independent. Zumalave 2026: deletion-like junctions are the largest rearrangement class, 43% (66/152).</p>
+<h3>How PEAR-TREE detects it</h3><ul class='pts'><li>discovery: two one-sided junctions separated by the deleted segment; may be emitted as two loci</li><li>annotate: tag <code>L1_MED_DELETION</code> (with element <code>L1</code> or <code>ORPHAN_TD</code>); 5′ microhomology instead of TSD</li><li>score: EN motif + poly-A at the 3′ junction; no TSD bonus; tag carried, not treated as an artefact</li></ul>
+<p class="vocab"><b>Vocabulary:</b> <code>tags=L1_MED_DELETION</code></p>
+</section>
+<section id="t8">
+<h2><span class="n">8</span>L1-mediated duplication, fold-back inversion and BFB initiation <span class="badge in">in scope</span></h2>
+<p>When the L1 cDNA engages a break on the sister chromatid or upstream of the target, the intervening
+    segment is duplicated rather than lost. In the fold-back form an L1 bridges the two sister chromatids in
+    head-to-head orientation: two clusters with the same orientation sit a few kb apart, copy number rises
+    on one side, and the dicentric product can start breakage–fusion–bridge (BFB) cycles that amplify
+    oncogenes (CCND1 in two PCAWG tumours).</p>
+<figure id="f8"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 155" role="img" aria-labelledby="f8-t"><title id="f8-t">Fold-back inversion bridged by an L1: both flanks of the bridge are the same chromosome arm in opposite orientation.</title>
+<text class="lt" x="10" y="15.0">derivative chromosome — L1-bridged fold-back inversion (tag L1_MED_DUPLICATION)</text>
+<text class="mk" x="261.1" y="33.0">junction 1</text>
+<line class="mkl" x1="291.9" y1="35.0" x2="291.9" y2="39.0"/>
+<text class="mk" x="449.6" y="33.0">junction 2 (poly-A)</text>
+<line class="mkl" x1="508.1" y1="35.0" x2="508.1" y2="39.0"/>
+<rect class="k-flank" x="10.0" y="48.0" width="281.9" height="10"/>
+<polygon class="k-l1" points="291.9,40.0 449.1,40.0 461.1,53.0 449.1,66.0 291.9,66.0"/>
+<text class="it" x="296.9" y="56.5">5′</text>
+<text class="it" x="439.1" y="56.5">3′</text>
+<rect class="k-polya" x="461.1" y="45.0" width="47.0" height="16"/>
+<text class="it" text-anchor="middle" x="484.6" y="56.3">A(n)</text>
+<rect class="k-flank2" x="508.1" y="48.0" width="281.9" height="10"/>
+<text class="bl" x="120.7" y="83.0">chr arm →</text>
+<text class="bl" x="349.6" y="83.0">short L1</text>
+<text class="bl" x="494.3" y="83.0">← same arm, inverted copy (sister chromatid)</text>
+<text class="lt2" x="10" y="98.0">short reads</text>
+<line class="pl" x1="163.4" y1="110.0" x2="276.4" y2="110.0"/>
+<rect class="r-al" x="276.4" y="106.0" width="15.5" height="8"/>
+<rect class="r-l1" x="291.9" y="106.0" width="46.5" height="8"/>
+<polygon class="rh" points="276.4,106.0 272.4,110.0 276.4,114.0"/>
+<rect class="r-al" x="101.4" y="106.0" width="62.0" height="8"/>
+<polygon class="rh" points="163.4,106.0 167.4,110.0 163.4,114.0"/>
+<line class="pld" x1="241.9" y1="123.0" x2="331.9" y2="123.0"/>
+<rect class="r-al" x="179.9" y="119.0" width="62.0" height="8"/>
+<polygon class="rh" points="241.9,119.0 245.9,123.0 241.9,127.0"/>
+<rect class="r-l1" x="331.9" y="119.0" width="62.0" height="8"/>
+<polygon class="rh" points="331.9,119.0 327.9,123.0 331.9,127.0"/>
+<rect class="r-al" x="260.9" y="132.0" width="31.0" height="8"/>
+<rect class="r-l1" x="291.9" y="132.0" width="31.0" height="8"/>
+<polygon class="rh" points="322.9,132.0 326.9,136.0 322.9,140.0"/>
+<line class="pld" x1="488.1" y1="110.0" x2="578.1" y2="110.0"/>
+<rect class="r-l1" x="426.1" y="106.0" width="35.0" height="8"/>
+<rect class="r-polya" x="461.1" y="106.0" width="27.0" height="8"/>
+<polygon class="rh" points="488.1,106.0 492.1,110.0 488.1,114.0"/>
+<rect class="r-al" x="578.1" y="106.0" width="62.0" height="8"/>
+<polygon class="rh" points="578.1,106.0 574.1,110.0 578.1,114.0"/>
+<line class="pl" x1="523.6" y1="123.0" x2="636.6" y2="123.0"/>
+<rect class="r-polya" x="461.6" y="119.0" width="46.5" height="8"/>
+<rect class="r-al" x="508.1" y="119.0" width="15.5" height="8"/>
+<polygon class="rh" points="523.6,119.0 527.6,123.0 523.6,127.0"/>
+<rect class="r-al" x="636.6" y="119.0" width="62.0" height="8"/>
+<polygon class="rh" points="636.6,119.0 632.6,123.0 636.6,127.0"/>
+<rect class="r-polya" x="477.1" y="132.0" width="31.0" height="8"/>
+<rect class="r-al" x="508.1" y="132.0" width="31.0" height="8"/>
+<polygon class="rh" points="539.1,132.0 543.1,136.0 539.1,140.0"/>
+</svg><figcaption>Fold-back inversion bridged by an L1: both flanks of the bridge are the same chromosome arm in opposite orientation.</figcaption></figure>
+<h3>Reported frequency</h3><p class="freq">PCAWG: individual cases (79.6 Mb 14q duplication; CCND1 BFB amplification in 2 tumours) among 103 L1-mediated rearrangements. Zumalave 2026: duplication-like 9% (14/152) of rearrangements.</p>
+<h3>How PEAR-TREE detects it</h3><ul class='pts'><li>discovery: clusters whose mates hit L1 on both sides with the same orientation</li><li>annotate: tag <code>L1_MED_DUPLICATION</code> (copy-number context is outside PEAR-TREE; the tag records the junction geometry)</li><li>score: TPRT hallmarks at the poly-A junction score as usual</li></ul>
+<p class="vocab"><b>Vocabulary:</b> <code>tags=L1_MED_DUPLICATION</code></p>
+</section>
+<section id="t9">
+<h2><span class="n">9</span>Retrotransposon-mediated rearrangements (deletion-, duplication-, inversion-like) <span class="badge partial">partly in scope</span></h2>
+<p>Zumalave et al. define an RT-RG as two distant breakpoints joined by a somatic retrotransposition
+    bridge and classify intrachromosomal ones by breakpoint orientation: deletion-like [+/−],
+    duplication-like [−/+], inversion-like [+/+] or [−/−]; interchromosomal ones are translocation-like.
+    The bridge is most often a solo-L1 but can be any type, including transductions and pseudogenes.</p>
+<figure id="f9"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 426" role="img" aria-labelledby="f9-t"><title id="f9-t">Three intrachromosomal RT-RG geometries; only the far flank (B) differs.</title>
+<text class="lt" x="10" y="15.0">deletion-like [+/−] (tag L1_MED_DELETION)</text>
+<rect class="k-flank" x="10.0" y="48.0" width="256.7" height="10"/>
+<polygon class="k-l1" points="266.7,40.0 471.9,40.0 483.9,53.0 471.9,66.0 266.7,66.0"/>
+<text class="it" x="271.7" y="56.5">5′</text>
+<text class="it" x="461.9" y="56.5">3′</text>
+<rect class="k-polya" x="483.9" y="45.0" width="49.4" height="16"/>
+<text class="it" text-anchor="middle" x="508.6" y="56.3">A(n)</text>
+<rect class="k-flank2" x="533.3" y="48.0" width="256.7" height="10"/>
+<text class="bl" x="135.0" y="83.0">A</text>
+<text class="bl" x="345.1" y="83.0">L1 bridge</text>
+<text class="bl" x="544.0" y="83.0">B: downstream, intervening DNA lost</text>
+<text class="lt2" x="10" y="98.0">short reads</text>
+<line class="pld" x1="226.7" y1="110.0" x2="306.7" y2="110.0"/>
+<rect class="r-al" x="164.7" y="106.0" width="62.0" height="8"/>
+<polygon class="rh" points="226.7,106.0 230.7,110.0 226.7,114.0"/>
+<rect class="r-l1" x="306.7" y="106.0" width="62.0" height="8"/>
+<polygon class="rh" points="306.7,106.0 302.7,110.0 306.7,114.0"/>
+<rect class="r-al" x="235.7" y="119.0" width="31.0" height="8"/>
+<rect class="r-l1" x="266.7" y="119.0" width="31.0" height="8"/>
+<polygon class="rh" points="297.7,119.0 301.7,123.0 297.7,127.0"/>
+<line class="pld" x1="503.3" y1="110.0" x2="593.3" y2="110.0"/>
+<rect class="r-l1" x="441.3" y="106.0" width="42.6" height="8"/>
+<rect class="r-polya" x="483.9" y="106.0" width="19.4" height="8"/>
+<polygon class="rh" points="503.3,106.0 507.3,110.0 503.3,114.0"/>
+<rect class="r-al" x="593.3" y="106.0" width="62.0" height="8"/>
+<polygon class="rh" points="593.3,106.0 589.3,110.0 593.3,114.0"/>
+<rect class="r-polya" x="502.3" y="119.0" width="31.0" height="8"/>
+<rect class="r-al" x="533.3" y="119.0" width="31.0" height="8"/>
+<polygon class="rh" points="564.3,119.0 568.3,123.0 564.3,127.0"/>
+<line class="sep" x1="10" y1="140.0" x2="790" y2="140.0"/>
+<text class="lt" x="10" y="157.0">duplication-like [−/+] (tag L1_MED_DUPLICATION)</text>
+<rect class="k-flank" x="10.0" y="190.0" width="256.7" height="10"/>
+<polygon class="k-l1" points="266.7,182.0 471.9,182.0 483.9,195.0 471.9,208.0 266.7,208.0"/>
+<text class="it" x="271.7" y="198.5">5′</text>
+<text class="it" x="461.9" y="198.5">3′</text>
+<rect class="k-polya" x="483.9" y="187.0" width="49.4" height="16"/>
+<text class="it" text-anchor="middle" x="508.6" y="198.3">A(n)</text>
+<rect class="k-flank2" x="533.3" y="190.0" width="256.7" height="10"/>
+<text class="bl" x="135.0" y="225.0">A</text>
+<text class="bl" x="345.1" y="225.0">L1 bridge</text>
+<text class="bl" x="527.9" y="225.0">B: upstream, intervening DNA duplicated</text>
+<text class="lt2" x="10" y="240.0">short reads</text>
+<line class="pld" x1="226.7" y1="252.0" x2="306.7" y2="252.0"/>
+<rect class="r-al" x="164.7" y="248.0" width="62.0" height="8"/>
+<polygon class="rh" points="226.7,248.0 230.7,252.0 226.7,256.0"/>
+<rect class="r-l1" x="306.7" y="248.0" width="62.0" height="8"/>
+<polygon class="rh" points="306.7,248.0 302.7,252.0 306.7,256.0"/>
+<rect class="r-al" x="235.7" y="261.0" width="31.0" height="8"/>
+<rect class="r-l1" x="266.7" y="261.0" width="31.0" height="8"/>
+<polygon class="rh" points="297.7,261.0 301.7,265.0 297.7,269.0"/>
+<line class="pld" x1="503.3" y1="252.0" x2="593.3" y2="252.0"/>
+<rect class="r-l1" x="441.3" y="248.0" width="42.6" height="8"/>
+<rect class="r-polya" x="483.9" y="248.0" width="19.4" height="8"/>
+<polygon class="rh" points="503.3,248.0 507.3,252.0 503.3,256.0"/>
+<rect class="r-al" x="593.3" y="248.0" width="62.0" height="8"/>
+<polygon class="rh" points="593.3,248.0 589.3,252.0 593.3,256.0"/>
+<rect class="r-polya" x="502.3" y="261.0" width="31.0" height="8"/>
+<rect class="r-al" x="533.3" y="261.0" width="31.0" height="8"/>
+<polygon class="rh" points="564.3,261.0 568.3,265.0 564.3,269.0"/>
+<line class="sep" x1="10" y1="282.0" x2="790" y2="282.0"/>
+<text class="lt" x="10" y="299.0">inversion-like [+/+] or [−/−] (out of scope: bridge)</text>
+<rect class="k-flank" x="10.0" y="332.0" width="256.7" height="10"/>
+<polygon class="k-l1" points="266.7,324.0 471.9,324.0 483.9,337.0 471.9,350.0 266.7,350.0"/>
+<text class="it" x="271.7" y="340.5">5′</text>
+<text class="it" x="461.9" y="340.5">3′</text>
+<rect class="k-polya" x="483.9" y="329.0" width="49.4" height="16"/>
+<text class="it" text-anchor="middle" x="508.6" y="340.3">A(n)</text>
+<rect class="k-flank2" x="533.3" y="332.0" width="256.7" height="10"/>
+<text class="bl" x="135.0" y="367.0">A</text>
+<text class="bl" x="345.1" y="367.0">L1 bridge</text>
+<text class="bl" x="577.6" y="367.0">← B, inverted orientation</text>
+<text class="lt2" x="10" y="382.0">short reads</text>
+<line class="pld" x1="226.7" y1="394.0" x2="306.7" y2="394.0"/>
+<rect class="r-al" x="164.7" y="390.0" width="62.0" height="8"/>
+<polygon class="rh" points="226.7,390.0 230.7,394.0 226.7,398.0"/>
+<rect class="r-l1" x="306.7" y="390.0" width="62.0" height="8"/>
+<polygon class="rh" points="306.7,390.0 302.7,394.0 306.7,398.0"/>
+<rect class="r-al" x="235.7" y="403.0" width="31.0" height="8"/>
+<rect class="r-l1" x="266.7" y="403.0" width="31.0" height="8"/>
+<polygon class="rh" points="297.7,403.0 301.7,407.0 297.7,411.0"/>
+<line class="pld" x1="503.3" y1="394.0" x2="593.3" y2="394.0"/>
+<rect class="r-l1" x="441.3" y="390.0" width="42.6" height="8"/>
+<rect class="r-polya" x="483.9" y="390.0" width="19.4" height="8"/>
+<polygon class="rh" points="503.3,390.0 507.3,394.0 503.3,398.0"/>
+<rect class="r-al" x="593.3" y="390.0" width="62.0" height="8"/>
+<polygon class="rh" points="593.3,390.0 589.3,394.0 593.3,398.0"/>
+<rect class="r-polya" x="502.3" y="403.0" width="31.0" height="8"/>
+<rect class="r-al" x="533.3" y="403.0" width="31.0" height="8"/>
+<polygon class="rh" points="564.3,403.0 568.3,407.0 564.3,411.0"/>
+</svg><figcaption>Three intrachromosomal RT-RG geometries; only the far flank (B) differs.</figcaption></figure>
+<h3>Reported frequency</h3><p class="freq">Zumalave 2026: 152 RT-RGs = 2% of events; deletion-like 43%, interchromosomal 30%, inversion-like 18%, duplication-like 9%; bridges are solo-L1 in 66%. PCAWG: 103 L1-mediated rearrangements, mostly deletions.</p>
+<h3>How PEAR-TREE detects it</h3><ul class='pts'><li>deletion-like → <code>L1_MED_DELETION</code>, duplication-like → <code>L1_MED_DUPLICATION</code> (in scope as tags)</li><li>inversion-like and translocation-like bridges are out of scope this round; they should still come out as single junctions with TPRT hallmarks rather than be scored as artefacts</li></ul>
+<p class="vocab"><b>Vocabulary:</b> <code>tags=L1_MED_DELETION | L1_MED_DUPLICATION (inversion-/translocation-like: not called)</code></p>
+</section>
+<section id="t10">
+<h2><span class="n">10</span>Reciprocal translocation bridged by two concurrent L1s <span class="badge out">out of scope this round</span></h2>
+<p>Two synchronous L1 insertions on different chromosomes exchange partners during second-strand
+    resolution, so each derivative chromosome carries one complete L1 insertion (own poly-A, own EN motif)
+    and each insertion's two TSD copies end up on different derivatives — a <b>target-site
+    heteroduplication</b> (e.g. 3 bp and −10 bp in one case). Short reads see four one-sided junctions that
+    look like two translocation partners each bridged by an L1.</p>
+<figure id="f10"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 284" role="img" aria-labelledby="f10-t"><title id="f10-t">Reciprocal translocation: copies a/a′ and b/b′ of each TSD sit on different derivative chromosomes.</title>
+<text class="lt" x="10" y="15.0">der(A) — bridge 1</text>
+<text class="mk" x="56.3" y="33.0">heteroduplicated TSD: copies a / a′ on different derivatives</text>
+<line class="mkl" x1="241.1" y1="35.0" x2="241.1" y2="39.0"/>
+<rect class="k-flank" x="10.0" y="48.0" width="211.9" height="10"/>
+<rect class="k-tsd" x="221.9" y="42.0" width="38.5" height="22"/>
+<text class="itd" text-anchor="middle" x="241.1" y="56.3">a</text>
+<polygon class="k-l1" points="260.4,40.0 479.5,40.0 491.5,53.0 479.5,66.0 260.4,66.0"/>
+<text class="it" x="265.4" y="56.5">5′</text>
+<text class="it" x="469.5" y="56.5">3′</text>
+<rect class="k-polya" x="491.5" y="45.0" width="48.1" height="16"/>
+<text class="it" text-anchor="middle" x="515.6" y="56.3">A(n)</text>
+<rect class="k-tsd" x="539.6" y="42.0" width="38.5" height="22"/>
+<text class="itd" text-anchor="middle" x="558.9" y="56.3">b</text>
+<rect class="k-flank2" x="578.1" y="48.0" width="211.9" height="10"/>
+<text class="bl" x="65.5" y="83.0">chr A (5′ side)</text>
+<text class="bl" x="325.5" y="83.0">L1 insertion #1</text>
+<text class="bl" x="667.3" y="83.0">chr B</text>
+<text class="lt2" x="10" y="98.0">short reads</text>
+<line class="pld" x1="220.4" y1="110.0" x2="310.4" y2="110.0"/>
+<rect class="r-al" x="158.4" y="106.0" width="62.0" height="8"/>
+<polygon class="rh" points="220.4,106.0 224.4,110.0 220.4,114.0"/>
+<rect class="r-l1" x="310.4" y="106.0" width="62.0" height="8"/>
+<polygon class="rh" points="310.4,106.0 306.4,110.0 310.4,114.0"/>
+<rect class="r-tsd" x="229.4" y="119.0" width="31.0" height="8"/>
+<rect class="r-l1" x="260.4" y="119.0" width="31.0" height="8"/>
+<polygon class="rh" points="291.4,119.0 295.4,123.0 291.4,127.0"/>
+<line class="pld" x1="519.6" y1="110.0" x2="599.6" y2="110.0"/>
+<rect class="r-l1" x="457.6" y="106.0" width="33.9" height="8"/>
+<rect class="r-polya" x="491.5" y="106.0" width="28.1" height="8"/>
+<polygon class="rh" points="519.6,106.0 523.6,110.0 519.6,114.0"/>
+<rect class="r-al" x="599.6" y="106.0" width="62.0" height="8"/>
+<polygon class="rh" points="599.6,106.0 595.6,110.0 599.6,114.0"/>
+<rect class="r-polya" x="508.6" y="119.0" width="31.0" height="8"/>
+<rect class="r-tsd" x="539.6" y="119.0" width="31.0" height="8"/>
+<polygon class="rh" points="570.6,119.0 574.6,123.0 570.6,127.0"/>
+<line class="sep" x1="10" y1="140.0" x2="790" y2="140.0"/>
+<text class="lt" x="10" y="157.0">der(B) — bridge 2</text>
+<rect class="k-flank2" x="10.0" y="190.0" width="211.9" height="10"/>
+<rect class="k-tsd" x="221.9" y="184.0" width="38.5" height="22"/>
+<text class="itd" text-anchor="middle" x="241.1" y="198.3">b′</text>
+<polygon class="k-l1" points="260.4,182.0 479.5,182.0 491.5,195.0 479.5,208.0 260.4,208.0"/>
+<text class="it" x="265.4" y="198.5">5′</text>
+<text class="it" x="469.5" y="198.5">3′</text>
+<rect class="k-polya" x="491.5" y="187.0" width="48.1" height="16"/>
+<text class="it" text-anchor="middle" x="515.6" y="198.3">A(n)</text>
+<rect class="k-tsd" x="539.6" y="184.0" width="38.5" height="22"/>
+<text class="itd" text-anchor="middle" x="558.9" y="198.3">a′</text>
+<rect class="k-flank" x="578.1" y="190.0" width="211.9" height="10"/>
+<text class="bl" x="99.1" y="225.0">chr B</text>
+<text class="bl" x="325.5" y="225.0">L1 insertion #2</text>
+<text class="bl" x="633.7" y="225.0">chr A (3′ side)</text>
+<text class="lt2" x="10" y="240.0">short reads</text>
+<line class="pld" x1="220.4" y1="252.0" x2="310.4" y2="252.0"/>
+<rect class="r-al" x="158.4" y="248.0" width="62.0" height="8"/>
+<polygon class="rh" points="220.4,248.0 224.4,252.0 220.4,256.0"/>
+<rect class="r-l1" x="310.4" y="248.0" width="62.0" height="8"/>
+<polygon class="rh" points="310.4,248.0 306.4,252.0 310.4,256.0"/>
+<rect class="r-tsd" x="229.4" y="261.0" width="31.0" height="8"/>
+<rect class="r-l1" x="260.4" y="261.0" width="31.0" height="8"/>
+<polygon class="rh" points="291.4,261.0 295.4,265.0 291.4,269.0"/>
+<line class="pld" x1="519.6" y1="252.0" x2="599.6" y2="252.0"/>
+<rect class="r-l1" x="457.6" y="248.0" width="33.9" height="8"/>
+<rect class="r-polya" x="491.5" y="248.0" width="28.1" height="8"/>
+<polygon class="rh" points="519.6,248.0 523.6,252.0 519.6,256.0"/>
+<rect class="r-al" x="599.6" y="248.0" width="62.0" height="8"/>
+<polygon class="rh" points="599.6,248.0 595.6,252.0 599.6,256.0"/>
+<rect class="r-polya" x="508.6" y="261.0" width="31.0" height="8"/>
+<rect class="r-tsd" x="539.6" y="261.0" width="31.0" height="8"/>
+<polygon class="rh" points="570.6,261.0 574.6,265.0 570.6,269.0"/>
+</svg><figcaption>Reciprocal translocation: copies a/a′ and b/b′ of each TSD sit on different derivative chromosomes.</figcaption></figure>
+<h3>Reported frequency</h3><p class="freq">Zumalave 2026: 13 reciprocal translocations (20 of 45 interchromosomal bridges); 10/13 from two distinct synchronous insertions, 3/13 from a single event.</p>
+<h3>How PEAR-TREE detects it</h3><ul class='pts'><li>out of scope this round: no pairing of junctions across chromosomes</li><li>each junction may still be reported as a one-sided L1 junction; it must not be penalised as <code>CHIMERIC_ENDS</code> just because the two ends map to different chromosomes</li></ul>
+<p class="vocab"><b>Vocabulary:</b> <code>— (not called)</code></p>
+</section>
+<section id="t11">
+<h2><span class="n">11</span>Chimeric bridges <span class="badge out">out of scope this round</span></h2>
+<p>In some reciprocal translocations the two bridges are mosaics of two retrotransposition events
+    (e.g. two different partnered transductions) that recombined while the cDNAs were growing. One bridge
+    has both TPRT ends (a poly-A, a poly-T and two EN motifs); its partner contains the leftover L1
+    pieces with no poly-A and no EN motif. The exchange points coincide with orientation flips, as in twin
+    priming.</p>
+<figure id="f11"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 258" role="img" aria-labelledby="f11-t"><title id="f11-t">Chimeric bridges: the poly-A-carrying ends of two insertions end up in one bridge, remnants in the other.</title>
+<text class="lt" x="10" y="15.0">bridge with both TPRT ends (two poly-A/T tails, two EN motifs)</text>
+<rect class="k-flank" x="10.0" y="48.0" width="143.3" height="10"/>
+<rect class="k-polya" x="153.3" y="45.0" width="39.8" height="16"/>
+<text class="it" text-anchor="middle" x="173.2" y="56.3">T(n)</text>
+<polygon class="k-td" points="193.1,53.0 205.1,43.0 256.7,43.0 256.7,63.0 205.1,63.0"/>
+<polygon class="k-l1inv" points="256.7,53.0 268.7,40.0 400.0,40.0 400.0,66.0 268.7,66.0"/>
+<text class="it" x="261.7" y="56.5">3′</text>
+<text class="it" x="378.0" y="56.5">5′</text>
+<polygon class="k-l1" points="400.0,40.0 531.3,40.0 543.3,53.0 531.3,66.0 400.0,66.0"/>
+<text class="it" x="405.0" y="56.5">5′</text>
+<text class="it" x="521.3" y="56.5">3′</text>
+<polygon class="k-td" points="543.3,43.0 594.9,43.0 606.9,53.0 594.9,63.0 543.3,63.0"/>
+<rect class="k-polya" x="606.9" y="45.0" width="39.8" height="16"/>
+<text class="it" text-anchor="middle" x="626.8" y="56.3">A(n)</text>
+<rect class="k-flank2" x="646.7" y="48.0" width="143.3" height="10"/>
+<text class="bl" x="64.8" y="83.0">chr A</text>
+<text class="bl" x="208.1" y="83.0">TD #2</text>
+<text class="bl" x="298.1" y="83.0">L1 #2 (−)</text>
+<text class="bl" x="454.8" y="83.0">L1 #1</text>
+<text class="bl" x="558.3" y="83.0">TD #1</text>
+<text class="bl" x="701.6" y="83.0">chr B</text>
+<text class="lt2" x="10" y="98.0">short reads</text>
+<rect class="r-polya" x="162.1" y="106.0" width="31.0" height="8"/>
+<rect class="r-td" x="193.1" y="106.0" width="31.0" height="8"/>
+<polygon class="rh" points="224.1,106.0 228.1,110.0 224.1,114.0"/>
+<rect class="r-polya" x="615.7" y="106.0" width="31.0" height="8"/>
+<rect class="r-al" x="646.7" y="106.0" width="31.0" height="8"/>
+<polygon class="rh" points="677.7,106.0 681.7,110.0 677.7,114.0"/>
+<line class="sep" x1="10" y1="127.0" x2="790" y2="127.0"/>
+<text class="lt" x="10" y="144.0">partner bridge: remnants of the same two L1s, no poly-A, no EN motif</text>
+<rect class="k-flank2" x="10.0" y="177.0" width="225.8" height="10"/>
+<polygon class="k-l1" points="235.8,169.0 388.0,169.0 400.0,182.0 388.0,195.0 235.8,195.0"/>
+<text class="it" x="240.8" y="185.5">5′</text>
+<text class="it" x="378.0" y="185.5">3′</text>
+<polygon class="k-l1inv" points="400.0,182.0 412.0,169.0 564.2,169.0 564.2,195.0 412.0,195.0"/>
+<text class="it" x="405.0" y="185.5">3′</text>
+<text class="it" x="542.2" y="185.5">5′</text>
+<rect class="k-flank" x="564.2" y="177.0" width="225.8" height="10"/>
+<text class="bl" x="102.7" y="212.0">chr B′</text>
+<text class="bl" x="280.9" y="212.0">L1 #1 piece</text>
+<text class="bl" x="445.1" y="212.0">L1 #2 piece</text>
+<text class="bl" x="656.9" y="212.0">chr A′</text>
+<text class="lt2" x="10" y="227.0">short reads</text>
+<rect class="r-al" x="204.8" y="235.0" width="31.0" height="8"/>
+<rect class="r-l1" x="235.8" y="235.0" width="31.0" height="8"/>
+<polygon class="rh" points="266.8,235.0 270.8,239.0 266.8,243.0"/>
+<rect class="r-l1" x="369.0" y="235.0" width="31.0" height="8"/>
+<rect class="r-l1inv" x="400.0" y="235.0" width="31.0" height="8"/>
+<polygon class="rh" points="431.0,235.0 435.0,239.0 431.0,243.0"/>
+<rect class="r-l1inv" x="533.2" y="235.0" width="31.0" height="8"/>
+<rect class="r-al" x="564.2" y="235.0" width="31.0" height="8"/>
+<polygon class="rh" points="595.2,235.0 599.2,239.0 595.2,243.0"/>
+</svg><figcaption>Chimeric bridges: the poly-A-carrying ends of two insertions end up in one bridge, remnants in the other.</figcaption></figure>
+<h3>Reported frequency</h3><p class="freq">Zumalave 2026: a subset of the 13 reciprocal translocations (example PD0331a, 22p/12q); no separate rate.</p>
+<h3>How PEAR-TREE detects it</h3><ul class='pts'><li>out of scope this round</li><li>a hallmark-free bridge looks like an artefact chimera (<code>CHIMERIC_ENDS</code>); that is acceptable while bridges are out of scope</li></ul>
+<p class="vocab"><b>Vocabulary:</b> <code>— (not called)</code></p>
+</section>
+<section id="t12">
+<h2><span class="n">12</span>Reciprocal inversions and complex events <span class="badge out">out of scope this round</span></h2>
+<p>The same in-trans second-strand synthesis between two concurrent L1 reactions (one canonical, one
+    twin-primed) can produce paracentric inversions where each breakpoint is bridged by part of the same
+    L1, or chains of rearrangements with acentric/circular products and large deletions when a single
+    twin-primed cDNA repairs two pre-existing breaks.</p>
+<figure id="f12"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 258" role="img" aria-labelledby="f12-t"><title id="f12-t">Reciprocal inversion (PD0307a-like): the two bridges are halves of related L1 insertions, megabases apart.</title>
+<text class="lt" x="10" y="15.0">bridge 1 — two 5′-truncated L1s in opposite orientation, joined at their 5′ ends</text>
+<rect class="k-flank" x="10.0" y="48.0" width="163.3" height="10"/>
+<rect class="k-polya" x="173.3" y="45.0" width="45.3" height="16"/>
+<text class="it" text-anchor="middle" x="195.9" y="56.3">T(n)</text>
+<polygon class="k-l1inv" points="218.6,53.0 230.6,40.0 400.0,40.0 400.0,66.0 230.6,66.0"/>
+<text class="it" x="223.6" y="56.5">3′</text>
+<text class="it" x="378.0" y="56.5">5′</text>
+<polygon class="k-l1" points="400.0,40.0 569.4,40.0 581.4,53.0 569.4,66.0 400.0,66.0"/>
+<text class="it" x="405.0" y="56.5">5′</text>
+<text class="it" x="559.4" y="56.5">3′</text>
+<rect class="k-polya" x="581.4" y="45.0" width="45.3" height="16"/>
+<text class="it" text-anchor="middle" x="604.1" y="56.3">A(n)</text>
+<rect class="k-flank2" x="626.7" y="48.0" width="163.3" height="10"/>
+<text class="bl" x="71.5" y="83.0">chr5 a</text>
+<text class="bl" x="289.1" y="83.0">L1 (−)</text>
+<text class="bl" x="470.5" y="83.0">L1 (+)</text>
+<text class="bl" x="651.3" y="83.0">chr5 c (inverted)</text>
+<text class="lt2" x="10" y="98.0">short reads</text>
+<rect class="r-polya" x="187.6" y="106.0" width="31.0" height="8"/>
+<rect class="r-l1inv" x="218.6" y="106.0" width="31.0" height="8"/>
+<polygon class="rh" points="249.6,106.0 253.6,110.0 249.6,114.0"/>
+<rect class="r-l1inv" x="369.0" y="106.0" width="31.0" height="8"/>
+<rect class="r-l1" x="400.0" y="106.0" width="31.0" height="8"/>
+<polygon class="rh" points="431.0,106.0 435.0,110.0 431.0,114.0"/>
+<rect class="r-polya" x="595.7" y="106.0" width="31.0" height="8"/>
+<rect class="r-al" x="626.7" y="106.0" width="31.0" height="8"/>
+<polygon class="rh" points="657.7,106.0 661.7,110.0 657.7,114.0"/>
+<line class="sep" x1="10" y1="127.0" x2="790" y2="127.0"/>
+<text class="lt" x="10" y="144.0">bridge 2 (Mb away) — interstitial L1 fragment within a heteroduplicated target site</text>
+<rect class="k-flank" x="10.0" y="177.0" width="245.1" height="10"/>
+<rect class="k-tsd" x="255.1" y="171.0" width="44.6" height="22"/>
+<text class="itd" text-anchor="middle" x="277.4" y="185.3">TSD</text>
+<polygon class="k-l1" points="299.7,169.0 488.3,169.0 500.3,182.0 488.3,195.0 299.7,195.0"/>
+<text class="it" x="304.7" y="185.5">5′</text>
+<text class="it" x="478.3" y="185.5">3′</text>
+<rect class="k-tsd" x="500.3" y="171.0" width="44.6" height="22"/>
+<text class="itd" text-anchor="middle" x="522.6" y="185.3">TSD</text>
+<rect class="k-flank2" x="544.9" y="177.0" width="245.1" height="10"/>
+<text class="bl" x="112.4" y="212.0">chr5 b</text>
+<text class="bl" x="319.4" y="212.0">L1 fragment (other half)</text>
+<text class="bl" x="647.3" y="212.0">chr5 d</text>
+<text class="lt2" x="10" y="227.0">short reads</text>
+<rect class="r-tsd" x="268.7" y="235.0" width="31.0" height="8"/>
+<rect class="r-l1" x="299.7" y="235.0" width="31.0" height="8"/>
+<polygon class="rh" points="330.7,235.0 334.7,239.0 330.7,243.0"/>
+<rect class="r-tsd" x="513.9" y="235.0" width="31.0" height="8"/>
+<rect class="r-al" x="544.9" y="235.0" width="31.0" height="8"/>
+<polygon class="rh" points="575.9,235.0 579.9,239.0 575.9,243.0"/>
+</svg><figcaption>Reciprocal inversion (PD0307a-like): the two bridges are halves of related L1 insertions, megabases apart.</figcaption></figure>
+<h3>Reported frequency</h3><p class="freq">Zumalave 2026: rare — e.g. a 2.67 Mb paracentric inversion (PD0307a) and a chromosome-1 complex event with a 30 Mb loss (PD0331a).</p>
+<h3>How PEAR-TREE detects it</h3><ul class='pts'><li>out of scope this round</li></ul>
+<p class="vocab"><b>Vocabulary:</b> <code>— (not called)</code></p>
+</section>
+<section id="t13">
+<h2><span class="n">13</span>Twin priming with 5′ or 3′ switching <span class="badge in">in scope</span></h2>
+<p>Variants of twin priming in which one of the two growing cDNAs changes template on the L1 RNA.
+    In <b>5′ switching</b> the internally primed cDNA jumps to a region of the RNA not yet copied; in
+    <b>3′ switching</b> the poly-dT-primed cDNA jumps to a region downstream of the internal primer. Both
+    leave an extra internal inversion or a coordinate discontinuity at the twin-priming junction, on top of
+    the usual 5′ inversion.</p>
+<figure id="f13"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 299" role="img" aria-labelledby="f13-t"><title id="f13-t">Twin priming with switching: more than one orientation change or a jump in L1 coordinates within the 5′ part.</title>
+<text class="lt" x="10" y="15.0">twin priming + 5′ switching (INVERTED_5P_SWITCH)</text>
+<text class="mk" x="212.8" y="33.0">switch junctions</text>
+<line class="mkl" x1="262.1" y1="35.0" x2="262.1" y2="39.0"/>
+<text class="mk" x="339.3" y="33.0">twin-priming junction</text>
+<line class="mkl" x1="403.9" y1="35.0" x2="403.9" y2="39.0"/>
+<rect class="k-flank" x="10.0" y="48.0" width="94.5" height="10"/>
+<rect class="k-tsd" x="104.5" y="42.0" width="31.5" height="22"/>
+<text class="itd" text-anchor="middle" x="120.3" y="56.3">TSD</text>
+<polygon class="k-l1inv" points="136.1,53.0 148.1,40.0 262.1,40.0 262.1,66.0 148.1,66.0"/>
+<text class="it" x="141.1" y="56.5">3′</text>
+<text class="it" x="240.1" y="56.5">5′</text>
+<polygon class="k-l1" points="262.1,40.0 328.9,40.0 340.9,53.0 328.9,66.0 262.1,66.0"/>
+<text class="it" x="267.1" y="56.5">5′</text>
+<text class="it" x="318.9" y="56.5">3′</text>
+<polygon class="k-l1inv" points="340.9,53.0 352.9,40.0 403.9,40.0 403.9,66.0 352.9,66.0"/>
+<polygon class="k-l1" points="403.9,40.0 612.5,40.0 624.5,53.0 612.5,66.0 403.9,66.0"/>
+<text class="it" x="408.9" y="56.5">5′</text>
+<text class="it" x="602.5" y="56.5">3′</text>
+<rect class="k-polya" x="624.5" y="45.0" width="39.4" height="16"/>
+<text class="it" text-anchor="middle" x="644.2" y="56.3">A(n)</text>
+<rect class="k-tsd" x="663.9" y="42.0" width="31.5" height="22"/>
+<text class="itd" text-anchor="middle" x="679.7" y="56.3">TSD</text>
+<rect class="k-flank" x="695.5" y="48.0" width="94.5" height="10"/>
+<text class="bl" x="145.3" y="83.0">inverted 5′ part</text>
+<line class="mkl" x1="301.5" y1="67.0" x2="301.5" y2="88.0"/>
+<text class="bl" x="241.0" y="97.0">internal inversion</text>
+<text class="bl" x="473.9" y="83.0">forward part</text>
+<text class="lt2" x="10" y="112.0">short reads</text>
+<rect class="r-tsd" x="105.1" y="120.0" width="31.0" height="8"/>
+<rect class="r-l1inv" x="136.1" y="120.0" width="31.0" height="8"/>
+<polygon class="rh" points="167.1,120.0 171.1,124.0 167.1,128.0"/>
+<rect class="r-l1inv" x="231.1" y="120.0" width="31.0" height="8"/>
+<rect class="r-l1" x="262.1" y="120.0" width="31.0" height="8"/>
+<polygon class="rh" points="293.1,120.0 297.1,124.0 293.1,128.0"/>
+<rect class="r-l1inv" x="372.9" y="120.0" width="31.0" height="8"/>
+<rect class="r-l1" x="403.9" y="120.0" width="31.0" height="8"/>
+<polygon class="rh" points="434.9,120.0 438.9,124.0 434.9,128.0"/>
+<rect class="r-polya" x="632.9" y="120.0" width="31.0" height="8"/>
+<rect class="r-tsd" x="663.9" y="120.0" width="31.0" height="8"/>
+<polygon class="rh" points="694.9,120.0 698.9,124.0 694.9,128.0"/>
+<line class="sep" x1="10" y1="141.0" x2="790" y2="141.0"/>
+<text class="lt" x="10" y="158.0">twin priming + 3′ switching (INVERTED_5P_SWITCH)</text>
+<text class="mk" x="239.7" y="176.0">inversion junction</text>
+<line class="mkl" x1="295.2" y1="178.0" x2="295.2" y2="195.0"/>
+<text class="mk" x="300.3" y="189.0">discontinuity in L1 coordinates</text>
+<line class="mkl" x1="395.8" y1="191.0" x2="395.8" y2="195.0"/>
+<rect class="k-flank" x="10.0" y="204.0" width="100.6" height="10"/>
+<rect class="k-tsd" x="110.6" y="198.0" width="33.5" height="22"/>
+<text class="itd" text-anchor="middle" x="127.4" y="212.3">TSD</text>
+<polygon class="k-l1inv" points="144.2,209.0 156.2,196.0 295.2,196.0 295.2,222.0 156.2,222.0"/>
+<text class="it" x="149.2" y="212.5">3′</text>
+<text class="it" x="273.2" y="212.5">5′</text>
+<polygon class="k-l1" points="295.2,196.0 383.8,196.0 395.8,209.0 383.8,222.0 295.2,222.0"/>
+<text class="it" x="300.2" y="212.5">5′</text>
+<text class="it" x="373.8" y="212.5">3′</text>
+<polygon class="k-l1" points="395.8,196.0 601.9,196.0 613.9,209.0 601.9,222.0 395.8,222.0"/>
+<text class="it" x="400.8" y="212.5">5′</text>
+<text class="it" x="591.9" y="212.5">3′</text>
+<rect class="k-polya" x="613.9" y="201.0" width="41.9" height="16"/>
+<text class="it" text-anchor="middle" x="634.8" y="212.3">A(n)</text>
+<rect class="k-tsd" x="655.8" y="198.0" width="33.5" height="22"/>
+<text class="itd" text-anchor="middle" x="672.6" y="212.3">TSD</text>
+<rect class="k-flank" x="689.4" y="204.0" width="100.6" height="10"/>
+<text class="bl" x="165.9" y="239.0">inverted 5′ part</text>
+<line class="mkl" x1="345.5" y1="223.0" x2="345.5" y2="244.0"/>
+<text class="bl" x="201.0" y="253.0">non-inverted piece from a distant L1 region</text>
+<text class="bl" x="464.5" y="239.0">forward part</text>
+<text class="lt2" x="10" y="268.0">short reads</text>
+<rect class="r-tsd" x="113.2" y="276.0" width="31.0" height="8"/>
+<rect class="r-l1inv" x="144.2" y="276.0" width="31.0" height="8"/>
+<polygon class="rh" points="175.2,276.0 179.2,280.0 175.2,284.0"/>
+<rect class="r-l1inv" x="264.2" y="276.0" width="31.0" height="8"/>
+<rect class="r-l1" x="295.2" y="276.0" width="31.0" height="8"/>
+<polygon class="rh" points="326.2,276.0 330.2,280.0 326.2,284.0"/>
+<rect class="r-l1" x="364.8" y="276.0" width="31.0" height="8"/>
+<rect class="r-l1" x="395.8" y="276.0" width="31.0" height="8"/>
+<polygon class="rh" points="426.8,276.0 430.8,280.0 426.8,284.0"/>
+<rect class="r-polya" x="624.8" y="276.0" width="31.0" height="8"/>
+<rect class="r-tsd" x="655.8" y="276.0" width="31.0" height="8"/>
+<polygon class="rh" points="686.8,276.0 690.8,280.0 686.8,284.0"/>
+</svg><figcaption>Twin priming with switching: more than one orientation change or a jump in L1 coordinates within the 5′ part.</figcaption></figure>
+<h3>Reported frequency</h3><p class="freq">Zumalave 2026: 20 with 5′ switching and 3 with 3′ switching, out of 1,836 5′-inverted solo-L1s (~1%). Szak 2002 had already noted twice-inverted genomic L1s.</p>
+<h3>How PEAR-TREE detects it</h3><ul class='pts'><li>requires the covered-element consensus from <code>insertions.reads.fa</code>; usually only resolved when the insert is short enough for reads to cross the extra junctions</li><li>annotate: <code>structure=INVERTED_5P_SWITCH</code>; falls back to <code>INVERTED_5P</code> / <code>5P_UNRESOLVED</code> when the extra junction is not covered</li></ul>
+<p class="vocab"><b>Vocabulary:</b> <code>structure=INVERTED_5P_SWITCH</code></p>
+</section>
+<section id="t14">
+<h2><span class="n">14</span>Templated local insertions (local chimeric L1) <span class="badge in">in scope</span></h2>
+<p>A non-L1 segment is copied into the L1 during integration, giving a chimeric L1 that duplicates a
+    small genomic segment. Zumalave et al. report templates typically shorter than 250 bp lying within 15 bp
+    of the insertion site, and favour a model in which the growing cDNA leaves the L1 RNA and anneals to
+    nearby homologous DNA (akin to synthesis-dependent strand annealing). In reads the extra segment is a clip
+    that maps back to the immediate neighbourhood, followed by L1. Where in the insert the segment sits varies;
+    the figure draws it at the 5′ end.</p>
+<figure id="f14"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 156" role="img" aria-labelledby="f14-t"><title id="f14-t">Templated local insertion: the 5′ clip first matches nearby reference sequence, then continues into L1.</title>
+<text class="lt" x="10" y="15.0">insertion allele — L1 with a templated local segment (tag TEMPLATED_LOCAL)</text>
+<text class="mk" x="95.3" y="33.0">clip maps back next to the site (often inverted)</text>
+<line class="mkl" x1="243.1" y1="35.0" x2="243.1" y2="39.0"/>
+<rect class="k-flank" x="10.0" y="48.0" width="161.4" height="10"/>
+<rect class="k-tsd" x="171.4" y="42.0" width="35.9" height="22"/>
+<text class="itd" text-anchor="middle" x="189.3" y="56.3">TSD</text>
+<polygon class="k-local" points="207.2,53.0 219.2,44.0 279.0,44.0 279.0,62.0 219.2,62.0"/>
+<polygon class="k-l1" points="279.0,40.0 535.9,40.0 547.9,53.0 535.9,66.0 279.0,66.0"/>
+<text class="it" x="284.0" y="56.5">5′</text>
+<text class="it" x="525.9" y="56.5">3′</text>
+<rect class="k-polya" x="547.9" y="45.0" width="44.8" height="16"/>
+<text class="it" text-anchor="middle" x="570.3" y="56.3">A(n)</text>
+<rect class="k-tsd" x="592.8" y="42.0" width="35.9" height="22"/>
+<text class="itd" text-anchor="middle" x="610.7" y="56.3">TSD</text>
+<rect class="k-flank" x="628.6" y="48.0" width="161.4" height="10"/>
+<text class="bl" x="10.0" y="83.0">site (template origin nearby)</text>
+<line class="mkl" x1="243.1" y1="67.0" x2="243.1" y2="88.0"/>
+<text class="bl" x="172.5" y="97.0">local copy (&lt; 250 bp)</text>
+<text class="bl" x="406.7" y="83.0">L1</text>
+<text class="lt2" x="10" y="112.0">short reads</text>
+<line class="pld" x1="167.2" y1="124.0" x2="309.0" y2="124.0"/>
+<rect class="r-al" x="105.2" y="120.0" width="62.0" height="8"/>
+<polygon class="rh" points="167.2,120.0 171.2,124.0 167.2,128.0"/>
+<rect class="r-l1" x="309.0" y="120.0" width="62.0" height="8"/>
+<polygon class="rh" points="309.0,120.0 305.0,124.0 309.0,128.0"/>
+<rect class="r-al" x="170.0" y="133.0" width="1.3" height="8"/>
+<rect class="r-tsd" x="171.4" y="133.0" width="35.9" height="8"/>
+<rect class="r-local" x="207.2" y="133.0" width="24.8" height="8"/>
+<polygon class="rh" points="232.0,133.0 236.0,137.0 232.0,141.0"/>
+<rect class="r-local" x="248.0" y="133.0" width="31.0" height="8"/>
+<rect class="r-l1" x="279.0" y="133.0" width="31.0" height="8"/>
+<polygon class="rh" points="310.0,133.0 314.0,137.0 310.0,141.0"/>
+<line class="pl" x1="611.4" y1="124.0" x2="724.4" y2="124.0"/>
+<rect class="r-polya" x="549.4" y="120.0" width="43.4" height="8"/>
+<rect class="r-tsd" x="592.8" y="120.0" width="18.6" height="8"/>
+<polygon class="rh" points="611.4,120.0 615.4,124.0 611.4,128.0"/>
+<rect class="r-al" x="724.4" y="120.0" width="62.0" height="8"/>
+<polygon class="rh" points="724.4,120.0 720.4,124.0 724.4,128.0"/>
+<rect class="r-polya" x="561.8" y="133.0" width="31.0" height="8"/>
+<rect class="r-tsd" x="592.8" y="133.0" width="31.0" height="8"/>
+<polygon class="rh" points="623.8,133.0 627.8,137.0 623.8,141.0"/>
+</svg><figcaption>Templated local insertion: the 5′ clip first matches nearby reference sequence, then continues into L1.</figcaption></figure>
+<h3>Reported frequency</h3><p class="freq">Zumalave 2026: 22 events among ~3,600 solo-L1s (&lt;1%).</p>
+<h3>How PEAR-TREE detects it</h3><ul class='pts'><li>annotate: tag <code>TEMPLATED_LOCAL</code> when a non-element segment of the insert (typically < 250 bp) maps within 15 bp of the site</li><li>must not trigger the fold-back artefact penalty: the clip continues into element sequence and the 3′ end carries poly-A + TSD</li></ul>
+<p class="vocab"><b>Vocabulary:</b> <code>tags=TEMPLATED_LOCAL</code></p>
+</section>
+<section id="t15">
+<h2><span class="n">15</span>Co-inserted local pre-mRNA <span class="badge in">in scope</span></h2>
+<p>The reverse transcriptase switches from the L1 RNA to a pre-mRNA transcribed near the insertion
+    site and co-inserts part of it, introns included. Unlike a processed pseudogene the co-inserted piece is
+    unspliced and comes from a gene next to the site.</p>
+<figure id="f15"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 156" role="img" aria-labelledby="f15-t"><title id="f15-t">Co-inserted pre-mRNA: the 5′ part of the insert maps to an exon and intron of a nearby gene.</title>
+<text class="lt" x="10" y="15.0">insertion allele — co-inserted local pre-mRNA (tag PREMRNA_COINSERT)</text>
+<text class="mk" x="207.9" y="33.0">RT template switch L1 RNA → nearby pre-mRNA</text>
+<line class="mkl" x1="340.4" y1="35.0" x2="340.4" y2="39.0"/>
+<rect class="k-flank" x="10.0" y="48.0" width="128.5" height="10"/>
+<rect class="k-tsd" x="138.5" y="42.0" width="36.7" height="22"/>
+<text class="itd" text-anchor="middle" x="156.8" y="56.3">TSD</text>
+<polygon class="k-exon" points="175.2,43.0 236.6,43.0 248.6,53.0 236.6,63.0 175.2,63.0"/>
+<rect class="k-intron" x="248.6" y="47.0" width="91.8" height="12"/>
+<text class="itd" text-anchor="middle" x="294.5" y="56.3">intron</text>
+<polygon class="k-l1" points="340.4,40.0 566.9,40.0 578.9,53.0 566.9,66.0 340.4,66.0"/>
+<text class="it" x="345.4" y="56.5">5′</text>
+<text class="it" x="556.9" y="56.5">3′</text>
+<rect class="k-polya" x="578.9" y="45.0" width="45.9" height="16"/>
+<text class="it" text-anchor="middle" x="601.9" y="56.3">A(n)</text>
+<rect class="k-tsd" x="624.8" y="42.0" width="36.7" height="22"/>
+<text class="itd" text-anchor="middle" x="643.2" y="56.3">TSD</text>
+<rect class="k-flank" x="661.5" y="48.0" width="128.5" height="10"/>
+<text class="bl" x="10.0" y="83.0">site, inside/near a transcribed gene</text>
+<line class="mkl" x1="211.9" y1="67.0" x2="211.9" y2="88.0"/>
+<text class="bl" x="198.4" y="97.0">exon</text>
+<text class="bl" x="274.3" y="83.0">intron</text>
+<text class="bl" x="452.9" y="83.0">L1</text>
+<text class="lt2" x="10" y="112.0">short reads</text>
+<line class="pld" x1="145.2" y1="124.0" x2="258.6" y2="124.0"/>
+<rect class="r-al" x="83.2" y="120.0" width="55.3" height="8"/>
+<rect class="r-tsd" x="138.5" y="120.0" width="6.7" height="8"/>
+<polygon class="rh" points="145.2,120.0 149.2,124.0 145.2,128.0"/>
+<rect class="r-intron" x="258.6" y="120.0" width="62.0" height="8"/>
+<polygon class="rh" points="258.6,120.0 254.6,124.0 258.6,128.0"/>
+<rect class="r-tsd" x="138.5" y="133.0" width="36.7" height="8"/>
+<rect class="r-exon" x="175.2" y="133.0" width="24.8" height="8"/>
+<polygon class="rh" points="200.0,133.0 204.0,137.0 200.0,141.0"/>
+<rect class="r-exon" x="217.6" y="133.0" width="31.0" height="8"/>
+<rect class="r-intron" x="248.6" y="133.0" width="31.0" height="8"/>
+<polygon class="rh" points="279.6,133.0 283.6,137.0 279.6,141.0"/>
+<rect class="r-intron" x="309.4" y="133.0" width="31.0" height="8"/>
+<rect class="r-l1" x="340.4" y="133.0" width="31.0" height="8"/>
+<polygon class="rh" points="371.4,133.0 375.4,137.0 371.4,141.0"/>
+<rect class="r-polya" x="593.8" y="120.0" width="31.0" height="8"/>
+<rect class="r-tsd" x="624.8" y="120.0" width="31.0" height="8"/>
+<polygon class="rh" points="655.8,120.0 659.8,124.0 655.8,128.0"/>
+</svg><figcaption>Co-inserted pre-mRNA: the 5′ part of the insert maps to an exon and intron of a nearby gene.</figcaption></figure>
+<h3>Reported frequency</h3><p class="freq">Nam 2023: a single event (in a clone from an adenoma) among ~1,200 resolved insertions.</p>
+<h3>How PEAR-TREE detects it</h3><ul class='pts'><li>annotate: tag <code>PREMRNA_COINSERT</code> when the 5′ part of the insert maps to a gene within the neighbourhood and spans an exon–intron boundary (unspliced); distinct from <code>EXON_JUNCTION</code></li></ul>
+<p class="vocab"><b>Vocabulary:</b> <code>tags=PREMRNA_COINSERT</code></p>
+</section>
+<section id="t16">
+<h2><span class="n">16</span>Fold-back inverted duplication 5′ of the target site <span class="badge in">in scope</span></h2>
+<p>After integration, extra DNA synthesis at the 5′ end copies a short stretch of upstream flank
+    back on itself, leaving an inverted duplication of 52–220 bp between the 5′ TSD and the L1. Its 5′ clip
+    is therefore the reverse complement of the adjacent reference — the same as a fold-back artefact —
+    but it is followed by L1 and the 3′ end carries a normal poly-A and TSD.</p>
+<figure id="f16"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 169" role="img" aria-labelledby="f16-t"><title id="f16-t">Fold-back inverted duplication: reverse-complement local clip at the 5′ junction, then L1.</title>
+<text class="lt" x="10" y="15.0">insertion allele — fold-back inverted duplication 5′ of the site (tag FOLDBACK_INVDUP_5P)</text>
+<text class="mk" x="47.6" y="33.0">clip = reverse complement of adjacent reference</text>
+<line class="mkl" x1="192.3" y1="35.0" x2="192.3" y2="52.0"/>
+<text class="mk" x="192.0" y="46.0">L1 continues beyond the fold-back</text>
+<line class="mkl" x1="293.6" y1="48.0" x2="293.6" y2="52.0"/>
+<rect class="k-flank" x="10.0" y="61.0" width="141.8" height="10"/>
+<rect class="k-tsd" x="151.8" y="55.0" width="40.5" height="22"/>
+<text class="itd" text-anchor="middle" x="172.1" y="69.3">TSD</text>
+<polygon class="k-local" points="192.3,66.0 204.3,57.0 293.6,57.0 293.6,75.0 204.3,75.0"/>
+<polygon class="k-l1" points="293.6,53.0 545.0,53.0 557.0,66.0 545.0,79.0 293.6,79.0"/>
+<text class="it" x="298.6" y="69.5">5′</text>
+<text class="it" x="535.0" y="69.5">3′</text>
+<rect class="k-polya" x="557.0" y="58.0" width="50.6" height="16"/>
+<text class="it" text-anchor="middle" x="582.3" y="69.3">A(n)</text>
+<rect class="k-tsd" x="607.7" y="55.0" width="40.5" height="22"/>
+<text class="itd" text-anchor="middle" x="627.9" y="69.3">TSD</text>
+<rect class="k-flank" x="648.2" y="61.0" width="141.8" height="10"/>
+<text class="bl" x="13.7" y="96.0">upstream segment S →</text>
+<line class="mkl" x1="243.0" y1="80.0" x2="243.0" y2="101.0"/>
+<text class="bl" x="145.5" y="110.0">S′ (inverted copy, 52–220 bp)</text>
+<text class="bl" x="418.6" y="96.0">L1</text>
+<text class="lt2" x="10" y="125.0">short reads</text>
+<rect class="r-tsd" x="158.2" y="133.0" width="34.1" height="8"/>
+<rect class="r-local" x="192.3" y="133.0" width="27.9" height="8"/>
+<polygon class="rh" points="220.2,133.0 224.2,137.0 220.2,141.0"/>
+<rect class="r-local" x="262.6" y="133.0" width="31.0" height="8"/>
+<rect class="r-l1" x="293.6" y="133.0" width="31.0" height="8"/>
+<polygon class="rh" points="324.6,133.0 328.6,137.0 324.6,141.0"/>
+<line class="pl" x1="626.3" y1="137.0" x2="728.0" y2="137.0"/>
+<rect class="r-polya" x="564.3" y="133.0" width="43.4" height="8"/>
+<rect class="r-tsd" x="607.7" y="133.0" width="18.6" height="8"/>
+<polygon class="rh" points="626.3,133.0 630.3,137.0 626.3,141.0"/>
+<rect class="r-al" x="728.0" y="133.0" width="62.0" height="8"/>
+<polygon class="rh" points="728.0,133.0 724.0,137.0 728.0,141.0"/>
+<rect class="r-polya" x="576.7" y="146.0" width="31.0" height="8"/>
+<rect class="r-tsd" x="607.7" y="146.0" width="31.0" height="8"/>
+<polygon class="rh" points="638.7,146.0 642.7,150.0 638.7,154.0"/>
+</svg><figcaption>Fold-back inverted duplication: reverse-complement local clip at the 5′ junction, then L1.</figcaption></figure>
+<h3>Reported frequency</h3><p class="freq">Nam 2023: 3 events (0.3%) plus 1 combined with a 5′ inversion (0.1%) among ~1,200.</p>
+<h3>How PEAR-TREE detects it</h3><ul class='pts'><li>annotate: tag <code>FOLDBACK_INVDUP_5P</code>; the score's “clip identical to the adjacent reference” penalty applies only when the clip does not continue into element sequence and there is no TPRT 3′ end</li></ul>
+<p class="vocab"><b>Vocabulary:</b> <code>tags=FOLDBACK_INVDUP_5P</code></p>
+</section>
+<section id="tA">
+<h2><span class="n">A</span>Target-site deletion instead of a TSD <span class="badge in">in scope</span></h2>
+<p>If the second nick lies upstream of the first, or the overhang is trimmed, the insertion is
+    flanked by a small deletion of the target rather than a duplication. The 5′ and 3′ junction positions
+    are then separated by the deleted bases instead of overlapping.</p>
+<figure id="fA"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 253" role="img" aria-labelledby="fA-t"><title id="fA-t">Target-site deletion: junctions do not overlap; the few deleted bases are absent from the insertion allele.</title>
+<text class="lt" x="10" y="15.0">reference</text>
+<rect class="k-flank" x="10.0" y="48.0" width="354.5" height="10"/>
+<line class="gapl" x1="364.5" y1="53.0" x2="435.5" y2="53.0"/>
+<rect class="gapr" x="365.5" y="44.0" width="68.9" height="18" rx="3"/>
+<rect class="k-flank" x="435.5" y="48.0" width="354.5" height="10"/>
+<text class="bl" x="346.2" y="83.0">target (deleted)</text>
+<line class="sep" x1="10" y1="96.0" x2="790" y2="96.0"/>
+<text class="lt" x="10" y="113.0">insertion allele — target-site deletion (tag TSD_DELETION)</text>
+<text class="mk" x="76.5" y="131.0">no duplicated sequence: left and right flanks abut the insert</text>
+<line class="mkl" x1="264.3" y1="133.0" x2="264.3" y2="137.0"/>
+<rect class="k-flank" x="10.0" y="146.0" width="254.3" height="10"/>
+<polygon class="k-l1" points="264.3,138.0 472.8,138.0 484.8,151.0 472.8,164.0 264.3,164.0"/>
+<text class="it" x="269.3" y="154.5">5′</text>
+<text class="it" x="462.8" y="154.5">3′</text>
+<rect class="k-polya" x="484.8" y="143.0" width="50.9" height="16"/>
+<text class="it" text-anchor="middle" x="510.2" y="154.3">A(n)</text>
+<rect class="k-flank" x="535.7" y="146.0" width="254.3" height="10"/>
+<text class="bl" x="367.8" y="181.0">L1</text>
+<text class="lt2" x="10" y="196.0">short reads</text>
+<line class="pl" x1="132.7" y1="208.0" x2="245.7" y2="208.0"/>
+<rect class="r-al" x="245.7" y="204.0" width="18.6" height="8"/>
+<rect class="r-l1" x="264.3" y="204.0" width="43.4" height="8"/>
+<polygon class="rh" points="245.7,204.0 241.7,208.0 245.7,212.0"/>
+<rect class="r-al" x="70.7" y="204.0" width="62.0" height="8"/>
+<polygon class="rh" points="132.7,204.0 136.7,208.0 132.7,212.0"/>
+<line class="pld" x1="224.3" y1="221.0" x2="334.3" y2="221.0"/>
+<rect class="r-al" x="162.3" y="217.0" width="62.0" height="8"/>
+<polygon class="rh" points="224.3,217.0 228.3,221.0 224.3,225.0"/>
+<rect class="r-l1" x="334.3" y="217.0" width="62.0" height="8"/>
+<polygon class="rh" points="334.3,217.0 330.3,221.0 334.3,225.0"/>
+<rect class="r-al" x="230.2" y="230.0" width="34.1" height="8"/>
+<rect class="r-l1" x="264.3" y="230.0" width="27.9" height="8"/>
+<polygon class="rh" points="292.2,230.0 296.2,234.0 292.2,238.0"/>
+<line class="pld" x1="475.7" y1="208.0" x2="575.7" y2="208.0"/>
+<rect class="r-l1" x="413.7" y="204.0" width="62.0" height="8"/>
+<polygon class="rh" points="475.7,204.0 479.7,208.0 475.7,212.0"/>
+<rect class="r-al" x="575.7" y="204.0" width="62.0" height="8"/>
+<polygon class="rh" points="575.7,204.0 571.7,208.0 575.7,212.0"/>
+<line class="pl" x1="554.3" y1="221.0" x2="667.3" y2="221.0"/>
+<rect class="r-polya" x="492.3" y="217.0" width="43.4" height="8"/>
+<rect class="r-al" x="535.7" y="217.0" width="18.6" height="8"/>
+<polygon class="rh" points="554.3,217.0 558.3,221.0 554.3,225.0"/>
+<rect class="r-al" x="667.3" y="217.0" width="62.0" height="8"/>
+<polygon class="rh" points="667.3,217.0 663.3,221.0 667.3,225.0"/>
+<rect class="r-polya" x="504.7" y="230.0" width="31.0" height="8"/>
+<rect class="r-al" x="535.7" y="230.0" width="31.0" height="8"/>
+<polygon class="rh" points="566.7,230.0 570.7,234.0 566.7,238.0"/>
+</svg><figcaption>Target-site deletion: junctions do not overlap; the few deleted bases are absent from the insertion allele.</figcaption></figure>
+<h3>Reported frequency</h3><p class="freq">Common enough that Nam 2023 plot negative target-site lengths alongside TSDs and Zumalave call it fairly frequent; neither source gives a fraction in the text.</p>
+<h3>How PEAR-TREE detects it</h3><ul class='pts'><li>annotate: tag <code>TSD_DELETION</code>, <code>tsd_len</code> negative</li><li>score: weak positive for deletions ≤ 20 bp (strong positive is reserved for TSD 4–25 bp with identity)</li></ul>
+<p class="vocab"><b>Vocabulary:</b> <code>tags=TSD_DELETION</code></p>
+</section>
+<section id="tB">
+<h2><span class="n">B</span>Endonuclease-independent insertions <span class="badge in">in scope</span></h2>
+<p>L1 can use a pre-existing break (or dysfunctional telomere) instead of its endonuclease nick. The
+    hallmarks disappear: no TSD, no EN motif, and the element is often truncated at both ends (no poly-A).</p>
+<figure id="fB"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 142" role="img" aria-labelledby="fB-t"><title id="fB-t">EN-independent insertion: L1 sequence with neither TSD nor poly-A.</title>
+<text class="lt" x="10" y="15.0">insertion allele — EN-independent insertion (tag EN_INDEPENDENT)</text>
+<text class="mk" x="263.6" y="33.0">no TSD</text>
+<line class="mkl" x1="282.1" y1="35.0" x2="282.1" y2="39.0"/>
+<text class="mk" x="450.1" y="33.0">no poly-A, no EN motif</text>
+<line class="mkl" x1="517.9" y1="35.0" x2="517.9" y2="39.0"/>
+<rect class="k-flank" x="10.0" y="48.0" width="272.1" height="10"/>
+<polygon class="k-l1" points="282.1,40.0 505.9,40.0 517.9,53.0 505.9,66.0 282.1,66.0"/>
+<text class="it" x="287.1" y="56.5">5′</text>
+<text class="it" x="495.9" y="56.5">3′</text>
+<rect class="k-flank" x="517.9" y="48.0" width="272.1" height="10"/>
+<text class="bl" x="10.0" y="83.0">pre-existing DSB / dysfunctional telomere</text>
+<text class="bl" x="299.2" y="83.0">L1, truncated at 5′ AND 3′ end</text>
+<text class="lt2" x="10" y="98.0">short reads</text>
+<line class="pld" x1="242.1" y1="110.0" x2="332.1" y2="110.0"/>
+<rect class="r-al" x="180.1" y="106.0" width="62.0" height="8"/>
+<polygon class="rh" points="242.1,106.0 246.1,110.0 242.1,114.0"/>
+<rect class="r-l1" x="332.1" y="106.0" width="62.0" height="8"/>
+<polygon class="rh" points="332.1,106.0 328.1,110.0 332.1,114.0"/>
+<rect class="r-al" x="251.1" y="119.0" width="31.0" height="8"/>
+<rect class="r-l1" x="282.1" y="119.0" width="31.0" height="8"/>
+<polygon class="rh" points="313.1,119.0 317.1,123.0 313.1,127.0"/>
+<line class="pld" x1="477.9" y1="110.0" x2="567.9" y2="110.0"/>
+<rect class="r-l1" x="415.9" y="106.0" width="62.0" height="8"/>
+<polygon class="rh" points="477.9,106.0 481.9,110.0 477.9,114.0"/>
+<rect class="r-al" x="567.9" y="106.0" width="62.0" height="8"/>
+<polygon class="rh" points="567.9,106.0 563.9,110.0 567.9,114.0"/>
+<rect class="r-l1" x="486.9" y="119.0" width="31.0" height="8"/>
+<rect class="r-al" x="517.9" y="119.0" width="31.0" height="8"/>
+<polygon class="rh" points="548.9,119.0 552.9,123.0 548.9,127.0"/>
+</svg><figcaption>EN-independent insertion: L1 sequence with neither TSD nor poly-A.</figcaption></figure>
+<h3>Reported frequency</h3><p class="freq">PCAWG: 7/90 (8%) of L1-mediated deletions. Somatic rate for plain insertions is unknown.</p>
+<h3>How PEAR-TREE detects it</h3><ul class='pts'><li>annotate: tag <code>EN_INDEPENDENT</code> when there is no TSD, no poly-A and both ends are truncated</li><li>score: few TPRT points by construction; such calls stay <code>UNCERTAIN</code> unless independent-fragment and colony evidence is strong</li></ul>
+<p class="vocab"><b>Vocabulary:</b> <code>tags=EN_INDEPENDENT</code></p>
+</section><section id="artefacts"><h2><span class="n">✕</span>Artefacts that mimic MEIs <span class="badge art">score negative</span></h2>
+<p>The TPRT point system exists to separate these from the types above. None of them produces the full
+combination of a TSD with identity, an EN motif at the nick, a strand-consistent poly-A, concordant 5′/3′
+element classes and ≥ 2 independent fragments.</p><section id="a1"><h3 style="text-transform:none;letter-spacing:0;color:var(--ink);font-size:1.1rem">Ligation, PCR and MDA chimeras</h3>
+<p>Library ligation, PCR template switching and (for single cells) whole-genome amplification join
+    unrelated molecules. A genomic fragment fused to an L1 looks like an insertion junction. Evrony et al.
+    showed that 7 of 13 PCR-validated candidates in an earlier single-neuron study were such chimeras: they had
+    no TSD, could start at any L1 coordinate (including inactive or truncated copies), and 5′ and 3′
+    junctions from <i>different</i> L1s had been paired as one insertion. A-tailing during library prep can
+    add a short poly-A at the join.</p><figure id="fa1"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 258" role="img" aria-labelledby="fa1-t"><title id="fa1-t">Chimera: a single junction, supported by one molecule, with no TSD and no EN motif.</title>
+<text class="lt" x="10" y="15.0">library molecule only — ligation / PCR / MDA chimera</text>
+<text class="mk" x="327.7" y="33.0">one junction · no TSD · no EN motif</text>
+<line class="mkl" x1="435.5" y1="35.0" x2="435.5" y2="39.0"/>
+<rect class="k-flank" x="10.0" y="48.0" width="425.5" height="10"/>
+<polygon class="k-l1" points="435.5,40.0 778.0,40.0 790.0,53.0 778.0,66.0 435.5,66.0"/>
+<text class="it" x="440.5" y="56.5">5′</text>
+<text class="it" x="768.0" y="56.5">3′</text>
+<text class="bl" x="125.3" y="83.0">genomic fragment from locus X</text>
+<text class="bl" x="478.3" y="83.0">L1 piece from elsewhere (any coordinate)</text>
+<text class="lt2" x="10" y="98.0">short reads</text>
+<rect class="r-al" x="404.5" y="106.0" width="31.0" height="8"/>
+<rect class="r-l1" x="435.5" y="106.0" width="31.0" height="8"/>
+<polygon class="rh" points="466.5,106.0 470.5,110.0 466.5,114.0"/>
+<line class="sep" x1="10" y1="127.0" x2="790" y2="127.0"/>
+<text class="lt" x="10" y="144.0">A-tailed ligation chimera</text>
+<text class="mk" x="272.5" y="162.0">short A-tail at the join mimics a TPRT poly-A</text>
+<line class="mkl" x1="411.1" y1="164.0" x2="411.1" y2="168.0"/>
+<rect class="k-flank" x="10.0" y="177.0" width="401.1" height="10"/>
+<rect class="k-polya" x="411.1" y="174.0" width="44.6" height="16"/>
+<text class="it" text-anchor="middle" x="433.4" y="185.3">A</text>
+<polygon class="k-l1" points="455.7,169.0 778.0,169.0 790.0,182.0 778.0,195.0 455.7,195.0"/>
+<text class="it" x="460.7" y="185.5">5′</text>
+<text class="it" x="768.0" y="185.5">3′</text>
+<text class="bl" x="140.0" y="212.0">fragment from locus X</text>
+<text class="bl" x="555.7" y="212.0">L1 or other fragment</text>
+<text class="lt2" x="10" y="227.0">short reads</text>
+<rect class="r-al" x="373.9" y="235.0" width="37.2" height="8"/>
+<rect class="r-polya" x="411.1" y="235.0" width="24.8" height="8"/>
+<polygon class="rh" points="435.9,235.0 439.9,239.0 435.9,243.0"/>
+</svg><figcaption>Chimera: a single junction, supported by one molecule, with no TSD and no EN motif.</figcaption></figure><p><b>Separating it:</b></p><ul class='pts'><li>independence rule: one fragment (plus its PCR duplicates) never makes ≥ 2 independent fragments</li><li><code>CHIMERIC_ENDS</code> when 5′ and 3′ ends come from incompatible elements</li><li>no TSD, no EN motif, no poly-A or only a short A-tail → few points; cross-sample identical fragments score negative</li></ul></section><section id="a2"><h3 style="text-transform:none;letter-spacing:0;color:var(--ink);font-size:1.1rem">Poly-A slippage at reference A-tracts</h3>
+<p>Polymerase slippage and aligner behaviour at long reference A-tracts (typically the tails of
+    reference Alus and L1s) produce reads soft-clipped right where the tract ends, with a clip that is
+    simply more A. This mimics the 3′ junction of a real insertion and is the main source of discovery
+    false positives in PEAR-TREE.</p><figure id="fa2"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 155" role="img" aria-labelledby="fa2-t"><title id="fa2-t">Poly-A slippage: clipped reads pile up at the end of a reference A-tract; no insertion exists.</title>
+<text class="lt" x="10" y="15.0">reference (no insertion) — Alu with its own A-tract</text>
+<text class="mk" x="416.4" y="33.0">soft-clips pile up here; clip = extra A</text>
+<line class="mkl" x1="536.5" y1="35.0" x2="536.5" y2="39.0"/>
+<rect class="k-flank" x="10.0" y="48.0" width="234.0" height="10"/>
+<polygon class="k-alu" points="244.0,40.0 446.5,40.0 458.5,53.0 446.5,66.0 244.0,66.0"/>
+<text class="it" x="249.0" y="56.5">5′</text>
+<text class="it" x="436.5" y="56.5">3′</text>
+<rect class="k-polya" x="458.5" y="45.0" width="78.0" height="16"/>
+<text class="it" text-anchor="middle" x="497.5" y="56.3">ref A(n)</text>
+<rect class="k-flank" x="536.5" y="48.0" width="253.5" height="10"/>
+<text class="bl" x="304.2" y="83.0">reference AluY</text>
+<text class="lt2" x="10" y="98.0">short reads</text>
+<rect class="r-polya" x="510.5" y="106.0" width="26.0" height="8"/>
+<rect class="r-al" x="536.5" y="106.0" width="36.0" height="8"/>
+<polygon class="rh" points="572.5,106.0 576.5,110.0 572.5,114.0"/>
+<rect class="r-polya" x="518.5" y="119.0" width="18.0" height="8"/>
+<rect class="r-al" x="536.5" y="119.0" width="44.0" height="8"/>
+<polygon class="rh" points="580.5,119.0 584.5,123.0 580.5,127.0"/>
+<rect class="r-polya" x="522.5" y="132.0" width="14.0" height="8"/>
+<rect class="r-al" x="536.5" y="132.0" width="48.0" height="8"/>
+<polygon class="rh" points="584.5,132.0 588.5,136.0 584.5,140.0"/>
+</svg><figcaption>Poly-A slippage: clipped reads pile up at the end of a reference A-tract; no insertion exists.</figcaption></figure><p><b>Separating it:</b></p><ul class='pts'><li>score: poly-A at both junctions or a reference A-rich context is negative</li><li>no element sequence beyond the poly-A, no TSD, recurrence across many unrelated loci</li></ul></section><section id="a3"><h3 style="text-transform:none;letter-spacing:0;color:var(--ink);font-size:1.1rem">Mismapping among same-subfamily elements</h3>
+<p>Reads from a polymorphic or non-reference L1HS (or Alu) copy align to a near-identical reference copy
+    and are soft-clipped where the two copies' flanks diverge. The clip is the flank of the other copy, not an
+    insertion; a germline polymorphism can thus look somatic at the wrong locus.</p><figure id="fa3"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 155" role="img" aria-labelledby="fa3-t"><title id="fa3-t">Mismapping: clips at the end of a reference L1HS that are the flank of a paralogous copy.</title>
+<text class="lt" x="10" y="15.0">reference — L1HS copy P (paralog of an active, non-reference copy Q)</text>
+<text class="mk" x="427.5" y="33.0">clip = flank of Q (reads of Q placed on P)</text>
+<line class="mkl" x1="556.9" y1="35.0" x2="556.9" y2="39.0"/>
+<rect class="k-flank" x="10.0" y="48.0" width="233.1" height="10"/>
+<polygon class="k-l1" points="243.1,40.0 500.1,40.0 512.1,53.0 500.1,66.0 243.1,66.0"/>
+<text class="it" x="248.1" y="56.5">5′</text>
+<text class="it" x="490.1" y="56.5">3′</text>
+<rect class="k-polya" x="512.1" y="45.0" width="44.8" height="16"/>
+<text class="it" text-anchor="middle" x="534.5" y="56.3">A(n)</text>
+<rect class="k-flank" x="556.9" y="48.0" width="233.1" height="10"/>
+<text class="bl" x="93.0" y="83.0">locus of P</text>
+<text class="bl" x="323.8" y="83.0">reference L1HS P</text>
+<text class="lt2" x="10" y="98.0">short reads</text>
+<rect class="r-al" x="506.9" y="106.0" width="50.0" height="8"/>
+<rect class="r-clip2" x="556.9" y="106.0" width="12.0" height="8"/>
+<polygon class="rh" points="568.9,106.0 572.9,110.0 568.9,114.0"/>
+<rect class="r-al" x="516.9" y="119.0" width="40.0" height="8"/>
+<rect class="r-clip2" x="556.9" y="119.0" width="22.0" height="8"/>
+<polygon class="rh" points="578.9,119.0 582.9,123.0 578.9,127.0"/>
+<rect class="r-al" x="522.9" y="132.0" width="34.0" height="8"/>
+<rect class="r-clip2" x="556.9" y="132.0" width="28.0" height="8"/>
+<polygon class="rh" points="584.9,132.0 588.9,136.0 584.9,140.0"/>
+</svg><figcaption>Mismapping: clips at the end of a reference L1HS that are the flank of a paralogous copy.</figcaption></figure><p><b>Separating it:</b></p><ul class='pts'><li>clip anchored inside a reference element of the same subfamily; flank clip maps elsewhere</li><li>recurrence across colonies/patients and cross-sample identical fragments score negative</li></ul></section><section id="a4"><h3 style="text-transform:none;letter-spacing:0;color:var(--ink);font-size:1.1rem">Fold-back palindromes</h3>
+<p>Inverted repeats in the reference and hairpin library artefacts produce reads whose clip is the reverse
+    complement of the adjacent reference. Without element sequence, poly-A or TSD, this is an artefact; with
+    them it may be a real <a href="#t16">fold-back inverted duplication</a>.</p><figure id="fa4"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 142" role="img" aria-labelledby="fa4-t"><title id="fa4-t">Fold-back: clip = reverse complement of the neighbouring reference, nothing else.</title>
+<text class="lt" x="10" y="15.0">reference / library — inverted repeat or hairpin</text>
+<text class="mk" x="60.3" y="33.0">clip = reverse complement of adjacent reference; no element, no poly-A</text>
+<line class="mkl" x1="275.9" y1="35.0" x2="275.9" y2="39.0"/>
+<rect class="k-flank" x="10.0" y="48.0" width="265.9" height="10"/>
+<polygon class="k-local" points="275.9,44.0 352.5,44.0 364.5,53.0 352.5,62.0 275.9,62.0"/>
+<rect class="k-flank" x="364.5" y="48.0" width="70.9" height="10"/>
+<polygon class="k-local" points="435.5,53.0 447.5,44.0 524.1,44.0 524.1,62.0 447.5,62.0"/>
+<rect class="k-flank" x="524.1" y="48.0" width="265.9" height="10"/>
+<text class="bl" x="303.4" y="83.0">arm →</text>
+<text class="bl" x="463.0" y="83.0">← arm</text>
+<text class="lt2" x="10" y="98.0">short reads</text>
+<rect class="r-al" x="235.9" y="106.0" width="40.0" height="8"/>
+<rect class="r-local" x="275.9" y="106.0" width="18.0" height="8"/>
+<polygon class="rh" points="293.9,106.0 297.9,110.0 293.9,114.0"/>
+<rect class="r-al" x="245.9" y="119.0" width="30.0" height="8"/>
+<rect class="r-local" x="275.9" y="119.0" width="25.0" height="8"/>
+<polygon class="rh" points="300.9,119.0 304.9,123.0 300.9,127.0"/>
+</svg><figcaption>Fold-back: clip = reverse complement of the neighbouring reference, nothing else.</figcaption></figure><p><b>Separating it:</b></p><ul class='pts'><li>score: “clip identical to the adjacent reference (fold-back)” is negative unless the clip continues into element sequence and the 3′ end has TPRT hallmarks</li></ul></section></section><section id="summary"><h2>Summary</h2>
+<p class="note">Frequency column abbreviates the sources: Z = Zumalave 2026, PCAWG = Rodriguez-Martin 2020, Nam = Nam 2023; see each section for denominators and the other sources.</p>
+<div class="tbl"><table><thead><tr><th>#</th><th>type</th><th>short-read signature</th><th>vocabulary</th><th>frequency</th><th>scope</th></tr></thead>
+<tbody><tr><td><a href='#t1'>1</a></td><td>Solo-L1 (full-length, 5′-truncated, 5′-inverted)</td><td>L1 clip at 5′ and A(n) clip at 3′, TSD between them; 5′ clip strand flips for inverted copies</td><td><code>element=L1; structure=FULL_LENGTH | TRUNCATED_5P | INVERTED_5P | 5P_UNRESOLVED</code></td><td>56% of events (Z); 78% (PCAWG); 89% normal colon (Nam)</td><td><span class='badge in'>in scope</span></td></tr><tr><td><a href='#t2'>2</a></td><td>Partnered 3′ transduction</td><td>3′ clip = A(n) + unique source flank; 3′ mates to the source locus</td><td><code>element=L1; tags=TD3P,TD3P_SOURCE=…</code></td><td>24% (Z); 1% normal colon (Nam)</td><td><span class='badge in'>in scope</span></td></tr><tr><td><a href='#t3'>3</a></td><td>Orphan 3′ transduction</td><td>unique-sequence clips + poly-A; mates to a source flank</td><td><code>element=ORPHAN_TD; tags=TD3P_SOURCE=…</code></td><td>11% (Z); 10% normal colon (Nam)</td><td><span class='badge in'>in scope</span></td></tr><tr><td><a href='#t4'>4</a></td><td>Alu and SVA insertions; SVA 5′ transduction</td><td>Alu/SVA clips + A(n); short insert spanned by pairs</td><td><code>element=ALU | SVA; tags=TD5P</code></td><td>Alu 2%, SVA &lt;0.1% (Z)</td><td><span class='badge in'>in scope</span></td></tr><tr><td><a href='#t5'>5</a></td><td>Processed pseudogene</td><td>clips map to a gene; exon–exon junction reads; A(n) + TSD</td><td><code>element=PSEUDOGENE; tags=EXON_JUNCTION</code></td><td>2% (Z); 1.4% (PCAWG)</td><td><span class='badge in'>in scope</span></td></tr><tr><td><a href='#t6'>6</a></td><td>Solitary poly(A/T) insertion</td><td>A(n) clips at both junctions, TSD, no element</td><td><code>element=POLYA_ONLY</code></td><td>2% (Z)</td><td><span class='badge in'>in scope</span></td></tr><tr><td><a href='#t7'>7</a></td><td>L1-mediated deletion</td><td>one-sided clusters, Mb apart, copy-number loss, no TSD</td><td><code>tags=L1_MED_DELETION</code></td><td>90 in PCAWG; 43% of RT-RGs (Z)</td><td><span class='badge in'>in scope</span></td></tr><tr><td><a href='#t8'>8</a></td><td>L1-mediated duplication, fold-back inversion and BFB initiation</td><td>same-orientation clusters into L1, copy-number gain</td><td><code>tags=L1_MED_DUPLICATION</code></td><td>9% of RT-RGs (Z); case reports (PCAWG)</td><td><span class='badge in'>in scope</span></td></tr><tr><td><a href='#t9'>9</a></td><td>Retrotransposon-mediated rearrangements (deletion-, duplication-, inversion-like)</td><td>L1 bridge between two distant breakpoints</td><td><code>tags=L1_MED_DELETION | L1_MED_DUPLICATION (inversion-/translocation-like: not called)</code></td><td>2% of events (Z)</td><td><span class='badge partial'>partly in scope</span></td></tr><tr><td><a href='#t10'>10</a></td><td>Reciprocal translocation bridged by two concurrent L1s</td><td>four one-sided junctions on two chromosomes; heteroduplicated TSD</td><td><code>— (not called)</code></td><td>13 events in 10 tumours (Z)</td><td><span class='badge out'>out of scope this round</span></td></tr><tr><td><a href='#t11'>11</a></td><td>Chimeric bridges</td><td>mosaic L1/TD bridges, one without hallmarks</td><td><code>— (not called)</code></td><td>subset of #10 (Z)</td><td><span class='badge out'>out of scope this round</span></td></tr><tr><td><a href='#t12'>12</a></td><td>Reciprocal inversions and complex events</td><td>L1 fragments at Mb-distant breakpoints with shared inversion breakpoints</td><td><code>— (not called)</code></td><td>rare, case level (Z)</td><td><span class='badge out'>out of scope this round</span></td></tr><tr><td><a href='#t13'>13</a></td><td>Twin priming with 5′ or 3′ switching</td><td>≥ 2 orientation changes / coordinate jump inside the L1 body</td><td><code>structure=INVERTED_5P_SWITCH</code></td><td>23/1,836 inverted L1s (Z)</td><td><span class='badge in'>in scope</span></td></tr><tr><td><a href='#t14'>14</a></td><td>Templated local insertions (local chimeric L1)</td><td>5′ clip = nearby reference segment then L1</td><td><code>tags=TEMPLATED_LOCAL</code></td><td>22 events (Z)</td><td><span class='badge in'>in scope</span></td></tr><tr><td><a href='#t15'>15</a></td><td>Co-inserted local pre-mRNA</td><td>5′ clip maps to an unspliced nearby transcript</td><td><code>tags=PREMRNA_COINSERT</code></td><td>1 event (Nam)</td><td><span class='badge in'>in scope</span></td></tr><tr><td><a href='#t16'>16</a></td><td>Fold-back inverted duplication 5′ of the target site</td><td>5′ clip = reverse-complement adjacent reference, then L1</td><td><code>tags=FOLDBACK_INVDUP_5P</code></td><td>0.4% normal colon (Nam)</td><td><span class='badge in'>in scope</span></td></tr><tr><td><a href='#tA'>A</a></td><td>Target-site deletion instead of a TSD</td><td>junctions do not overlap; no duplicated bases</td><td><code>tags=TSD_DELETION</code></td><td>not quantified in sources</td><td><span class='badge in'>in scope</span></td></tr><tr><td><a href='#tB'>B</a></td><td>Endonuclease-independent insertions</td><td>L1 clips, no TSD, no poly-A</td><td><code>tags=EN_INDEPENDENT</code></td><td>8% of L1-mediated deletions (PCAWG)</td><td><span class='badge in'>in scope</span></td></tr><tr><td><a href='#a1'>✕</a></td><td>Ligation, PCR and MDA chimeras</td><td>see section</td><td><code>NON_TPRT / ARTEFACT_LIKE</code></td><td>—</td><td><span class='badge art'>artefact — score negative</span></td></tr><tr><td><a href='#a2'>✕</a></td><td>Poly-A slippage at reference A-tracts</td><td>see section</td><td><code>NON_TPRT / ARTEFACT_LIKE</code></td><td>—</td><td><span class='badge art'>artefact — score negative</span></td></tr><tr><td><a href='#a3'>✕</a></td><td>Mismapping among same-subfamily elements</td><td>see section</td><td><code>NON_TPRT / ARTEFACT_LIKE</code></td><td>—</td><td><span class='badge art'>artefact — score negative</span></td></tr><tr><td><a href='#a4'>✕</a></td><td>Fold-back palindromes</td><td>see section</td><td><code>NON_TPRT / ARTEFACT_LIKE</code></td><td>—</td><td><span class='badge art'>artefact — score negative</span></td></tr></tbody></table></div></section><section id="refs"><h2>References</h2><ol class="refs"><li>Zumalave S, Santamarina M, Espasandín NP, … Rodriguez-Martin B, Tubio JMC. Synchronous L1 retrotransposition events promote chromosomal crossover early in human tumorigenesis. Science (2026), PMID 41747018; preprint bioRxiv. <a href='https://doi.org/10.1101/2024.08.27.596794'>doi:10.1101/2024.08.27.596794</a></li><li>Nam CH, Youk J, Kim JY, … Ju YS. Widespread somatic L1 retrotransposition in normal colorectal epithelium. Nature (2023). <a href='https://doi.org/10.1038/s41586-023-06046-z'>doi:10.1038/s41586-023-06046-z</a></li><li>Rodriguez-Martin B, Alvarez EG, Baez-Ortega A, … Tubio JMC. Pan-cancer analysis of whole genomes identifies driver rearrangements promoted by LINE-1 retrotransposition. Nat Genet (2020). <a href='https://doi.org/10.1038/s41588-019-0562-0'>doi:10.1038/s41588-019-0562-0</a></li><li>Tubio JMC, Li Y, Ju YS, … Campbell PJ. Extensive transduction of nonrepetitive DNA mediated by L1 retrotransposition in cancer genomes. Science 345, 1251343 (2014). <a href='https://doi.org/10.1126/science.1251343'>doi:10.1126/science.1251343</a></li><li>Ostertag EM, Kazazian HH Jr. Twin priming: a proposed mechanism for the creation of inversions in L1 retrotransposition. Genome Res 11, 2059–2065 (2001). <a href='https://doi.org/10.1101/gr.205701'>doi:10.1101/gr.205701</a></li><li>Flasch DA, Macia Á, Sánchez L, … Moran JV. Genome-wide de novo L1 retrotransposition connects endonuclease activity with replication. Cell (2019). <a href='https://doi.org/10.1016/j.cell.2019.02.050'>doi:10.1016/j.cell.2019.02.050</a></li><li>Szak ST, Pickeral OK, Makalowski W, … Boeke JD. Molecular archeology of L1 insertions in the human genome. Genome Biol 3, research0052 (2002). <a href='https://doi.org/10.1186/gb-2002-3-10-research0052'>doi:10.1186/gb-2002-3-10-research0052</a></li><li>Ewing AD, Ballinger TJ, Earl D, … Haussler D. Retrotransposition of gene transcripts leads to structural variation in mammalian genomes. Genome Biol 14, R22 (2013). <a href='https://doi.org/10.1186/gb-2013-14-3-r22'>doi:10.1186/gb-2013-14-3-r22</a></li><li>Evrony GD, Lee E, Park PJ, Walsh CA. Resolving rates of mutation in the brain using single-neuron genomics. eLife 5, e12966 (2016). <a href='https://doi.org/10.7554/eLife.12966'>doi:10.7554/eLife.12966</a></li><li>Gardner EJ, Lam VK, Harris DN, … Devine SE. The Mobile Element Locator Tool (MELT): population-scale mobile element discovery and biology. Genome Res (2017). <a href='https://doi.org/10.1101/gr.218032.116'>doi:10.1101/gr.218032.116</a></li><li>Scott EC, Gardner EJ, Masood A, … Devine SE. A hot L1 retrotransposon evades somatic repression and initiates human colorectal cancer. Genome Res (2016). <a href='https://doi.org/10.1101/gr.201814.115'>doi:10.1101/gr.201814.115</a></li><li>Brouha B, Schustak J, Badge RM, … Kazazian HH Jr. Hot L1s account for the bulk of retrotransposition in the human population. PNAS 100, 5280–5285 (2003). <a href='https://doi.org/10.1073/pnas.0831042100'>doi:10.1073/pnas.0831042100</a></li><li>Damert A, Raiz J, Horn AV, … Schumann GG. 5′-Transducing SVA retrotransposon groups spread efficiently throughout the human genome. Genome Res 19, 1992–2008 (2009). <a href='https://doi.org/10.1101/gr.093435.109'>doi:10.1101/gr.093435.109</a></li><li>Gilbert N, Lutz-Prigge S, Moran JV. Genomic deletions created upon LINE-1 retrotransposition. Cell 110, 315–325 (2002). <a href='https://doi.org/10.1016/S0092-8674(02)00828-0'>doi:10.1016/S0092-8674(02)00828-0</a></li><li>Morrish TA, Gilbert N, Myers JS, … Moran JV. DNA repair mediated by endonuclease-independent LINE-1 retrotransposition. Nat Genet 31, 159–165 (2002). <a href='https://doi.org/10.1038/ng898'>doi:10.1038/ng898</a></li></ol>
+<p class="note">Generated by <code>docs/src/make_insertion_types.py</code>; edit the script and re-run, do not edit the HTML by hand.</p></section>
+</main>
+</div>
+</body>
+</html>
