@@ -107,3 +107,19 @@ def edlib_path(query: str, target: str, k: int = -1):
         else:
             ops.append((n, code))
     return r["editDistance"], st, en + 1, ops
+
+
+def base_fraction(seq: str, base: str) -> float:
+    s = seq.upper()
+    return s.count(base.upper()) / len(s) if s else 0.0
+
+
+def low_complexity(seq: str, max_base_frac: float = 0.7, min_entropy: float = 1.5) -> bool:
+    """A homopolymer-dominated / low-entropy piece (poly-A noise, microsatellite): it cannot be
+    evidence of a specific template / transduction because it matches many places."""
+    s = seq.upper()
+    if not s:
+        return True
+    if max(s.count(b) for b in "ACGT") / len(s) >= max_base_frac:
+        return True
+    return shannon(s) < min_entropy

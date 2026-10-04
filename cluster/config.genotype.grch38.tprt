@@ -1,0 +1,40 @@
+# PEAR-TREE Rust genotype config for GRCh38 BAMs — TPRT-hallmark variant.
+#
+# = config.genotype.grch38 plus the keys that genotype the new locus kinds of the TPRT round
+# (plans/tprt_hallmarks/SPEC.md "Pairing modes and locus names"; E2E_REPORT.md "Genotyping
+# new locus kinds"). Pair with config.discovery.grch38.tprt + config.py.grch38.tprt.
+# All keys below default OFF in the binary; without them the output is byte-identical to
+# config.genotype.grch38.
+#
+# min_mapq 60: bwa-mem caps MAPQ at 60; 60 keeps uniquely-placed spanning reads only.
+# Must match 'genotyping'/'min_mapq' in config.py.grch38.tprt.
+min_mapq = 60
+
+# One-sided loci (`contig:L-oneside_L` / `contig:oneside_R-R`): score only the real junction.
+# combine_insertions leaves them out of <patient>.genotyping.txt.gz; cluster/pipeline.sh sees
+# this key and appends them (src/genotyping_contract_oneside.py ->
+# <patient>.genotyping.tprt.txt.gz) before genotyping.
+one_sided_loci = true
+# ...and skip the missing end's junction reads (a soft clip >= 5 bp ending within 50 bp of
+# the real breakpoint on the open side): their aligned part crosses the real breakpoint in
+# reference configuration, so with the open side unscored they would be false ref votes
+# (E2E: het one-sided loci read pooled VAF 0.27 without this).
+one_sided_open_window = 50
+one_sided_open_min_clip = 5
+
+# Far Bp+Bp pairs (L1-mediated deletion R < L - 30 / duplication R > L + 40, up to 50 kb):
+# depth-gate and fetch each breakpoint as its own window. Without it the whole deleted /
+# duplicated span is counted as depth (-> `high-coverage` in every colony) and a mate lying
+# inside the span can claim a spanning read's fragment. 40 = discovery tsd_max; target-site
+# deletions (<= 30 bp) and TSDs keep the legacy single window.
+split_breakpoint_span = 40
+
+# Far L1-mediated duplications longer than a read (R - L >= 150): the alt haplotype keeps
+# both reference junctions (the duplicated copy), so a het reads VAF ~1/3 and a hom ~1/2.
+# Discount one ref read per alt read before the VAF bands (wild-type colonies unchanged).
+dup_ref_discount_min_span = 150
+
+# Single-junction evidence (one-sided loci, split far pairs): each reference vote counts half.
+# The VAF bands are calibrated on TSD loci, whose alt reads come from TWO junctions while one
+# reference read spans both; one-sided and far-pair loci otherwise read het at VAF ~0.30-0.38.
+halve_single_junction_ref = true

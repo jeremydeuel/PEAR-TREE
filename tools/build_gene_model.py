@@ -20,6 +20,14 @@ Contig naming must match the title-locus contigs. GeneModel's lookup is chr-pref
     # GRCh37/hs37d5 discovery (numeric contigs):
     tools/build_gene_model.py --no-chr Homo_sapiens.GRCh37.87.gtf.gz grch37.gene_model.tsv.gz
 
+hs1 / T2T-CHM13 (annotate's clip-remap genome: the processed-pseudogene exon track,
+CONFIG['annotate']['exon_annotation'], and an hs1 site model) from the UCSC NCBI RefSeq GTF,
+which has chr-prefixed contigs and no gene_biotype (the biotype is then taken from the RefSeq
+transcript accession: NM_/XM_ = protein_coding, NR_/XR_ = lncRNA; --curated drops the
+predicted XM_/XR_ models):
+    curl -O https://hgdownload.soe.ucsc.edu/goldenPath/hs1/bigZips/genes/hs1.ncbiRefSeq.gtf.gz
+    tools/build_gene_model.py --curated hs1.ncbiRefSeq.gtf.gz hs1.gene_model.tsv.gz
+
 Only protein_coding + lncRNA genes are kept by default (the biotypes whose disruption is
 interpretable); pass --biotypes to change. Contigs are restricted to 1..22,X,Y (MT, alts and
 scaffolds dropped -- insertion loci are called on the primary assembly). The gene label is
@@ -35,6 +43,23 @@ CHROMS = {str(i) for i in range(1, 23)} | {"X", "Y"}
 GID = re.compile(r'gene_id "([^"]+)"')
 GNAME = re.compile(r'gene_name "([^"]+)"')
 GBIO = re.compile(r'gene_biotype "([^"]+)"')
+TXID = re.compile(r'transcript_id "([^"]+)"')
+REFSEQ_BIOTYPE = {"NM": "protein_coding", "XM": "protein_coding", "NR": "lncRNA", "XR": "lncRNA"}
+
+
+def biotype(attr, curated=False):
+    """gene_biotype (Ensembl) or, for a RefSeq GTF (UCSC), the class of the transcript
+    accession. None = unknown / dropped (--curated: predicted XM_/XR_ models)."""
+    mb = GBIO.search(attr)
+    if mb:
+        return mb.group(1)
+    mt = TXID.search(attr)
+    if not mt:
+        return None
+    pre = mt.group(1)[:2]
+    if curated and pre in ("XM", "XR"):
+        return None
+    return REFSEQ_BIOTYPE.get(pre)
 
 
 def main():
@@ -47,6 +72,8 @@ def main():
     ap.add_argument("--no-chr", action="store_true",
                     help="emit numeric contigs (1..Y) instead of chr-prefixed (chr1..chrY); "
                          "use for a GRCh37/hs37d5 discovery reference")
+    ap.add_argument("--curated", action="store_true",
+                    help="RefSeq GTF: keep only curated NM_/NR_ transcripts (drop XM_/XR_ models)")
     a = ap.parse_args()
     keep = None if a.biotypes == "all" else set(a.biotypes.split(","))
 
@@ -59,16 +86,20 @@ def main():
             if line.startswith("#"):
                 continue
             f = line.split("\t")
-            if len(f) < 9 or f[2] != "exon" or f[0] not in CHROMS:
+            if len(f) < 9 or f[2] != "exon":
+                continue
+            c0 = f[0][3:] if f[0].startswith("chr") else f[0]
+            if c0 not in CHROMS:
                 continue
             attr = f[8]
-            if keep is not None:
-                mb = GBIO.search(attr)
-                if not mb or mb.group(1) not in keep:
-                    continue
+            bt = biotype(attr, a.curated)
+            if a.curated and bt is None:
+                continue
+            if keep is not None and bt not in keep:
+                continue
             gn = GNAME.search(attr)
             gene = gn.group(1) if gn else GID.search(attr).group(1)
-            contig = f[0] if a.no_chr else "chr" + f[0]
+            contig = c0 if a.no_chr else "chr" + c0
             strand = f[6] if f[6] in ("+", "-") else "+"
             rec = spans[(gene, contig)]
             rec[0] = strand

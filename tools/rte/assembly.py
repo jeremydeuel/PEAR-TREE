@@ -30,7 +30,7 @@ from __future__ import annotations
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 
-from .sequtil import rc, polya_runs, edlib_best, edlib_path
+from .sequtil import rc, polya_runs, edlib_best, edlib_path, base_fraction, low_complexity
 
 DEFAULTS = {
     "min_segment_len": 20,       # shortest mappy segment kept
@@ -42,6 +42,12 @@ DEFAULTS = {
     "polya_min_run": 8,          # poly-A segment (inside reads; the hallmark threshold is in score)
     "local_window": 600,         # bp either side of the site used as the REF/LOCAL reference
     "min_element_bp": 30,        # covered element bp needed to call an element class
+    # poly-A tail smoothing (annotate round 2): Illumina poly-A jitter + the low-quality bases
+    # after a long poly-A split one tail into POLYA | junk | POLYA; the junk then posed as a
+    # transduction (TD3P) or, aligned to a reference A-run nearby, as a template (TEMPLATED_LOCAL)
+    "polya_absorb_max_gap": 20,  # any piece <= this between two same-base poly-A runs is tail
+    "polya_absorb_base_frac": 0.6,  # ... or any non-flank piece this rich in the tail base
+    "wide_min_bp": 30,           # UNKNOWN pieces >= this are looked up in the wide site window
 }
 
 
@@ -106,7 +112,10 @@ class SiteContext:
     window_seq: str = ""            # discovery-genome window around the site (may be '')
     left_flank: str = ""            # upper-case reference part of the LEFT junction string
     right_flank: str = ""           # upper-case reference part of the RIGHT junction string
+    wide_start: int = 0
+    wide_seq: str = ""              # larger window (rte_wide_window) for distal local templates
     _aligner: object = None
+    _wide_aligner: object = None
 
     def local_reference(self):
         """(sequence, offset) used for REF/LOCAL labelling: the genome window when available,
@@ -122,6 +131,15 @@ class SiteContext:
             self._aligner = mappy.Aligner(seq=seq, k=11, w=3, min_chain_score=18,
                                           min_dp_score=25, best_n=6) if len(seq) >= 30 else False
         return self._aligner or None
+
+    def wide_aligner(self):
+        """mappy index of the wide window (local pre-mRNA / distal templates, 250 bp - ~10 kb
+        from the site); None without a discovery genome."""
+        if self._wide_aligner is None:
+            import mappy
+            self._wide_aligner = (mappy.Aligner(seq=self.wide_seq, preset="sr")
+                                  if len(self.wide_seq) >= 100 else False)
+        return self._wide_aligner or None
 
 
 def _hit_identity(h):
@@ -220,6 +238,9 @@ class Assembler:
         # REF segments that are not contiguous with a read end are LOCAL (templated) candidates
         lay = ReadLayout(name, side, role, frag_key, seq, accepted)
         self._mark_local(lay, ctx)
+        self._local_is_element(lay)
+        self._smooth_polya(lay)
+        self._wide_local(lay, ctx)
         return lay
 
     @staticmethod
@@ -314,7 +335,13 @@ class Assembler:
     @staticmethod
     def _mark_local(lay, ctx):
         """REF segments that are internal to the read (not at either end) cannot be the
-        junction flank: they are a site-derived template embedded in the insert -> LOCAL."""
+        junction flank: they are a site-derived template embedded in the insert -> LOCAL.
+        Two REF pieces adjacent in the read but NOT contiguous on the reference (a jump, or a
+        strand switch) also cannot both be flank: reads arrive reference-forward, so the flank
+        of a RIGHT junction read is its first piece and that of a LEFT junction read its last;
+        the other piece is a template copied from near the site (E2E TEMPLATED_LOCAL whose
+        template abuts the read end)."""
+        Assembler._merge_ref_runs(lay)
         segs = lay.segments
         for i, s in enumerate(segs):
             if s.kind != "REF":
@@ -322,6 +349,159 @@ class Assembler:
             at_end = (i == 0 and s.q_st <= 3) or (i == len(segs) - 1 and s.q_en >= len(lay.seq) - 3)
             if not at_end:
                 s.kind = "LOCAL"
+        if lay.side not in ("LEFT", "RIGHT") or len(segs) < 2:
+            return
+        a, b = segs[0], segs[-1]
+        if (a.kind == "REF" and b.kind == "REF" and len(segs) == 2 and b.q_st - a.q_en <= 10
+                and a.t_st >= 0 and b.t_st >= 0):
+            contiguous = a.strand == b.strand and (
+                abs(b.t_st - a.t_en) <= 10 if a.strand >= 0 else abs(a.t_st - b.t_en) <= 10)
+            if not contiguous:
+                (b if lay.side == "RIGHT" else a).kind = "LOCAL"
+
+    def _local_is_element(self, lay):
+        """A LOCAL piece that is also an element-consensus match is the inserted element lying
+        next to a reference copy of that element in the site window (REF outranks ELEMENT in
+        the overlap resolution), not a template: relabel it ELEMENT."""
+        for s in lay.segments:
+            if s.kind != "LOCAL" or s.qlen < 30:
+                continue      # a short piece matches somewhere in 6 kb of consensus by chance
+            piece = lay.seq[s.q_st:s.q_en]
+            best = None
+            for name, cons in self._edlib_targets_list():
+                r = edlib_best(piece, cons, max_frac=0.10)
+                if r is not None and (best is None or r[0] < best[0]):
+                    best = (r[0], name, r[1], r[2], r[3])
+            if best is not None:
+                ed, name, ts, te, strand = best
+                s.kind, s.target, s.t_st, s.t_en, s.strand = "ELEMENT", name, ts, te, strand
+                s.identity = 1 - ed / max(1, len(piece))
+                s.matches = len(piece) - ed
+
+    @staticmethod
+    def _merge_ref_runs(lay, max_gap=20):
+        """Two REF hits that are one flank split by a read indel / homopolymer jitter (same
+        strand, reference-contiguous within `max_gap`, only short pieces between them in the
+        read) are one REF segment -- otherwise the inner one would pose as a LOCAL template
+        (E2E: a junction flank with an A8 run became 'TEMPLATED_LOCAL')."""
+        segs = sorted(lay.segments, key=lambda x: x.q_st)
+        out = []
+        i = 0
+        while i < len(segs):
+            a = segs[i]
+            j = i + 1
+            if a.kind == "REF" and a.t_st >= 0:
+                while j < len(segs) and segs[j].kind != "REF" and segs[j].q_en - a.q_en <= max_gap:
+                    j += 1
+                if j < len(segs) and segs[j].kind == "REF" and segs[j].t_st >= 0 and segs[j].strand == a.strand:
+                    b = segs[j]
+                    qgap = b.q_st - a.q_en
+                    rgap = (b.t_st - a.t_en) if a.strand >= 0 else (a.t_st - b.t_en)
+                    if qgap <= max_gap and -5 <= rgap <= max_gap and abs(qgap - rgap) <= max_gap:
+                        m = Segment(a.q_st, b.q_en, "REF", a.target, min(a.t_st, b.t_st), max(a.t_en, b.t_en),
+                                    a.strand, min(a.identity, b.identity), a.matches + b.matches)
+                        segs = segs[:i] + [m] + segs[j + 1:]
+                        continue
+            out.append(a)
+            i += 1
+        lay.segments = out
+
+    def _smooth_polya(self, lay):
+        """One poly-A tail = one POLYA segment. Absorbed into the tail: any piece of <=
+        `polya_absorb_max_gap` bp between two runs of the same base, and any non-flank piece
+        (not the junction-side REF) whose composition is >= `polya_absorb_base_frac` the tail
+        base and that touches the run (sequencing junk after a long poly-A, a read poly-A
+        aligned to a reference A-run, a homopolymer posing as a consensus hit)."""
+        c = self.cfg
+        segs = sorted(lay.segments, key=lambda x: x.q_st)
+        if not any(x.kind == "POLYA" for x in segs):
+            return
+        n = len(lay.seq)
+        flank_idx = {0} if lay.side == "RIGHT" else ({len(segs) - 1} if lay.side == "LEFT" else set())
+        if not lay.side:
+            flank_idx = set()
+        # junction consensus: the REF interval is the flank wherever it is
+        def is_flank(i, x):
+            if x.kind != "REF":
+                return False
+            if lay.role == "JUNCTION":
+                return True
+            if i in flank_idx:
+                return True
+            # an unsided read: a terminal REF is a flank
+            return not lay.side and (i == 0 or i == len(segs) - 1)
+
+        changed = True
+        while changed:
+            changed = False
+            for i, x in enumerate(segs):
+                if x.kind != "POLYA":
+                    continue
+                base = x.target or ("A" if x.strand >= 0 else "T")
+                for j in (i - 1, i + 1):
+                    if not (0 <= j < len(segs)):
+                        continue
+                    y = segs[j]
+                    if y.kind == "POLYA" or is_flank(j, y) or (y.kind == "ELEMENT" and y.qlen > 30):
+                        continue
+                    piece = lay.seq[y.q_st:y.q_en]
+                    k = j + (j - i)          # the segment beyond y
+                    sandwiched = (0 <= k < len(segs) and segs[k].kind == "POLYA"
+                                  and (segs[k].target or "") == base)
+                    terminal = j in (0, len(segs) - 1)
+                    rich = base_fraction(piece, base) >= c["polya_absorb_base_frac"]
+                    if (sandwiched and (y.qlen <= c["polya_absorb_max_gap"] or rich)) or (terminal and rich):
+                        lo = min(x.q_st, y.q_st)
+                        hi = max(x.q_en, y.q_en)
+                        if sandwiched:
+                            lo, hi = min(lo, segs[k].q_st), max(hi, segs[k].q_en)
+                        merged = Segment(lo, hi, "POLYA", base, identity=1.0, matches=hi - lo,
+                                         strand=x.strand)
+                        drop = {i, j} | ({k} if sandwiched else set())
+                        segs = sorted([s for t, s in enumerate(segs) if t not in drop] + [merged],
+                                      key=lambda s: s.q_st)
+                        changed = True
+                        break
+                if changed:
+                    break
+        # a gap of <= max_gap bp between two same-base runs (no segment in between)
+        out = []
+        for s in segs:
+            if (out and s.kind == "POLYA" and out[-1].kind == "POLYA" and out[-1].target == s.target
+                    and s.q_st - out[-1].q_en <= c["polya_absorb_max_gap"]):
+                p = out[-1]
+                out[-1] = Segment(p.q_st, s.q_en, "POLYA", p.target, identity=1.0,
+                                  matches=s.q_en - p.q_st, strand=p.strand)
+            else:
+                out.append(s)
+        lay.segments = out
+
+    def _wide_local(self, lay, ctx):
+        """UNKNOWN pieces that align (>= 90 % identity over >= 80 % of the piece) to the wide
+        site window become LOCAL segments with target 'wide' and ABSOLUTE genome coordinates
+        (t_st/t_en): distal local templates / co-inserted local pre-mRNA (Nam 2023)."""
+        c = self.cfg
+        if not ctx.wide_seq:
+            return
+        cand = [s for s in lay.segments if s.kind == "UNKNOWN" and s.qlen >= c["wide_min_bp"]]
+        if not cand:
+            return
+        al = ctx.wide_aligner()
+        if al is None:
+            return
+        hits = [h for h in al.map(lay.seq) if _hit_identity(h) >= c["min_ref_identity"]]
+        for s in cand:
+            best = None
+            for h in hits:
+                ov = min(s.q_en, h.q_en) - max(s.q_st, h.q_st)
+                if ov >= 0.8 * s.qlen and (best is None or ov > best[0]):
+                    best = (ov, h)
+            if best is None:
+                continue
+            h = best[1]
+            s.kind, s.target = "LOCAL", "wide"
+            s.t_st, s.t_en = ctx.wide_start + h.r_st, ctx.wide_start + h.r_en
+            s.strand, s.identity, s.matches = h.strand, _hit_identity(h), h.mlen
 
     # ------------------------------------------------------------------ whole insertion
     def assemble(self, ctx: SiteContext, junction_seqs: dict, reads: list, strand_hint=None):

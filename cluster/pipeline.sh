@@ -371,13 +371,43 @@ cmd_retry() {
 }
 
 # =============================================================================
+# TPRT one-sided loci: the genotype contract
+# =============================================================================
+# combine_insertions leaves one-sided loci (`contig:L-oneside_L` / `contig:oneside_R-R`) out
+# of <patient>.genotyping.txt.gz. When the genotype config enables `one_sided_loci`
+# (cluster/config.genotype.grch38.tprt), the combine task appends them once, to
+# <patient>.genotyping.tprt.txt.gz, and every genotype task reads that file instead. Built
+# ONLY in the single combine task (no two tasks ever write the same file).
+geno_one_sided() { grep -Eq '^[[:space:]]*one_sided_loci[[:space:]]*=[[:space:]]*(true|True|1)' "$GENO_CFG" 2>/dev/null; }
+
+geno_contract() {   # the contract the genotype tasks read (path relative to nothing: absolute)
+    if geno_one_sided; then
+        echo "$RUNDIR/insertions/$PATIENT_ID.genotyping.tprt.txt.gz"
+    else
+        echo "$RUNDIR/insertions/$PATIENT_ID.genotyping.txt.gz"
+    fi
+}
+
+ensure_geno_contract() {   # (combine task only) build the one-sided extension if enabled
+    geno_one_sided || return 0
+    local base="$RUNDIR/insertions/$PATIENT_ID.genotyping.txt.gz"
+    local ext="$RUNDIR/insertions/$PATIENT_ID.genotyping.tprt.txt.gz"
+    local comb="$RUNDIR/insertions/$PATIENT_ID.combined.txt.gz"
+    if [ -s "$ext" ] && [ "$ext" -nt "$base" ]; then log "one-sided contract exists"; return 0; fi
+    "$VENV/bin/python" "$PT_ROOT/src/genotyping_contract_oneside.py" \
+        --contract "$base" --combined "$comb" --out "$ext" \
+        || { echo "one-sided contract extension FAILED" >&2; exit 1; }
+    log "contract (+one-sided): $ext ($(zcat "$ext" | grep -c '^>') loci)"
+}
+
+# =============================================================================
 # phase 2 — combine_insertions over whatever discovery files exist
 # =============================================================================
 cmd_combine() {
     load_env
     cd "$RUNDIR"
     local CONTRACT="insertions/$PATIENT_ID.genotyping.txt.gz"
-    if [ -s "$CONTRACT" ]; then log "contract exists, skipping"; exit 0; fi
+    if [ -s "$CONTRACT" ]; then log "contract exists, skipping"; ensure_geno_contract; exit 0; fi
 
     shopt -s nullglob
     local files=(discovery/*.txt.gz)
@@ -408,6 +438,7 @@ cmd_combine() {
 
     [ -s "$CONTRACT" ] || { echo "combine_insertions produced no $CONTRACT" >&2; exit 1; }
     log "contract: $CONTRACT ($(zcat "$CONTRACT" | grep -c '^>') loci)"
+    ensure_geno_contract
 }
 
 # =============================================================================
@@ -434,9 +465,11 @@ cmd_genotype() {
 
     write_bam_stats "$SAMPLE" "$BAM"   # step 5: avg coverage / #reads / read length
 
+    local CONTRACT; CONTRACT="$(geno_contract)"
+    [ -s "$CONTRACT" ] || { log "$SAMPLE: contract $CONTRACT missing (re-run combine)"; exit 1; }
     local TMP="$OUT.tmp.$$"
     if ! "$GENOTYPE_BIN" --step genotype --bam "$BAM" \
-            --insertions "$RUNDIR/insertions/$PATIENT_ID.genotyping.txt.gz" \
+            --insertions "$CONTRACT" \
             --out "$TMP" --threads 1 --config "$GENO_CFG"; then
         log "$SAMPLE: GENOTYPING FAILED"; rm -f "$TMP"; exit 1
     fi
@@ -548,6 +581,7 @@ cmd_status() {
         [ -s "$RUNDIR/FLEET_FATAL.$x" ] && echo "FATAL     : $x — all samples failed (see FLEET_FATAL.$x)"
     done
     [ -s "$RUNDIR/insertions/$PATIENT_ID.genotyping.txt.gz" ] && echo "contract  : yes" || echo "contract  : no"
+    [ -s "$RUNDIR/insertions/$PATIENT_ID.genotyping.tprt.txt.gz" ] && echo "contract+1: yes (one-sided loci appended)"
     [ -s "$RUNDIR/$PATIENT_ID.genotypes.csv.gz" ] && echo "calls     : yes" || echo "calls     : no"
     bjobs -J "${PATIENT_ID}_*" -A 2>/dev/null || true
 }

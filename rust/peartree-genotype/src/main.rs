@@ -138,7 +138,8 @@ fn main() -> io::Result<()> {
 
     // Parse the insertion contract ONCE, shared by every sample.
     let insertions = genotype::load_contract(&insertions_path)?;
-    eprintln!("contract: {} loci from {insertions_path}", insertions.len());
+    let n_one_sided = insertions.iter().filter(|i| i.is_one_sided()).count();
+    eprintln!("contract: {} loci ({n_one_sided} one-sided) from {insertions_path}", insertions.len());
 
     match step {
         Some("genotype") => {

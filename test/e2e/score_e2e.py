@@ -158,13 +158,14 @@ def main():
             for c in dcalls[s]:
                 if match(c, r):
                     explained_disc.add((s, c))
-        # two-sided names first (an event may also have a one-sided duplicate)
-        cand = sorted((n for n in ev if match(parse_name(n), r)), key=lambda n: (parse_name(n)[3], n))
+        # deterministic pick (sets iterate in hash order): two-sided loci first, then by name
+        pick = lambda names: sorted(names, key=lambda n: (parse_name(n)[3], n))  # noqa: E731
+        cand = pick([n for n in ev if match(parse_name(n), r)])
         r["ev_name"] = cand[0] if cand else None
         # every junction the locus has (a one-sided locus has one real junction)
         r["pooled"] = bool(cand) and any(
             ev[n] and all(row.get("supported") == "1" for row in ev[n].values()) for n in cand)
-        cc = sorted((n for n in comb if match(parse_name(n), r)), key=lambda n: (parse_name(n)[3], n))
+        cc = pick([n for n in comb if match(parse_name(n), r)])
         r["comb_name"] = cc[0] if cc else None
         explained_comb.update(cc)
         r["ann"] = annot.get(r["comb_name"]) if r["comb_name"] else None

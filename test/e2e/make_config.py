@@ -20,6 +20,10 @@ def main():
     ap.add_argument("--override", action="append", default=[],
                     help="KEY=PYTHON_LITERAL applied to CONFIG['combine_insertions'] last (ablations, "
                          "e.g. slippage_reject=False); run_e2e.sh passes $CI_OVERRIDES (space separated)")
+    ap.add_argument("--exon-ref", default=None,
+                    help="exon track on the clip-remap reference (test/e2e/make_gene_track.py --out-ref)")
+    ap.add_argument("--exon-hs1", default=None,
+                    help="the same exons on hs1 = remap_2bit (make_gene_track.py --out-hs1)")
     a = ap.parse_args()
     os.makedirs(os.path.dirname(a.out), exist_ok=True)
     tprt = os.path.join(a.repo, "cluster", "config.py.grch38.tprt")
@@ -39,7 +43,9 @@ CI.update({{
 A = CONFIG["annotate"]
 A.update({{
     "rmsk": {os.path.join(a.ref_dir, "reduced.rmsk.out.gz")!r},
-    "exon_annotation": None,
+    "exon_annotation": {a.exon_ref!r},          # clip-exon pseudogene candidates (reduced GRCh38)
+    "rte_exon_annotation": {a.exon_hs1!r},      # exon-exon junction cores (hs1 = remap_2bit)
+    "pseudogene_require_exon_junction": True,
     "hmm": {os.path.join(a.repo, "test", "fullstack", "annotate", "peartree_rte.hmm")!r},
     "dfamscan": None,
     "hmmer": None,
