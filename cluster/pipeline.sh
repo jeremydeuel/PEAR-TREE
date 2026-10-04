@@ -290,24 +290,17 @@ cmd_stage_discover() {
     if [ -s "$OUT" ]; then log "$SAMPLE: discovery exists, skipping"; exit 0; fi
 
     local BAM; BAM="$(bam_path "$PROJ" "$SAMPLE")"
-    local SDIR="$STAGING_ROOT/$PROJ/$SAMPLE"          # stageBam.pl -o; it appends mapped_sample/
-    # adopt a copy staged by hand with `-o $STAGING_ROOT` (lands flat in $STAGING_ROOT/mapped_sample/)
-    local FLAT="$STAGING_ROOT/mapped_sample/$SAMPLE.sample.dupmarked.bam"
-    if [ ! -s "$BAM" ] && [ -s "$FLAT" ]; then
-        mkdir -p "$(dirname "$BAM")"
-        for f in "$FLAT" "$FLAT.bai" "$FLAT.bas" "$FLAT.met.gz"; do [ -e "$f" ] && mv -f "$f" "$(dirname "$BAM")/"; done
-        log "$SAMPLE: adopted hand-staged BAM from $STAGING_ROOT/mapped_sample/"
-    fi
     if [ ! -s "$BAM" ]; then
-        log "$SAMPLE: staging from iRODS project $PROJ -> $SDIR"
+        log "$SAMPLE: staging from iRODS project $PROJ -> $(dirname "$BAM")"
         module load dataImportExport >/dev/null 2>&1 || true
-        mkdir -p "$SDIR"
         # stageBam.pl is ASYNCHRONOUS: it prints the file list, submits its own LSF transfer
         # job ("Job <N> is submitted to queue <normal>.") and returns at once. Waiting on that
         # job is mandatory -- without it every colony looked "missing" 13 s after start
-        # (PD37449 pilot, 2026-10-04).
+        # (PD37449 pilot, 2026-10-04). Layout: stageBam.pl itself appends
+        # <proj>/<sample>/mapped_sample/ to -o (= bam_path); the file list it PRINTS shows a flat
+        # <-o>/mapped_sample/ path, which is NOT where the transfer writes. Do not "fix" -o.
         local so rc=0
-        so="$(stageBam.pl --lustre 126 --types m --sample "$SAMPLE" --project "$PROJ" -o "$SDIR" -fo 2>&1)" || rc=$?
+        so="$(stageBam.pl --lustre 126 --types m --sample "$SAMPLE" --project "$PROJ" -o "$STAGING_ROOT" -fo 2>&1)" || rc=$?
         printf '%s\n' "$so"
         if grep -qE 'total files 0\b' <<<"$so"; then
             : > "$RUNDIR/missing/$SAMPLE"      # iRODS has nothing for this sample: legit no-data
