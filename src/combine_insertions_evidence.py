@@ -242,16 +242,24 @@ class DedupParams:
     max_edit   `dup_max_edit` (3) / `dup_max_edit_frac` (0.02): edit budget for the lenient
                sequence match = max(max_edit, ceil(frac * compared length))
     polya_min  `polya_min_len` (8): sequences are compared homopolymer-compressed and cut after
-               the first A/T run >= polya_min (sequence 3' of a long poly-A is SBS junk)"""
-    __slots__ = ("tol", "max_edit", "max_edit_frac", "polya_min")
+               the first A/T run >= polya_min (sequence 3' of a long poly-A is SBS junk)
+    mate_min_mapq `dup_mate_min_mapq` (20): a mate record below this MAPQ (a mate inside the
+               element, multi-mapped onto a random paralog) is not a placement -- the pair is then
+               judged by mate SEQUENCE (E2E: 206 missed duplicates were exactly this)
+    A read whose 5' end lies in the junction soft clip (LEFT clip on '+', RIGHT clip on '-') has
+    an `outer` that moves with the clip length (poly-A jitter); for those the junction position
+    replaces the outer-coordinate test."""
+    __slots__ = ("tol", "max_edit", "max_edit_frac", "polya_min", "mate_min_mapq")
 
-    def __init__(self, tol=5, max_edit=3, max_edit_frac=0.02, polya_min=8):
+    def __init__(self, tol=5, max_edit=3, max_edit_frac=0.02, polya_min=8, mate_min_mapq=20):
         self.tol, self.max_edit, self.max_edit_frac, self.polya_min = tol, max_edit, max_edit_frac, polya_min
+        self.mate_min_mapq = mate_min_mapq
 
     @classmethod
     def from_cfg(cls, cfg):
         return cls(cfg.get("dup_coord_tolerance", 5), cfg.get("dup_max_edit", 3),
-                   cfg.get("dup_max_edit_frac", 0.02), cfg.get("polya_min_len", 8))
+                   cfg.get("dup_max_edit_frac", 0.02), cfg.get("polya_min_len", 8),
+                   cfg.get("dup_mate_min_mapq", 20))
 
     def budget(self, n):
         return max(self.max_edit, int(-(-self.max_edit_frac * n // 1)))
@@ -326,21 +334,39 @@ def _clip_shift(a: Fragment, b: Fragment, p: DedupParams) -> int:
     return 0 if a.primary.role == "CLIP" and b.primary.role == "CLIP" else p.tol
 
 
+def _outer_in_clip(f: Fragment) -> bool:
+    """The primary read's 5' end is inside the junction soft clip, so its outer coordinate
+    depends on the clip length (homopolymer jitter), not on the molecule."""
+    p = f.primary
+    return p.role == "CLIP" and ((p.side == "LEFT" and p.strand == "+") or
+                                 (p.side == "RIGHT" and p.strand == "-"))
+
+
+def _mate_unreliable(f: Fragment, p: DedupParams) -> bool:
+    m = f.mate
+    return m is not None and m.mapped and m.mapq < p.mate_min_mapq
+
+
 def _is_dup(a: Fragment, b: Fragment, p: DedupParams):
     """SPEC rule 2 (same sample only). Returns '' (not a duplicate), 'coord' (mate placed on
     both: coordinates within tol + lenient clip sequence) or 'seq' (mate unplaced on both:
     read outer within tol + lenient clip AND mate sequence)."""
     tol = p.tol
-    if a.strand != b.strand or abs(a.outer - b.outer) > tol:
+    if a.strand != b.strand:
         return ""
     ja, jb = _junction_pos(a), _junction_pos(b)
     if ja is not None and jb is not None and abs(ja - jb) > tol:
         return ""
-    ao, bo = a.mate_outer(), b.mate_outer()
-    if ao is not None and bo is not None:
-        am, bm = ao, bo
+    if not (_outer_in_clip(a) and _outer_in_clip(b)) and abs(a.outer - b.outer) > tol:
+        return ""
+    if _mate_unreliable(a, p) or _mate_unreliable(b, p):
+        am = bm = None              # multi-mapped mate: decide by sequence
     else:
-        am, bm = a.mate_coord(), b.mate_coord()
+        ao, bo = a.mate_outer(), b.mate_outer()
+        if ao is not None and bo is not None:
+            am, bm = ao, bo
+        else:
+            am, bm = a.mate_coord(), b.mate_coord()
     if (am is None) != (bm is None):
         return ""
     if am is not None:

@@ -117,3 +117,23 @@ def test_unsourced_td3p_without_locator():
     r = run(L1[5600:CEND] + "A" * 8 + tag + A)
     assert "TD3P" in r.tags
     assert not any(t.startswith("TD3P_SOURCE=") for t in r.tags)
+
+
+def test_novel_source_tiers_and_polymorphic_fallback():
+    """Tier A for the young reference L1HS; with no reference L1 in range, a Tubio S7
+    polymorphic L1 position upstream (either orientation) gives a tier-B call."""
+    tag = REGION.fetch("chrX", SRC_END + 374, SRC_END + 774)
+    sc = _finder().find(tag)
+    assert sc.tier == "A" and "tier=A" in sc.detail
+
+    class Lib:
+        consensus = LIB.consensus
+        polymorphic_l1 = [("chrX", SRC_END + 100, "PL1_test")]
+
+    loc = MappyLocator(REGION_FA)
+    f = NovelSourceFinder(Lib(), None, None, loc, REGION)
+    sc = f.find(tag)
+    assert sc is not None and sc.tier == "B" and sc.source_id == f"novel:chrX:{SRC_END + 100}"
+    assert "polymorphic_L1:PL1_test" in sc.detail
+    Lib.polymorphic_l1 = [("chrX", SRC_END + 900, "PL1_downstream")]     # past the tag start
+    assert NovelSourceFinder(Lib(), None, None, loc, REGION).find(tag) is None

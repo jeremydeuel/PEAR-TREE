@@ -155,6 +155,15 @@ class RteLibrary:
                     v = r.get(k)
                     if v and v not in (".", "") and v in self.intact:
                         self._source_to_intact.setdefault(rid, v)
+        # Tubio 2014 S7 polymorphic L1 positions on hs1 (novel-source tier B only; optional)
+        self.polymorphic_l1 = []
+        for r in _read_tsv(_find(root, "polymorphic_l1_candidates.tsv")):
+            try:
+                c, pos = r["hs1_chrom"], int(r["hs1_pos"])
+            except (KeyError, ValueError, TypeError):
+                continue
+            if c not in (".", "") and pos >= 0:
+                self.polymorphic_l1.append((c, pos, r.get("id", ".")))
         self.flanks3 = _read_fa(self.paths["flanks3"])     # case kept: lower = soft-masked
         self.flanks5 = _read_fa(self.paths["flanks5"])
         self._aligners = {}

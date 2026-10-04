@@ -203,7 +203,8 @@ class NovelSourceFinder:
         self._ident_cache = {}
 
     def available(self):
-        return self.locator is not None and (self.rmsk is not None or self.cohort_l1)
+        return self.locator is not None and (self.rmsk is not None or bool(self.cohort_l1)
+                                             or bool(getattr(self.lib, "polymorphic_l1", None)))
 
     def _l1_identity(self, contig, s, e, strand, div):
         key = (contig, s, e)
@@ -249,11 +250,22 @@ class NovelSourceFinder:
                 if 0 <= dist <= c["novel_source_max_dist"]:
                     best = (dist, f"{contig}:{pos}", 1.0, "cohort_L1")
                     break
+        poly = False
+        if best is None:
+            # tier B fallback: a Tubio 2014 S7 polymorphic L1 position (no strand, length or
+            # sequence) in the upstream window, either orientation
+            for cc, pos, pid in getattr(self.lib, "polymorphic_l1", None) or ():
+                if cc != contig:
+                    continue
+                dist = (s - pos) if gstrand == "+" else (pos - e)
+                if 0 <= dist <= c["novel_source_max_dist"] and (best is None or dist < best[0]):
+                    best = (dist, f"{contig}:{pos}", 0.0, f"polymorphic_L1:{pid}")
+                    poly = True
         if best is None:
             return None
         dist, src, ident, name = best
         off_end = dist + (e - s)
-        tier = "A" if ident >= c["novel_source_tier_a"] else "B"
+        tier = "B" if poly else ("A" if ident >= c["novel_source_tier_a"] else "B")
         return SourceCall(f"novel:{src}", off_end, dist, 1, True, round(ident, 4),
                           f"source={name};tag={contig}:{s}-{e}({gstrand});dist={dist};tier={tier}",
                           tier)
