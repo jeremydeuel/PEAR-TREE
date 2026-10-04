@@ -183,17 +183,14 @@ geometry from the 0x20 / 0x10 flags).
 
 ## Remaining problems, ranked by impact
 
-1. **Organic multi-fragment FPs** (242 unexplained combined loci, 68 called TPRT/LIKELY): poly-A
-   slippage at reference A-tracts with >= 2 slipping molecules, and far L1DEL/L1DUP pairs of
-   unrelated breakpoints from the new pairing modes. Need a combine-level reference-context
-   slippage reject (clip = homopolymer + shifted local reference) and a stricter polarity /
-   element-class check for far pairs; the score's `slippage_context` fires on only 30 %.
+1. ~~**Organic multi-fragment FPs**~~ (242 unexplained combined loci, 68 called TPRT/LIKELY) —
+   addressed, see "Combine filters (problems #1 / #3)" below: 242 -> 97 (seed 7), 229 -> 113
+   (seed 11); what is left is ~90 % genuine hs1-vs-GRCh38 germline differences.
 2. **Structure calls**: L1_INV_SWITCH 0/8 (called INVERTED_5P/TRUNCATED), SVA_TD5P 0/7,
    PREMRNA_COINSERT 0/5, FOLDBACK_INVDUP_5P 1/3; tag precision is low for TD3P (38 extra),
    TEMPLATED_LOCAL (24 extra), L1_MED_DELETION/TSD_DELETION on unexplained loci.
-3. **intersect_insertions exact-name merging** (I2): colony-specific breakpoint variants stay
-   separate insertions (pooling code is ready to follow any fuzzy merge); 5 loci lost to the
-   clip-agreement check on poly-A clips.
+3. ~~**intersect_insertions exact-name merging**~~ — fuzzy merge (`merge_tolerance_bp`) and
+   poly-A-aware clip agreement added, see below.
 4. Dedup false merges 1.9 % (inherent at +-5 bp with unplaceable mates); consider tol 3.
 5. ART_SUBFAMILY_MISMAP not evaluated (val1-only artefact; the fullstack simulator lacks it).
    Annotate features that should catch it: `inactive_only` does not apply (young subfamily);
@@ -475,3 +472,155 @@ SVA TD5P breakpoint geometry), the decoy element (2 truth-UNKNOWN decoys called 
    set, or explicit `count_insertion_call`); the legacy default is unchanged (point (2) above).
    One-sided (`contig:L-oneside_L`) and far-pair names join `genotypes.csv.gz` by exact title
    (tested). The E2E numbers above use stub genotypes (every locus het), so they are unaffected.
+
+## Combine filters (problems #1 / #3) (combine worker, 2026-10-04)
+
+### What the 242 unexplained calls are (read-level truth)
+
+`test/e2e/classify_unexplained.py` (now step 7 of `run_e2e.sh`; writes `$OUT/unexplained_classes.tsv`
+and `.md`) traces every junction read of an unexplained combined locus to its source. The simulator
+qname names the haplotype, and the read is re-aligned (mappy sr) to that hs1-derived haplotype.
+`contiguous` means the read is a faithful copy of hs1, so its GRCh38 clip is an hs1-vs-GRCh38
+difference. `slipped` means an indel, end clip or partial alignment on its own source (SBS
+homopolymer slippage or post-homopolymer phasing junk). `planted_junction` means the read spans a
+planted event's junction. Per locus the table also gives the hs1-vs-GRCh38 alignment of an 800 bp
+window, the reference repeat at each junction, and library hits of each clip.
+
+Seed 7, before (= `.tprt` with the new keys off, byte-identical to the integration run):
+
+| cause | 1 colony | 2 | 3 | total | TPRT / LIKELY / UNC / ART |
+|---|---|---|---|---|---|
+| far pair: planted TP junction + unrelated breakpoint | 28 | 3 | 0 | 31 | 14 / 6 / 4 / 7 |
+| far pair: two unrelated breakpoints | 30 | 4 | 0 | 34 | 2 / 1 / 8 / 23 |
+| planted-event reads (displaced junction) | 1 | 2 | 0 | 3 | 0 / 1 / 2 / 0 |
+| sequencing slippage at a 13-25 bp reference A/T tract (25 one-sided) | 54 | 15 | 2 | 71 | 1 / 16 / 50 / 4 |
+| germline: hs1 carries an Alu/L1 that GRCh38 lacks (TRUE insertion) | 0 | 3 | 8 | 11 | 5 / 3 / 2 / 1 |
+| germline: STR / VNTR length difference between the assemblies | 21 | 9 | 7 | 37 | 2 / 8 / 24 / 3 |
+| germline: other hs1-vs-GRCh38 indel / divergent block | 21 | 18 | 14 | 53 | 1 / 8 / 43 / 1 |
+| other | 1 | 0 | 1 | 2 | 0 / 0 / 2 / 0 |
+
+Corrections to the earlier diagnosis:
+
+* The 3-colony loci are indeed assembly differences, but so are ~40 % of the single-colony ones
+  (101/242 germline in total). They show up in a single colony because discovery paired them
+  differently per colony, and intersect merged exact names only.
+* Slippage is mostly not "clip = poly-T + shifted reference". The reads cross a long (13-25 bp)
+  reference A/T tract and soft-clip the post-homopolymer phasing junk, which is still dominated
+  by the tract base. Both junctions of a "TSD" call often sit at the two ends of the tract
+  (TSD = tract length).
+* Far pairs: 31/65 pair a real TP poly-A junction with an unrelated breakpoint (an assembly
+  difference or a slipped tract within 50 kb). The rest pair two unrelated breakpoints. Almost
+  all are in one colony.
+
+### New keys (default off in src, on in `cluster/config.py.grch38.tprt`; details in SPEC.md)
+
+* `slippage_reject`: applies when a reference tract (homopolymer >= 8 bp or STR >= 12 bp) touches
+  the junction. After stripping the tract continuation, the clip is slippage if it is
+  `repeat_only` (< 10 structured bases), `repeat_junk` (>= 50 % tract base) or
+  `repeat_shifted_reference`. Such an insertion is dropped unless another, non-slipped junction
+  carries element or transduction-flank sequence (mappy k=11 vs `rte_library`, or >= 2
+  inside-insertion mates when the clip is < 20 bp).
+* `far_pair_strict` (+ `far_pair_split`): a pair with gap < -30 or > 40 needs all of:
+  * a sense element hit on the complex clip (or >= 2 inside mates);
+  * a poly-T-led clip on the other side that is not itself slippage;
+  * no conflicting element class beyond the tail;
+  * >= 2 independent fragments per junction;
+  * consistent colonies (discovery breakpoints within tol: at least one shared colony, and the
+    sets differ by <= max(1, 20 %)).
+
+  A failing pair keeps its poly-A junction as a one-sided locus. This is done in combine, where
+  the library, pooled fragments and colony set live; there is no Rust change.
+* `merge_tolerance_bp` (8): fuzzy cross-sample merge in `intersect_insertions`, with a
+  shift-tolerant clip check; member evidence is re-anchored by the junction offset. One-sided
+  loci of the same side merge with each other. A surviving one-sided locus is folded into a
+  surviving two-sided call of the same junction only AFTER the remap filters
+  (`EvidencePool.absorb_one_sided`). Folding earlier lost FOLDBACK #169, whose two-sided record
+  died in the clipped-remap filter.
+* `polya_aware_clip_agreement`: clips are compared homopolymer-compressed up to their poly-A
+  tail. This recovers the poly-A loci that the legacy column check dropped.
+
+### Before / after per type (comb, brackets = one-sided), merged deterministic scorer
+
+| variant | seed 7 before | seed 7 after | seed 11 before | seed 11 after |
+|---|---|---|---|---|
+| ALU_YA5 | 8 | 8 | 8 | 7 |
+| ALU_YB8 | 7 | 7 | 7 | 8 (1) |
+| EN_INDEPENDENT | 8 | 8 | 7 | 7 |
+| FOLDBACK_INVDUP_5P | 3 (1) | 3 (1) | 2 (1) | 3 (2) |
+| L1_FULL | 6 | 6 | 8 | 8 |
+| L1_INV | 7 | 7 | 5 | 5 |
+| L1_INV_SWITCH | 8 | 8 | 6 | 7 (1) |
+| L1_MED_DELETION | 7 (1) | 8 (2) | 7 | 7 |
+| L1_MED_DUPLICATION | 5 (1) | 7 (3) | 2 (2) | 7 (7) |
+| L1_TD3P | 8 | 8 | 7 | 7 |
+| L1_TRUNC | 7 | 7 | 7 (1) | 7 (1) |
+| L1_TSD_DELETION | 6 | 5 | 5 | 6 (1) |
+| ORPHAN_TD3P | 5 | 6 (1) | 7 | 8 (1) |
+| POLYA_ONLY | 4 (3) | 5 (4) | 4 (3) | 5 (4) |
+| PREMRNA_COINSERT | 5 | 5 | 7 | 7 |
+| PSEUDOGENE | 6 | 6 | 5 | 5 |
+| PSEUDOGENE_DECOY | 8 | 8 | 7 | 7 |
+| SVA_E | 6 | 7 (1) | 6 | 6 |
+| SVA_F | 7 | 7 | 8 | 8 |
+| SVA_TD3P | 5 | 6 (1) | 7 (1) | 7 (1) |
+| SVA_TD5P | 7 | 7 | 6 | 6 |
+| TEMPLATED_LOCAL | 2 | 4 (3) | 2 | 2 |
+| **all TP** (of 166 / 165 lifted) | **135 (6)** | **143 (16)** | **130 (8)** | **140 (19)** |
+| TP calls T / L / U / A | 108/7/19/1 | 118/8/16/1 | 99/15/16/0 | 108/13/18/1 |
+| simulated artefacts combined | 0 | 0 | 1 (ART_POLYA_SLIPPAGE) | 0 |
+| combined insertions | 387 | 241 | 371 | 253 |
+| **unexplained combined** | **242** | **97** | **229** | **113** |
+| - far pair (TP junction / unrelated) | 31 / 34 | 0 / 1 | 31 / 30 | 5 / 1 |
+| - planted-event reads | 3 | 0 | 2 | 2 |
+| - slippage | 71 | 4 | 53 | 6 |
+| - germline RTE / STR / other | 11 / 37 / 53 | 12 / 28 / 52 | 15 / 41 / 56 | 15 / 31 / 53 |
+
+Seed-7 ablation (comb TP / unexplained):
+
+| configuration | comb TP | unexplained |
+|---|---|---|
+| keys off | 135 | 242 |
+| merge only | 135 | 244 |
+| merge + slippage reject | 133 | 122 |
+| merge + far-pair strictness | 145 | 294 |
+| all four keys | 143 | 97 |
+
+Far-pair splitting without the slippage reject turns slipped poly-A junctions into one-sided
+calls (slippage 71 -> 159), so the two keys belong together.
+
+TP calls lost to the slippage reject, 3 over both seeds (seed 11 net per-type changes include
+other moves). Each is a "TP" call that pairs a real junction with a slipped tract end, or an
+insertion INTO a 20-22 bp tract where every clip is poly-A + junk:
+
+* seed 7 L1_TSD_DELETION #32 (`30845878-30845898`): TP LEFT + slipped RIGHT at a 20T tract.
+* seed 7 TEMPLATED_LOCAL #159: the exact call dies in the clipped-remap filter, as before.
+* seed 11 ALU_YA5 #59: TSD = a 22A tract, with no element on either clip.
+
+No POLYA_ONLY or ORPHAN_TD3P was lost, because none sits at a reference tract. The gains are
+far-pair poly-A junctions kept as one-sided loci, plus loci that the poly-A-aware agreement no
+longer drops. The extra one-sided TP calls are one-sided because the complex junction had < 2
+fragments; before, the whole locus was dropped.
+
+What is left:
+
+* ~90 % germline assembly differences. This is acceptable: annotate classes most of them as
+  `non_RTE_SV` / `microsatellite` / `unknown`, and the 11-15 hs1-only Alus are real insertions.
+* 4-6 slippage loci whose other junction carries reference Alu sequence.
+* 1-6 far pairs whose TP poly-A junction pairs with a germline Alu junction in the same colonies.
+
+Byte identity:
+
+* Legacy `config.py.grch38` without sidecars: combined/genotyping md5-identical to
+  `tprt-hallmarks` HEAD.
+* `.tprt` with the four new keys off: all four combine outputs identical to the integration run.
+
+Tests: `test/test_tprt_combine_filters.py` (14).
+
+Commands. Seed 11 used `SEED=11 OUT=$SP/work/e2e_i3_s11`. Ablations use `CI_OVERRIDES`, new in
+`run_e2e.sh` / `make_config.py --override`:
+
+```bash
+cd /Users/jeremy/Documents/PEAR_TREE/.claude/worktrees/agent-a1f8bdc6b79981c09
+OUT=/private/tmp/claude-501/-Users-jeremy-Documents-PEAR-TREE/fde0700f-e325-4651-8daf-0cdd52bd072b/scratchpad/work/e2e_i3 bash test/e2e/run_e2e.sh
+OUT=/private/tmp/claude-501/-Users-jeremy-Documents-PEAR-TREE/fde0700f-e325-4651-8daf-0cdd52bd072b/scratchpad/work/e2e_i3 CI_OVERRIDES="merge_tolerance_bp=0 polya_aware_clip_agreement=False slippage_reject=False far_pair_strict=False" bash test/e2e/run_e2e.sh
+```
