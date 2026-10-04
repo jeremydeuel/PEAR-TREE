@@ -99,6 +99,8 @@ def main(argv=None):
     stats = tsv(os.path.join(L, "transduction_stats.tsv"))
     act = tsv(os.path.join(L, "active.tsv"))
     l1 = tsv(os.path.join(L, "l1_intact.tsv"))
+    pp = os.path.join(L, "polymorphic_l1_candidates.tsv")
+    poly = tsv(pp) if os.path.exists(pp) else []
 
     def cnt(f):
         return sum(1 for r in src if f(r))
@@ -111,10 +113,36 @@ def main(argv=None):
     n_strong = cnt(lambda r: r["hotness"] == "strong")
     n_absent = cnt(lambda r: r["element_class"] == "L1" and r["reference"] == "yes" and r["hs1_status"] == "insertion_point")
     n_in_hs1 = cnt(lambda r: r["hs1_status"] == "present_in_hs1")
+    n_som = cnt(lambda r: r.get("origin") == "somatic")
+    n_tubio = cnt(lambda r: "Tubio2014:" in r["daughters_by_study"])
+    pst = {}
+    for r in poly:
+        pst[r["status"]] = pst.get(r["status"], 0) + 1
 
     st = {(r["study"], r["metric"]): r for r in stats}
     allr = st[("all", "distal")]
     tdl = st[("all", "td_len")]
+    tub = {g: st.get((g, "distal")) for g in ("Tubio2014", "Tubio2014_partnered", "Tubio2014_orphan")}
+
+    def hitrate(g):
+        r = tub.get(g)
+        if not r or r.get("flank_hits", ".") == ".":
+            return "n/a"
+        return "%s (%.1f%%)" % (r["flank_hits"], 100 * float(r["flank_hit_rate"]))
+    if tub["Tubio2014"]:
+        tubio_val = (f"<p><b>Tubio et al. 2014 Table S3</b> (checked inside <code>build.py</code>): each of the "
+                     f"{tub['Tubio2014']['n']} partnered/orphan transductions with an identified source is lifted "
+                     f"hg19→hg38→hs1 and must fall inside the flank window of the source row its Table S5 entry was "
+                     f"merged into, downstream in element sense (100 bp slack at the source end; sequence alignment "
+                     f"to the flank when the lift fails). Hits: <b>{hitrate('Tubio2014')}</b> overall — partnered "
+                     f"{hitrate('Tubio2014_partnered')}, orphan {hitrate('Tubio2014_orphan')}. Of the misses, four "
+                     f"45–65 bp 10q25.1 “segments” are the source's own genomic poly-A tail (absent from hs1 with the "
+                     f"element); the others are a non-liftable Xq27.2 segment, a strand conflict at 8q24.13 (Tubio vs "
+                     f"RepeatMasker), a chain artefact at 15q23 and an Xp22.2 orphan overlapping its source's 3' end. "
+                     f"The 15 kb window covers {100*float(tub['Tubio2014']['frac_le_15kb']):.1f}% of Tubio distal ends "
+                     f"(max {tub['Tubio2014']['max']} bp).</p>")
+    else:
+        tubio_val = ""
 
     rows_html = []
     pub = sorted([r for r in src if "published" in r["seed"]], key=lambda r: (-int(r["n_daughters"]), r["id"]))
@@ -126,15 +154,17 @@ def main(argv=None):
             "<td class=wrap>%s</td><td>%s</td><td><span class='pill %s'>%s</span></td></tr>" % (
                 esc(r["id"]), esc(r["band"]), esc(loc), esc(r["subfamily"]), esc(r["ta_status"]),
                 esc({"yes": "ref", "no": "non-ref", "hs1_only": "hs1 only"}.get(r["reference"], r["reference"]) +
+                    (" (somatic)" if r.get("origin") == "somatic" else "") +
                     (" (absent in hs1)" if r["reference"] == "yes" and r["hs1_status"] == "insertion_point" else "") +
                     (" (present in hs1)" if r["hs1_status"] == "present_in_hs1" else "")),
                 esc(ev), esc(r["n_daughters"]), esc(r["hotness"]), esc(r["hotness"])))
 
     stat_rows = "".join(
-        "<tr><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>" % (
+        "<tr><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>" % (
             esc(r["study"]), esc({"td_len": "transduced length", "distal": "distal end from source 3' end"}[r["metric"]]),
             esc(r["n"]), esc(r["median"]), esc(r["p95"]), esc(r["p99"]), esc(r["max"]),
-            esc("%.1f%%" % (100 * float(r["frac_le_10kb"]))), esc("%.1f%%" % (100 * float(r["frac_le_15kb"]))))
+            esc("%.1f%%" % (100 * float(r["frac_le_10kb"]))), esc("%.1f%%" % (100 * float(r["frac_le_15kb"]))),
+            esc(r.get("flank_hits", ".") if r["metric"] == "distal" else ""))
         for r in stats)
 
     n_ta = sum(1 for r in l1 if r["subfamily_call"] == "L1HS" and r["ta_status"] == "Ta")
@@ -157,7 +187,7 @@ and added.</p>
 
 <div class="grid">
  <div class="stat"><b>{len(src)}</b>sources in total</div>
- <div class="stat"><b>{n_pub}</b>published loci (3 studies + compendium)</div>
+ <div class="stat"><b>{n_pub}</b>published loci (4 studies + compendium)</div>
  <div class="stat"><b>{n_hot} / {n_strong}</b>hot (≥20) / strong (5–19 daughters)</div>
  <div class="stat"><b>{n_ref} / {n_non}</b>reference / non-reference L1</div>
  <div class="stat"><b>{n_hs1}</b>hs1-only full-length L1HS</div>
@@ -196,10 +226,16 @@ of the source each transduced segment lies on) — 43/44 agree with RepeatMasker
 <li><b>Gardner et al. 2017</b> (MELT, Genome Res 27:1916), Supplemental Table S9 B (38 sources
 with offspring counts, the Tubio 2014 counts and Brouha/Beck cell-culture activity) and S9 C
 (literature compendium: Tubio, Beck, Brouha, Scott, Solyom, Helman, Evrony, …).</li>
-<li><b>Not obtainable:</b> Tubio et al. 2014 Table S5 (not open access; PMC serves the supplement
-only behind a browser proof-of-work check) — its counts enter through Gardner S9; Brouha et al. 2003
-gives no coordinates in the open text; Damert et al. 2009 has no coordinate supplement. No
-coordinates were invented.</li>
+<li><b>Tubio et al. 2014</b> (Science 345:1251343, TraFiC on 290 cancer genomes), Tables S3, S5
+and S7 (hg19; manual download — not scriptable — placed at <code>supp/tubio2014_tables.xlsx</code>).
+S5: 89 sources ({n_tubio} library rows carry its counts), 72 germline and <b>17 somatic</b> — L1s that
+inserted in the tumour and then transduced themselves (e.g. Xp21.2/DMD, itself a partnered
+transduction from the 18p11.21 source in the same tumour). Somatic sources are non-reference,
+<code>origin=somatic</code> (appended last column) and patient-specific evidence. S5 also gives
+Brouha/Beck cell-culture activity. TraFiC's non-reference positions sit up to ~300 bp from other
+studies' breakpoints, so non-reference loci merge within 300 bp.</li>
+<li><b>Not obtainable:</b> Brouha et al. 2003 gives no coordinates in the open text; Damert et al.
+2009 has no coordinate supplement. No coordinates were invented.</li>
 <li><b>Seeds</b> (no publication needed): every full-length (≥5.9 kb) L1HS in hg38 RepeatMasker,
 L1Base-intact L1PA2/3, full-length L1HS present only in hs1 (T2T-resolved or present only in the
 CHM13 haplotype), near-full-length SVA_E/F. These carry <code>hotness=candidate</code>.</li>
@@ -223,7 +259,7 @@ lies a median {allr['median']} bp and up to {allr['max']} bp downstream of the s
 and {100*float(allr['frac_le_15kb']):.1f}% within <b>15 kb</b>, the window used here (Tubio et al.
 2014 saw transductions reaching ~12 kb).</p>
 <div class="tablewrap"><table><thead><tr><th>study</th><th>metric</th><th>n</th><th>median</th>
-<th>p95</th><th>p99</th><th>max</th><th>≤10 kb</th><th>≤15 kb</th></tr></thead><tbody>{stat_rows}</tbody></table></div>
+<th>p95</th><th>p99</th><th>max</th><th>≤10 kb</th><th>≤15 kb</th><th>in source flank</th></tr></thead><tbody>{stat_rows}</tbody></table></div>
 <h3>Transduction endpoints cluster at the source's pA sites</h3>
 <p>Zumalave et al. (2024, bioRxiv; long reads) showed that the transductions of one source end at
 the same place: all 83 transductions of the 2q24.1 source in tumour PD0270a end exactly 234 bp
@@ -237,10 +273,23 @@ its canonical signal is strong — <code>hotness</code> is a lower bound.</p>
 <h3>Validation</h3>
 <p>383 of 400 randomly drawn published transduced segments (Rodriguez-Martin 2020) map onto
 <code>flanks_3p.fa.gz</code> in sense orientation (1 antisense, 16 unmapped), median offset 316 bp
-into the flank. Ta/pre-Ta typing of the 146 L1Base intact L1s (two 3'UTR diagnostic sites, L1.3
+into the flank.</p>
+{tubio_val}
+<p>Ta/pre-Ta typing of the 146 L1Base intact L1s (two 3'UTR diagnostic sites, L1.3
 5931 = Boissinot et al. 2000's ACA/G site, and 5712) reproduces the long-read subfamily calls of Nam
 2023 for 50/50 Ta and 28/29 pre-Ta sources; result: {n_ta} L1HS-Ta and {n_preta} L1HS-pre-Ta.
 </p>
+
+<h3>Polymorphic L1s are positions, not sources</h3>
+<p>Tubio Table S7 lists {len(poly)} putative polymorphic L1 insertions found by TraFiC in 244 matched
+normals, with carrier counts — but no strand, no length and no sequence, while most polymorphic L1
+insertions are 5'-truncated and inactive. Shipping each with a 15 kb flank would add ~1,500 mostly
+dead candidate sources (≈ 6 MB) that attract spurious assignments. They are kept as lifted positions
+in <code>polymorphic_l1_candidates.tsv</code>: {pst.get('in_library', 0)} are already non-reference or
+hs1-only sources, {pst.get('resolved_in_hs1', 0)} are present in CHM13 (length and identity known),
+{pst.get('reference_l1_at_site', 0)} sit on an L1 already in hg38 (uninformative) and
+{pst.get('no_length_info', 0)} carry no length information. Annotate may use them in the novel-source
+rule at <b>tier B</b> only (section 5).</p>
 
 <h2>3. Source table</h2>
 <p>Published loci, hottest first ({len(pub)} rows; seeds are in the TSV). Daughters are summed
@@ -290,8 +339,10 @@ in-element and element-in-consensus infix identity to the L1HS consensus):</p>
 or a full-length L1 insertion called elsewhere in the same cohort (non-reference; no sequence
 needed). Report <code>TD3P_SOURCE=novel:&lt;hs1 chr:start-end(strand)&gt;</code>,
 <code>NOVEL_SOURCE</code> and the identity.</li>
-<li><b>Tier B — reasonably similar:</b> ≥ 5.5 kb and 0.95 ≤ identity &lt; 0.98. Report the same tags
-(with the identity, so the score can down-weight it); append to the library only with ≥ 2
+<li><b>Tier B — reasonably similar:</b> ≥ 5.5 kb and 0.95 ≤ identity &lt; 0.98, <i>or</i> no
+reference element but a <code>polymorphic_l1_candidates.tsv</code> position (Tubio S7, TraFiC
+polymorphic L1; length/activity unknown) in the strand-aware upstream 15 kb window. Report the same
+tags (with the identity, so the score can down-weight it); append to the library only with ≥ 2
 independent daughters (different insertion sites, or different patients).</li>
 <li><b>Not a source:</b> identity &lt; 0.95 or &lt; 5.5 kb.</li>
 </ul>
@@ -327,11 +378,13 @@ the cohort's results).</p>
 call in brackets), Ta status, hg38 band, reference status, hs1 and hg38 coordinates, strand and how
 it was determined, published hg19 coordinates, L1Base id, identity to L1HS, canonical pA, evidence,
 seed, daughters (total and per study), hotness, alt ids (e.g. LRE3), cell-culture activity, flank
-names and pA hexamers.</li>
+names and pA hexamers, and (last) <code>origin</code> germline/somatic ({n_som} somatic).</li>
 <li><code>flanks_3p.fa.gz</code> — element-sense downstream flanks; description
 <code>hs1:chr:start-end(strand)</code>. Sources with unknown strand ({cnt(lambda r: r['strand'] == '.')} non-reference loci) have
 two records, <code>&lt;id&gt;/+</code> and <code>&lt;id&gt;/-</code>.</li>
 <li><code>flanks_5p_sva.fa.gz</code> — 5 kb upstream of each SVA source, ending at its 5' end.</li>
+<li><code>polymorphic_l1_candidates.tsv</code> — Tubio 2014 S7 TraFiC polymorphic L1 positions (hg19, hg38,
+hs1), carrier count, status, and the library source when already present; tier-B input only.</li>
 <li><code>active.tsv</code> — {len(act)} L1s regarded as active (all L1HS-class intact L1s + published
 sources with ≥ 5 daughters) with identity to the consensus; used for <code>nearest_active</code> /
 <code>element_identity</code>.</li>

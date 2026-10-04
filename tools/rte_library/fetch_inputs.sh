@@ -62,7 +62,15 @@ unzip -o -q "$D"/supp/rm_supp.zip 41588_2019_562_MOESM3_ESM.xlsx -d "$D"/supp
 # Gardner et al. 2017 Genome Res 27:1916 (MELT; PMC5668948): Supplemental Table S9
 get "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC5668948/supplementaryFiles" "$D"/supp/melt_supp.zip
 unzip -o -q "$D"/supp/melt_supp.zip supp_gr.218032.116_Supplemental_Table_S9.xlsx -d "$D"/supp
-# Tubio et al. 2014 Science 345:1251343 Table S5 is NOT open access (Europe PMC: "not open
-# access"; PMC serves the NIHMS supplement only behind a proof-of-work browser check). Its
-# per-source transduction counts enter via Gardner 2017 S9 B/C ("Tubio et al. Activity").
+# Tubio et al. 2014 Science 345:1251343 (PMC4380235) Tables S1-S8: MANUAL DOWNLOAD. Not
+# scriptable (Science needs a browser session; PMC serves the NIHMS supplement only behind a
+# proof-of-work browser check). Download the supplementary tables workbook from
+#   https://www.science.org/doi/suppl/10.1126/science.1251343   (or the PMC copy,
+#   https://pmc.ncbi.nlm.nih.gov/articles/PMC4380235/ -> Supplementary Material)
+# and save it as $D/supp/tubio2014_tables.xlsx (sheets TableS1 ... TableS8; build.py reads S3,
+# S5, S7). The input is optional: without it build.py logs a warning and Tubio counts enter only
+# via Gardner 2017 S9 B/C, Table S3 validation and polymorphic_l1_candidates.tsv are skipped.
+if [ ! -s "$D"/supp/tubio2014_tables.xlsx ]; then
+  echo "NOTE: manual input missing: $D/supp/tubio2014_tables.xlsx (Tubio 2014 supplementary tables; see comment above)" >&2
+fi
 echo "inputs ready in $D"

@@ -9,6 +9,10 @@
 #     insertion-point (non-reference) sources, and the flank-window arithmetic is right on a toy
 #     genome
 #   * the Ta/pre-Ta typer and the novel-source tiering behave as documented
+#   * Tubio 2014 (Table S5) sources are merged (TTC28 22q12.1 carries Tubio2014 evidence and its
+#     137 TraFiC daughters; 17 somatic sources, origin=somatic), a Tubio Table S3 orphan segment
+#     sits in its source's flank, the S3 validation hit rate is >= 97 %, and Table S7
+#     polymorphic L1s are shipped as positions (polymorphic_l1_candidates.tsv), not sources
 # No genome is needed: everything is checked against the committed files.
 #
 # Run with:  python test/test_rte_library.py     (from the repo root)
@@ -257,6 +261,70 @@ def test_flank_window_arithmetic_on_toy_genome():
     # insertion point (junction offset 16): + flank starts there, - flank ends there
     assert flank_window(16, 16, "+", 8, "3p", point=True) == (16, 24)
     assert flank_window(16, 16, "-", 8, "3p", point=True) == (8, 16)
+
+
+def test_tubio2014_sources_merged():
+    rows = _tsv("transduction_sources.tsv")
+    # `origin` is appended as the last column (readers keyed by name are unaffected)
+    with open(os.path.join(LIB, "transduction_sources.tsv")) as fh:
+        assert fh.readline().rstrip("\n").split("\t")[-1] == "origin"
+    ttc28 = [r for r in rows if r["band"] == "22q12.1" and int(r["n_daughters"]) >= 500]
+    assert len(ttc28) == 1
+    r = ttc28[0]
+    assert "Tubio2014" in r["evidence"].split(";")
+    # Tubio S5: 137 derived transductions (Gardner's copy of the Tubio count is a subset: max, not sum)
+    assert "Tubio2014:137" in r["daughters_by_study"].split(";")
+    assert "Gardner2017:2" in r["daughters_by_study"]
+    assert "Brouha2003:0.138xL1RP" in r["cell_culture_activity"]
+    assert "22:29059272-29065303" in r["hg19_published"]
+    assert r["origin"] == "germline"
+    # the 17 somatic Tubio sources: non-reference, origin somatic, each with a flank
+    som = [x for x in rows if x["origin"] == "somatic"]
+    assert len(som) == 17, len(som)
+    hdr = _flank_headers()
+    for x in som:
+        assert x["reference"] == "no" and "Tubio2014" in x["evidence"], x["id"]
+        assert x["strand"] in "+-" and x["flank_3p"] in hdr, x["id"]
+    assert all(x["origin"] in ("germline", "somatic") for x in rows)
+    assert sum("Tubio2014" in x["evidence"] for x in rows) >= 88
+
+
+def test_tubio2014_orphan_segment_in_source_flank():
+    """Tubio S3 orphan TCGA-AA-3516 (22q12.1 source, hg19 chr22:29,065,867-29,066,116, 813 bp
+    from the source's 3' end; sequence from hg38 chr22:28,669,879-28,670,128) lies in the TTC28
+    source flank, forward (element sense), 564 bp in."""
+    seg = ("ATTATTAAACTGATGAGAAAATATAAAGGTTTATTACTGGATTAAATAAGTTTTTCCATATGCTTGAATTTTTTATACACACAG"
+           "TATATACTCTATTATATGTATACACAGAATACAACTCTATCAGTATTGAACTTAGTTTGTCATTCCATAAAATGGCCATAGATGG"
+           "CCAGATCAAGTAATCCTACTCATTTTACCCTGTATTACTGAAAATAAAAATGGGGGGGGGGCAAATAAAGACTTTAATATC")
+    rows = _tsv("transduction_sources.tsv")
+    sid = [r for r in rows if r["band"] == "22q12.1" and int(r["n_daughters"]) >= 500][0]["flank_3p"]
+    flank = None
+    for name, _, s in read_fasta(os.path.join(LIB, "flanks_3p.fa.gz")):
+        if name == sid:
+            flank = s.upper()
+            break
+    assert flank is not None
+    assert flank.find(seg) == 563                 # 0-based; Tubio: distal end 813 bp downstream
+    assert flank.find(revcomp(seg)) == -1
+
+
+def test_tubio2014_validation_stats():
+    st = {(r["study"], r["metric"]): r for r in _tsv("transduction_stats.tsv")}
+    for grp in ("Tubio2014", "Tubio2014_partnered", "Tubio2014_orphan"):
+        r = st[(grp, "distal")]
+        k, n = map(int, r["flank_hits"].split("/"))
+        assert n >= 300 and k / n >= 0.97, (grp, r["flank_hits"])
+        assert float(r["frac_le_15kb"]) >= 0.99, grp
+
+
+def test_polymorphic_l1_candidates():
+    rows = _tsv("polymorphic_l1_candidates.tsv")
+    assert len(rows) == 1478
+    src = {r["id"] for r in _tsv("transduction_sources.tsv")}
+    for r in rows:
+        assert r["status"] in ("in_library", "reference_l1_at_site", "resolved_in_hs1", "no_length_info")
+        assert (r["source_id"] in src) == (r["status"] == "in_library"), r["id"]
+    assert sum(r["status"] == "no_length_info" for r in rows) > 0.8 * len(rows)
 
 
 def test_novel_source_tiers():

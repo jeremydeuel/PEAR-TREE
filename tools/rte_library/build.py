@@ -78,7 +78,12 @@ def default_paths(sp):
         nam_st2=os.path.join(sp, "supp", "nam_MOESM5.xlsx"),
         rm_supp=os.path.join(sp, "supp", "41588_2019_562_MOESM3_ESM.xlsx"),
         melt_s9=os.path.join(sp, "supp", "supp_gr.218032.116_Supplemental_Table_S9.xlsx"),
+        # manual download (fetch_inputs.sh); optional — without it Tubio enters via Gardner S9
+        tubio=os.path.join(sp, "supp", "tubio2014_tables.xlsx"),
     )
+
+
+OPTIONAL_INPUTS = ("tubio",)
 
 
 def read_genbank_seq(path):
@@ -202,8 +207,9 @@ def mafft_consensus(named_seqs, work, tag, min_frac=0.5, threads=4):
     with open(inp, "w") as fh:
         for n, s in named_seqs:
             write_fasta(fh, n, s)
-    if not (os.path.exists(out) and os.path.getmtime(out) > os.path.getmtime(inp)
-            and _same_input(inp, out + ".md5")):
+    # cache keyed on the input's md5 only (inp is rewritten every run, so an mtime test always
+    # re-ran mafft, whose multithreaded output is not bit-stable for the SVA sets)
+    if not (os.path.exists(out) and _same_input(inp, out + ".md5")):
         with open(out, "w") as fh:
             subprocess.run(["mafft", "--auto", "--thread", str(threads), "--quiet", inp],
                            stdout=fh, check=True)
@@ -594,7 +600,8 @@ def manifest(out):
 
 # ============================================================================ main
 def main(argv=None):
-    from sources import parse_published, transduction_stats, build_sources
+    from sources import (parse_published, transduction_stats, build_sources, parse_tubio_s3,
+                         validate_tubio_s3, polymorphic_candidates, STATS_COLUMNS, POLY_COLUMNS)
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--inputs", required=True, help="directory laid out by fetch_inputs.sh")
     ap.add_argument("--work", required=True, help="scratch directory for caches / MSAs")
@@ -608,7 +615,11 @@ def main(argv=None):
         v = getattr(a, k)
         if v:
             P[k] = v
-    missing = [k for k, v in P.items() if not os.path.exists(v)]
+    for k in OPTIONAL_INPUTS:
+        if not os.path.exists(P[k]):
+            log("optional input %s not found (%s): skipped" % (k, P[k]))
+            P[k] = None
+    missing = [k for k, v in P.items() if v and not os.path.exists(v)]
     if missing:
         raise SystemExit("missing inputs: %s" % ", ".join("%s=%s" % (k, P[k]) for k in missing))
     os.makedirs(a.work, exist_ok=True)
@@ -704,7 +715,15 @@ def main(argv=None):
     ents, td_geom = parse_published(P)
     src_rows, fl3, fl5 = build_sources(ents, hg38, hs1, lift19, lift_hs1, young38, young_hs1,
                                        mask_hs1, l1rows, cons["L1HS"], sva_all, bands38)
-    tstats = transduction_stats(td_geom)
+    tubio_tds, poly = None, None
+    if P["tubio"]:
+        tubio_tds = validate_tubio_s3(parse_tubio_s3(P["tubio"]), ents, src_rows, fl3, lift19, lift_hs1,
+                                      hg38=hg38)
+        log("Tubio S3 transductions vs flanks_3p: %s" % dict(collections.Counter(
+            (t["type"], t["flank_hit"]) for t in tubio_tds)))
+        poly = polymorphic_candidates(P["tubio"], lift19, lift_hs1, young38, young_hs1, src_rows,
+                                      hs1, cons["L1HS"])
+    tstats = transduction_stats(td_geom, tubio_tds)
 
     # ---- active
     act = []
@@ -773,7 +792,13 @@ def main(argv=None):
     bgzip_index(os.path.join(out, "flanks_3p.fa"))
     write_fa(os.path.join(out, "flanks_5p_sva.fa"), fl5)
     bgzip_index(os.path.join(out, "flanks_5p_sva.fa"))
-    write_tsv(os.path.join(out, "transduction_stats.tsv"), tstats)
+    write_tsv(os.path.join(out, "transduction_stats.tsv"), tstats, STATS_COLUMNS)
+    if poly is not None:
+        write_tsv(os.path.join(out, "polymorphic_l1_candidates.tsv"), poly, POLY_COLUMNS)
+    if tubio_tds is not None:
+        write_tsv(os.path.join(a.work, "tubio2014_s3_validation.tsv"), tubio_tds,
+                  ["type", "sample", "chrom", "start", "end", "strand", "ts", "te", "td_len",
+                   "distal", "source_id", "flank_hit", "flank_offset"])
     mf = manifest(out)
     summary = dict(l1_intact=len(l1rows),
                    l1_subfamily=collections.Counter((r["subfamily"], r["ta_status"]) for r in l1rows).most_common(),
