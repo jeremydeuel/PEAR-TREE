@@ -146,7 +146,34 @@ source element's identity to consensus.
 `element_identity` (to nearest active element), `nearest_active`, `tsd_seq`, `tsd_len`,
 `en_motif` (the 7-mer at the nick, strand-corrected), `en_mismatches`, `polya_len`,
 `beyond_polya`, `tprt_score`, `tprt_points` (semicolon list `feature:+n`), `tprt_call`
-(`TPRT` / `LIKELY_TPRT` / `UNCERTAIN` / `ARTEFACT_LIKE`).
+(`TPRT` / `LIKELY_TPRT` / `UNCERTAIN` / `ARTEFACT_LIKE`), plus `rte_detail` (W3 addition:
+`key=value;...` with consensus, covered intervals, strand, j5/j3 consensus positions, inversion
+geometry `inv`/`fwd_start`/`inv_junction=del<n>|dup<n>`, `td_end` (transduction endpoint offset in
+the source flank), templated distance, pre-mRNA hit, slippage note).
+
+Conventions fixed by W3 (tools/rte): `tsd_len` > 0 duplication, < 0 target-site deletion (then
+`tsd_seq` = `.`), 0 blunt. `en_motif` is the 7-mer at the nick in the `TTTTT/AA` frame (Flasch
+2019), strand-corrected; `en_mismatches` counts mismatches to the PCAWG 5-mer `TTTT|R` (0–5,
+bins 0–1/2/3/4–5). Novel sources are reported `TD3P_SOURCE=novel:<hs1 coords of the source L1>`.
+Extra tag `PSEUDOGENE_CANDIDATE` (exon hits but no exon–exon junction read; element is then not
+`PSEUDOGENE`). Columns appear only when `CONFIG['annotate']['rte_library']` is set; config keys
+are documented in `tools/rte/annotator.py`.
+
+### Format assumptions made by annotate (W3) on W2/W4 outputs
+
+- `consensus_landmarks.tsv`: header `consensus feature start end` (0-based half-open); optional.
+  SVA landmark `hexamer` is used for FULL_LENGTH. Consensus sequences may end in a poly-A; the
+  trailing A-run is excluded from the element.
+- Young (active-subfamily) consensus = name matching `^(L1HS|L1PA[23]|ALU_?Y|SVA)` (config
+  `young_consensus_regex`); other consensus records are treated as old/inactive controls.
+- `active.tsv`, `transduction_sources.tsv`, `*_intact.tsv`: read by header, key column `id`.
+  `transduction_sources.tsv` may carry `intact_id` (source → intact element id) for the
+  "3' tag is the flank of the 5'-end element" bonus. `flanks_3p.fa` / `flanks_5p_sva.fa` records
+  are named by source id (anything after `|`/whitespace ignored).
+- evidence TSV: optional extra column `cross_sample_identical` (0/1); a `POLYA` side row is
+  accepted and counted for `supported`.
+- reads FASTA: every sequence, mates included, is in allele-forward (= reference-forward)
+  orientation, so a mate's strand on the element consensus is the element strand.
 
 ### TPRT point system (annotate, `tools/rte/score.py`) — design targets
 

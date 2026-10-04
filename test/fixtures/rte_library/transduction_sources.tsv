@@ -1,0 +1,4 @@
+id	class	hs1	hg38	strand	status	evidence	hot	intact_id
+TD_UID-5	L1	.	chr8:91558657-91564688	+	reference	L1Base	1	UID-5
+TD_UID-8	L1	.	chr11:24327951-24333982	+	reference	L1Base	1	UID-8
+TD_UID-9	L1	.	chr11:60532159-60538191	+	reference	L1Base	1	UID-9

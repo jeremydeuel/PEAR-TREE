@@ -311,6 +311,10 @@ class Insertion:
         # link_reciprocal_translocations() pass when this junction and another point back at
         # each other (a balanced/reciprocal translocation). None until/unless that pass runs.
         self.reciprocal_partner = None
+        # processed-pseudogene proof from tools/rte (an exon-exon junction covered by a read):
+        # None = not evaluated (rte off), True/False once the rte pass ran. Only consulted by
+        # _element_conclusion() when CONFIG['annotate']['pseudogene_require_exon_junction'] is set.
+        self.exon_junction_proven = None
         # extract inserted sequences
     # Sequence case encodes the junction: UPPER = aligned to the reference, lower = clipped.
     # A tail is therefore a homopolymer run in the *clipped* part, flush against the aligned
@@ -579,8 +583,9 @@ class Insertion:
         """
         This function returns a FASTA chunk with the inserted sequences for the insertion.
         """
-        self.right_ins_seq = self.right_seq[min([self.right_seq.find(b) for b in 'acgt' if b in self.right_seq]):].upper()
-        self.left_ins_seq = self.left_seq[:min([self.left_seq.find(b) for b in 'ACGT' if b in self.left_seq])].upper()
+        # one-sided records (poly-A / discordant-anchored end) carry an empty junction string;
+        # the min() over an empty list used to crash here.
+        self.left_ins_seq, self.right_ins_seq = (s.upper() for s in self._insert_clips())
         return f'>{self.title}:R\n{self.right_ins_seq}\n>{self.title}:L\n{self.left_ins_seq}\n'
 
     # ------------------------------------------------------ uncharacterised complex insertion
@@ -1026,6 +1031,11 @@ class Insertion:
         # because a pseudogene clip is a unique non-RTE map too — this is the more specific
         # explanation.
         pg = self._pseudogene()
+        if pg and CONFIG['annotate'].get('pseudogene_require_exon_junction') \
+                and self.exon_junction_proven is False:
+            # tools/rte looked for an exon-exon junction read and found none: candidate only
+            DEBUG and print(f"    - pseudogene of {pg[0]} lacks an exon-exon junction read -> not called")
+            pg = None
         if pg:
             gene, nexon, has_polya = pg
             detail = f"{nexon} exons" if nexon >= 2 else "1 exon + polyA"
@@ -1109,6 +1119,39 @@ class VariantAnnotationContainer:
                 self.read_sam_local()
         self.link_reciprocal_translocations()
         self.read_gene_model()
+        # TPRT-hallmark annotation (tools/rte): additive columns, only when configured
+        self.rte_records = self.run_rte()
+
+    def run_rte(self):
+        """tools/rte plug-in: element / structure / tags / TSD / EN / poly-A / TPRT score per
+        insertion, from the combine sidecars (insertions.evidence.tsv.gz + insertions.reads.fa.gz)
+        and the reference RTE library. Enabled by CONFIG['annotate']['rte_library']; returns {}
+        (no new columns, legacy output byte-identical) otherwise. The sidecars default to the
+        insertions file's siblings and may be absent (the junction strings are used alone)."""
+        cfg = CONFIG['annotate']
+        if not cfg.get('rte_library'):
+            return {}
+        try:
+            from tools.rte.annotator import RteAnnotator, InsertionInput, default_sidecars
+        except ImportError:                       # run as `python tools/annotate_v2.py`
+            from rte.annotator import RteAnnotator, InsertionInput, default_sidecars
+        ev_default, rd_default = default_sidecars(self.insertions_file)
+        ev_path = cfg.get('rte_evidence_file') or ev_default
+        rd_path = cfg.get('rte_reads_file') or rd_default
+        ev_path = ev_path(self.sample) if callable(ev_path) else ev_path
+        rd_path = rd_path(self.sample) if callable(rd_path) else rd_path
+        ann = RteAnnotator(cfg, gene_model=Insertion.gene_model)
+        ann.load_evidence(ev_path, rd_path, wanted=set(self.insertions))
+        inputs = {k: InsertionInput.from_legacy(ins, self.element_class(ins.conclusion()))
+                  for k, ins in self.insertions.items()}
+        records = ann.annotate_all(inputs)
+        for k, rec in records.items():
+            ins = self.insertions.get(k)
+            if ins is not None and inputs[k].pseudogene_genes:
+                ins.exon_junction_proven = 'EXON_JUNCTION' in rec.tags
+        print(f"[rte] annotated {len(records)} insertions "
+              f"({sum(1 for r in records.values() if r.tprt_call == 'TPRT')} TPRT)")
+        return records
 
     def read_gene_model(self):
         """Load the insertion-SITE gene model (CONFIG['annotate']['gene_model']) once and share it
@@ -1179,29 +1222,37 @@ class VariantAnnotationContainer:
 
     def read_insertions(self):
         """
-        This fucntion reads the insertions.combined.txt.gz file and generates new Insertions objects including sequences and populates the self.insertions dictionary with these.
+        Read the insertions.combined.txt.gz FASTQ (records `@<title>:L` / `@<title>:R`) into
+        Insertion objects. Records are paired by title, so one-sided insertions (a poly-A- or
+        discordant-anchored end has no junction reads; combine writes only the other side) get
+        an empty string for the missing side instead of crashing the L-then-R assertion.
         """
         print(f"reading insertions file {self.insertions_file}...")
+        sides = {}
+        order = []
         with gzip.open(self.insertions_file, 'rt') as ifh:
-            for line in ifh:
-                line = line.strip()
-                if not line: continue
-                assert line[0] == '@'
-                assert line[-1] == 'L'
-                left_title = line[1:-2]
-                left_seq = ifh.readline().strip()
-                assert ifh.readline().strip() == '+'
-                left_qual = ifh.readline().strip()
-                right_title = ifh.readline().strip()
-                assert right_title[0] == '@'
-                assert right_title[-1] == 'R'
-                right_title = right_title[1:-2]
-                assert right_title == left_title
-                right_seq = ifh.readline().strip()
-                assert ifh.readline().strip() == '+'
-                right_qual = ifh.readline().strip()
-                self.insertions[left_title] = Insertion(left_title, left_seq, right_seq)
-        print(f"done reading insertions file {self.insertions_file}, read {len(self.insertions)} insertions.")
+            while True:
+                header = ifh.readline()
+                if not header:
+                    break
+                header = header.strip()
+                if not header:
+                    continue
+                assert header[0] == '@', f"malformed record header {header!r}"
+                seq = ifh.readline().strip()
+                assert ifh.readline().strip().startswith('+')
+                ifh.readline()                       # quality
+                title, side = header[1:-2], header[-1]
+                assert side in ('L', 'R'), f"unknown junction side in {header!r}"
+                if title not in sides:
+                    sides[title] = {}
+                    order.append(title)
+                sides[title][side] = seq
+        for title in order:
+            self.insertions[title] = Insertion(title, sides[title].get('L', ''), sides[title].get('R', ''))
+        n1 = sum(1 for t in order if len(sides[t]) == 1)
+        print(f"done reading insertions file {self.insertions_file}, read {len(self.insertions)} insertions "
+              f"({n1} one-sided).")
 
     def read_genotyping(self):
         """
@@ -1581,6 +1632,11 @@ class VariantAnnotationContainer:
         cols = ['locus', 'class', 'conclusion', 'n_ins', 'n_wt', 'n_art',
                 'left_polyA', 'right_polyA', 'left_dfam', 'right_dfam', 'left_map', 'right_map',
                 'site_region', 'site_gene', 'site_strand']
+        rte = getattr(self, 'rte_records', None) or {}
+        if rte:
+            # tools/rte columns (plans/tprt_hallmarks/SPEC.md), from the structured RteRecord
+            rte_cols = next(iter(rte.values())).COLUMNS
+            cols = cols + rte_cols
         n = 0
         with opener(path, 'wt') as fh:
             fh.write('\t'.join(cols) + '\n')
@@ -1597,6 +1653,9 @@ class VariantAnnotationContainer:
                        'Y' if ins.has_left_polyA() else 'N',
                        'Y' if ins.has_right_polyA() else 'N',
                        ld, rd, lm, rm, sregion, sgene, sstrand]
+                if rte:
+                    rec = rte.get(key)
+                    row += rec.row() if rec is not None else ['.'] * len(rte_cols)
                 fh.write('\t'.join(row) + '\n')
                 n += 1
         print(f"wrote annotation table ({n} loci) to {path}")
@@ -1608,6 +1667,10 @@ class VariantAnnotationContainer:
             site = insertion.site()
             if site is not None:
                 print(f"  SITE: {site[3]}")
+            rec = (getattr(self, 'rte_records', None) or {}).get(key)
+            if rec is not None:
+                print(f"  RTE: {rec.element} {rec.structure} [{','.join(rec.tags) or '-'}] "
+                      f"{rec.tprt_call} score={rec.tprt_score} ({rec.tprt_points})")
             print(f"  RIGHT INSERTION: {insertion.right_seq}")
             for dfam in insertion.right_dfams:
                 print(f"    {str(dfam)}")
