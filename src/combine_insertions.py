@@ -128,6 +128,12 @@ def combine_insertions(input_files, insertions_genotyping_file, combined_inserti
             all_insertions += file_insertions
             accepted_files.append(f)
     print(f"intersecting insertions from {len(input_files)} files...")
+    # per-sample discovery breakpoints, taken before intersect merges records (far-pair
+    # colony-consistency test, CONFIG['combine_insertions']['far_pair_strict'])
+    breakpoints = None
+    if CONFIG['combine_insertions'].get('far_pair_strict', False):
+        from combine_insertions_evidence import discovery_breakpoints
+        breakpoints = discovery_breakpoints(all_insertions)
     insertions = intersect_insertions(all_insertions)
     #remove insertions in regions with far too high count
     bin_range = 100
@@ -144,7 +150,8 @@ def combine_insertions(input_files, insertions_genotyping_file, combined_inserti
            or os.path.exists((f[:-7] if f.endswith(".txt.gz") else f) + ".evidence.tsv.gz")
            for f in accepted_files):
         from combine_insertions_evidence import apply_evidence
-        evidence = apply_evidence(insertions, accepted_files, CONFIG['combine_insertions'])
+        evidence = apply_evidence(insertions, accepted_files, CONFIG['combine_insertions'],
+                                  breakpoints=breakpoints)
     if evidence is not None:
         insertions, evidence_records, evidence_failed, _ = evidence
     print(f"writing summarised insertions fasta file {insertions_fasta}")
@@ -249,6 +256,13 @@ def combine_insertions(input_files, insertions_genotyping_file, combined_inserti
     #print(Counter(delta_sampler))
     print(f"detected {len(filter_reads)} insertions where the clipped part maps near the breakpoint. Removing these")
     insertions = [i for i in insertions if i.name not in filter_reads]
+    if evidence is not None and evidence[3].get("pool") is not None:
+        # TPRT (merge_tolerance_bp / far_pair_split): fold surviving one-sided loci into the
+        # surviving call of the same junction (evidence pooled there), only now that both
+        # passed every filter
+        insertions, n_abs = evidence[3]["pool"].absorb_one_sided(insertions)
+        if n_abs:
+            print(f"folded {n_abs} one-sided loci into a surviving call of the same junction")
     with gzip.open(combined_insertions, 'wt') as f:
         f.writelines(
             [f'{i.left_consensus.fastq(f"{i.name}:L")}{i.right_consensus.fastq(f"{i.name}:R")}' for i in insertions if

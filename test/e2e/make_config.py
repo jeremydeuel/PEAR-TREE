@@ -17,6 +17,9 @@ def main():
     ap.add_argument("--hg38-2bit", required=True)
     ap.add_argument("--hs1-2bit", required=True)
     ap.add_argument("--workdir", required=True)
+    ap.add_argument("--override", action="append", default=[],
+                    help="KEY=PYTHON_LITERAL applied to CONFIG['combine_insertions'] last (ablations, "
+                         "e.g. slippage_reject=False); run_e2e.sh passes $CI_OVERRIDES (space separated)")
     a = ap.parse_args()
     os.makedirs(os.path.dirname(a.out), exist_ok=True)
     tprt = os.path.join(a.repo, "cluster", "config.py.grch38.tprt")
@@ -47,6 +50,9 @@ A.update({{
     "remap_rmsk": None,
 }})
 '''
+    for ov in a.override:
+        k, v = ov.split("=", 1)
+        txt += f"CI[{k!r}] = {v}\n"
     with open(a.out, "w") as fh:
         fh.write(txt)
     print(f"wrote {a.out}")

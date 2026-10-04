@@ -759,14 +759,17 @@ def _aligned_part(ins, side) -> str:
     return str(a).upper() if a is not None else ""
 
 
-def apply_evidence(insertions, input_files, cfg, ref_fetch=None):
+def apply_evidence(insertions, input_files, cfg, ref_fetch=None, breakpoints=None):
     """Evaluate every junction of every insertion from the pooled sidecars.
 
     Returns (kept, records, failed_names, stats) or None when no sidecar exists (the
     caller then behaves exactly as before). `records` maps insertion name -> [JunctionRecord];
     gated-out insertions keep their records (supported=0) for diagnostics.
     Mutates kept insertions' clips when `indel_aware_consensus` is on and the new
-    consensus is at least as long as the legacy longest-clip choice."""
+    consensus is at least as long as the legacy longest-clip choice.
+
+    `breakpoints` (optional, from `discovery_breakpoints`): every per-sample discovery
+    breakpoint, for the far-pair colony-consistency test (`far_pair_strict`)."""
     # Pooling follows combine's own cross-sample grouping: every discovery locus that
     # intersect_insertions merged into this Insertion (Insertion.member_loci, one
     # (file, locus) per contributing record) contributes its sidecar rows, so colony A's
@@ -793,26 +796,80 @@ def apply_evidence(insertions, input_files, cfg, ref_fetch=None):
         except Exception as e:     # no genome: SHORT reads are rejected ("no_reference")
             print(f"WARNING: count_short_overhang without a reference ({e}); SHORT reads ignored")
     n_replaced = 0
+    slip_on = bool(cfg.get("slippage_reject", False))
+    far_on = bool(cfg.get("far_pair_strict", False))
+    if (slip_on or far_on) and ref_fetch is None:
+        try:
+            from combine_insertions_get_sequence import get_sequence as ref_fetch
+        except Exception as e:
+            print(f"WARNING: slippage_reject without a reference ({e}); slippage test skipped")
+            slip_on = False
+    matcher = None
+    if slip_on or far_on:
+        from combine_insertions_tprt_filters import LibraryMatcher
+        matcher = LibraryMatcher(cfg.get("rte_library") or "resources/rte_library")
+    by_id = {id(i): members[i.name] for i in insertions}
+    recmap = {}                     # id(insertion) -> [JunctionRecord]
+    failed_objs = []
+    tprt_reasons = Counter()
+
+    def evaluate(ins, side):
+        ms = by_id[id(ins)]
+        allowed = getattr(ins, "member_sides", None) or {}
+        pooled = [r for m in ms if side in allowed.get(m, SIDES)
+                  for r in (rows.get((m, side)) or rows.get((m[1], side), []))]
+        pooled = _reanchor(pooled, side, _ins_junction(ins, side))
+        rec = evaluate_junction(ins.name, side, pooled, cfg, ref_fetch)
+        short_reasons.update(rec.short_reasons)
+        rec.aligned = _aligned_part(ins, side)
+        loci = sorted({l for _, l in ms})
+        if loci != [ins.name]:
+            rec.member_loci = ",".join(loci)
+        return rec
+
     for ins in insertions:
         recs = []
-        open_side = getattr(ins, "open_side", None)
-        if open_side is None:            # Feature-A discordant end: TYPE_RIGHT_DISC=4 / TYPE_LEFT_DISC=5
-            open_side = {4: "RIGHT", 5: "LEFT"}.get(getattr(ins, "type", None))
+        open_side = _open_side(ins)
         for side in SIDES:
             if side == open_side:
                 # one-sided locus (discovery `oneside_`, Feature-A disc end, kept poly-A
                 # record): the open end has no reads by construction -- only the real side is
                 # gated (it still needs >= min_independent_fragments)
                 continue
-            pooled = [r for m in members[ins.name] for r in (rows.get((m, side)) or rows.get((m[1], side), []))]
-            rec = evaluate_junction(ins.name, side, pooled, cfg, ref_fetch)
-            short_reasons.update(rec.short_reasons)
-            rec.aligned = _aligned_part(ins, side)
-            loci = sorted({l for _, l in members[ins.name]})
-            if loci != [ins.name]:
-                rec.member_loci = ",".join(loci)
-            recs.append(rec)
-        records[ins.name] = recs
+            recs.append(evaluate(ins, side))
+        recmap[id(ins)] = recs
+        if far_on and open_side is None and len(recs) == 2:
+            verdict = _far_pair_check(ins, recs, cfg, matcher, breakpoints, ref_fetch)
+            if verdict is not None:
+                reason, pside = verdict
+                tprt_reasons[f"far_pair:{reason}"] += 1
+                prec = [r for r in recs if r.side == pside]
+                if (pside is not None and cfg.get("far_pair_split", True) and prec
+                        and prec[0].n_independent >= min_ind):
+                    old_name = ins.name
+                    _to_one_sided(ins, pside)
+                    ins.member_sides = {m: (pside,) for m in by_id[id(ins)]}
+                    prec[0].insertion_id = ins.name
+                    prec[0].member_loci = ",".join(sorted({l for _, l in by_id[id(ins)]} | {old_name}))
+                    prec[0].fail_reason = f"split_from_far_pair:{reason}"
+                    recs = prec
+                    recmap[id(ins)] = recs
+                    tprt_reasons["far_pair:split_to_one_sided"] += 1
+                else:
+                    for r in recs:
+                        r.fail_reason = f"far_pair:{reason}"
+                    failed_objs.append(ins)
+                    reasons[f"far_pair:{reason}"] += 1
+                    continue
+        if slip_on:
+            why = _slippage_check(ins, recs, cfg, matcher, ref_fetch)
+            if why:
+                tprt_reasons[why.split(":")[0]] += 1
+                for r in recs:
+                    r.fail_reason = why
+                failed_objs.append(ins)
+                reasons[why.split("(")[0]] += 1
+                continue
         eligible = all(f in have for f in ins.files)
         fails = [r for r in recs if r.n_independent < min_ind]
         for r in recs:
@@ -821,7 +878,7 @@ def apply_evidence(insertions, input_files, cfg, ref_fetch=None):
                 if r in fails:
                     r.fail_reason = f"n_independent<{min_ind}"
         if gate and eligible and fails:
-            failed.add(ins.name)
+            failed_objs.append(ins)
             if all(r.n_reads == 0 for r in recs):
                 reasons["no_evidence_reads"] += 1
             else:
@@ -830,6 +887,17 @@ def apply_evidence(insertions, input_files, cfg, ref_fetch=None):
         if use_cons:
             n_replaced += _replace_clips(ins, recs)
         kept.append(ins)
+    # records by name (a split far pair can share its new one-sided name with another locus;
+    # EvidencePool.absorb_one_sided merges such duplicates after the remap filters)
+    for i in kept:
+        records.setdefault(i.name, recmap[id(i)])
+    kept_names = set(records)
+    for i in failed_objs:
+        if i.name not in kept_names:
+            records.setdefault(i.name, recmap[id(i)])
+            failed.add(i.name)
+    if tprt_reasons:
+        print("TPRT combine filters: " + ", ".join(f"{k}={v}" for k, v in sorted(tprt_reasons.items())))
     print(f"evidence sidecars: {len(have)}/{len(input_files)} files; {len(insertions)} insertions evaluated, "
           f"{sum(len(v) for v in rows.values())} evidence rows")
     if gate:
@@ -846,7 +914,281 @@ def apply_evidence(insertions, input_files, cfg, ref_fetch=None):
         print(f"SHORT overhang reads: {n_used} fragment(s) used, {sum(short_reasons.values())} rejected "
               f"({', '.join(f'{k}={v}' for k, v in sorted(short_reasons.items())) or '-'}); "
               f"{n_only} junction(s) reach >= {min_ind} independent fragments only thanks to them")
-    return kept, records, failed, {"reasons": reasons, "replaced": n_replaced}
+    pool = EvidencePool(evaluate, by_id, recmap, records, cfg, use_cons)
+    return kept, records, failed, {"reasons": reasons, "replaced": n_replaced, "pool": pool,
+                                   "tprt": tprt_reasons}
+
+
+class EvidencePool:
+    """State of `apply_evidence` kept for the final one-sided merge (TPRT fuzzy merge /
+    far_pair_split): run AFTER the remap filters, so a one-sided locus is folded into a
+    two-sided call only when that call survived every filter (absorbing earlier lost real
+    events whenever the two-sided record was later removed)."""
+
+    def __init__(self, evaluate, by_id, recmap, records, cfg, use_cons):
+        self.evaluate, self.by_id, self.recmap, self.records = evaluate, by_id, recmap, records
+        self.cfg, self.use_cons = cfg, use_cons
+
+    def absorb_one_sided(self, insertions):
+        """Fold each surviving one-sided locus into a surviving insertion with the same real
+        junction within `merge_tolerance_bp` (two-sided first; else another one-sided locus of the
+        same side), pooling its evidence there (re-evaluated). Returns (insertions, n_absorbed)."""
+        from combine_insertions_tprt_filters import clips_agree
+        tol = int(self.cfg.get("merge_tolerance_bp", 0) or 0)
+        if self.cfg.get("far_pair_strict", False):
+            tol = max(tol, 5)
+        if tol <= 0:
+            return insertions, 0
+        min_ind = self.cfg.get("min_independent_fragments", 2)
+        alive = {id(i) for i in insertions}
+        one = sorted((i for i in insertions if _open_side(i) is not None),
+                     key=lambda i: (-len(i.files), i.name))
+        n = 0
+        for x in one:
+            if id(x) not in alive:
+                continue
+            side = "LEFT" if _open_side(x) == "RIGHT" else "RIGHT"
+            cands = [i for i in insertions if i is not x and id(i) in alive]
+            t = _absorb_target(x, side, cands, tol)
+            if t is None:
+                continue
+            xc = x.left_clipped if side == "LEFT" else x.right_clipped
+            tc = t.left_clipped if side == "LEFT" else t.right_clipped
+            if xc is not None and tc is not None and not clips_agree([str(tc), str(xc)]):
+                continue
+            old = set(self.by_id[id(t)])
+            self.by_id[id(t)] = list(dict.fromkeys(self.by_id[id(t)] + self.by_id[id(x)]))
+            ms = dict(getattr(t, "member_sides", None) or {})
+            for m in self.by_id[id(x)]:
+                if m not in old:          # x contributes only its real junction
+                    ms[m] = (side,)
+            t.member_sides = ms
+            t.files = t.files + [f for f in x.files if f not in t.files]
+            new = self.evaluate(t, side)
+            recs = [new if r.side == side else r for r in self.recmap[id(t)]]
+            for r in recs:
+                r.supported = 1 if r.n_independent >= min_ind else 0
+            self.recmap[id(t)] = recs
+            self.records[t.name] = recs
+            if self.use_cons:
+                _replace_clips(t, [new])
+            alive.discard(id(x))
+            n += 1
+        out = [i for i in insertions if id(i) in alive]
+        names = {i.name for i in out}
+        for i in insertions:
+            if id(i) not in alive and i.name not in names:
+                self.records.pop(i.name, None)
+        return out, n
+
+
+def _locus_junction(locus: str, side: str):
+    """Junction coordinate of `side` from a discovery locus id (`contig:L-R`, `oneside_` /
+    `polyA_` / `disc_` tokens carry a coordinate too), or None."""
+    try:
+        a, b = locus.rsplit(":", 1)[1].split("-")
+        tok = a if side == "LEFT" else b
+        return int(tok.split("_")[-1])
+    except (ValueError, IndexError):
+        return None
+
+
+def _reanchor(rows, side, junction):
+    """Rows of a fuzzy-merged member locus whose junction differs by d bp from the insertion's:
+    move their `clip_at` by d so every CLIP/SHORT read's clip starts at the insertion's junction
+    (a RIGHT read aligned to R+3 has the insertion's first 3 bases in its aligned part). Rows of
+    the insertion's own locus are returned unchanged (exact-name pooling stays byte-identical)."""
+    if junction is None:
+        return rows
+    out = []
+    cache = {}
+    for r in rows:
+        if r.role in ("CLIP", "SHORT") and r.clip_at >= 0:
+            jm = cache.get(r.locus)
+            if jm is None:
+                jm = cache[r.locus] = _locus_junction(r.locus, side)
+            if jm is not None and jm != junction:
+                at = r.clip_at + (junction - jm)
+                if 0 <= at <= len(r.seq):
+                    c = EvidenceRow.__new__(EvidenceRow)
+                    for k in EvidenceRow.__slots__:
+                        setattr(c, k, getattr(r, k))
+                    c.clip_at = at
+                    r = c
+        out.append(r)
+    return out
+
+
+def _open_side(ins):
+    """'LEFT'/'RIGHT' for a one-sided locus (the end without evidence), else None."""
+    open_side = getattr(ins, "open_side", None)
+    if open_side is None:            # Feature-A discordant end: TYPE_RIGHT_DISC=4 / TYPE_LEFT_DISC=5
+        open_side = {4: "RIGHT", 5: "LEFT"}.get(getattr(ins, "type", None))
+    return open_side
+
+
+def _ins_junction(ins, side):
+    return getattr(ins, "left_pos" if side == "LEFT" else "right_pos", None)
+
+
+def _outward_clip(rec, ins, with_mates=False) -> str:
+    """Outward clip consensus of a junction: junction reads only (combined_consensus) or with
+    overlapping mates (consensus); falls back to the discovery clip when the pooled consensus
+    is empty (first column below depth / disagreeing)."""
+    c = rec.consensus if with_mates else (rec.combined_consensus if rec.combined_consensus.seq else rec.consensus)
+    if c.seq:
+        return c.seq.upper()
+    old = ins.left_clipped if rec.side == "LEFT" else ins.right_clipped
+    return str(old).upper() if old is not None else ""
+
+
+def discovery_breakpoints(records):
+    """{(contig, side): [(pos, sample)]} over every per-sample discovery record (before
+    intersect): which colonies' discovery found a junction there (far-pair colony test)."""
+    bp = defaultdict(list)
+    for i in records:
+        s = sample_name(i.files[0]) if getattr(i, "files", None) else "?"
+        t = getattr(i, "type", 3)
+        if t not in (2, 5) and getattr(i, "left_pos", None) is not None:      # LEFT real
+            bp[(i.reference_name, "LEFT")].append((i.left_pos, s))
+        if t not in (1, 4) and getattr(i, "right_pos", None) is not None:     # RIGHT real
+            bp[(i.reference_name, "RIGHT")].append((i.right_pos, s))
+    return bp
+
+
+def _colonies(ins, rec, breakpoints, tol):
+    pos = _ins_junction(ins, rec.side)
+    out = {r.sample for r in rec.rows if r.role in EVIDENCE_ROLES}
+    for p, s in (breakpoints or {}).get((ins.reference_name, rec.side), ()):
+        if abs(p - pos) <= tol:
+            out.add(s)
+    return out
+
+
+def _far_pair_check(ins, recs, cfg, matcher, breakpoints, ref_fetch=None):
+    """None when the insertion is not a far pair or passes far_pair_verdict, else
+    (reason, poly-A side or None)."""
+    from combine_insertions_tprt_filters import far_geometry, far_pair_verdict
+    gap = ins.right_pos - ins.left_pos
+    if not far_geometry(gap, cfg):
+        return None
+    tol = max(int(cfg.get("merge_tolerance_bp", 0) or 0), int(cfg.get("far_pair_colony_tol", 5)))
+    by = {r.side: r for r in recs}
+    # junction reads only: mates of an unrelated breakpoint are reference reads and often
+    # reach a nearby reference element, which would fake the element test. Candidates: the
+    # pooled junction-read consensus, then the discovery clip (the consensus stops early at
+    # poly-A length disagreement)
+    clips = {}
+    for s in by:
+        old = ins.left_clipped if s == "LEFT" else ins.right_clipped
+        c = [_outward_clip(by[s], ins), str(old).upper() if old is not None else ""]
+        clips[s] = [x for x in dict.fromkeys(c) if x]
+    n_ind = {s: by[s].n_independent for s in by}
+    cols = {s: _colonies(ins, by[s], breakpoints, tol) for s in by}
+    mates = {s: _inside_mates(by[s]) for s in by}
+    reason, pside = far_pair_verdict(clips, n_ind, cols, matcher, cfg, mates)
+    if not reason and ref_fetch is not None:
+        # (f) the "poly-A tail" must not be slippage at a reference A/T tract: such a junction
+        # pairs with any element-carrying breakpoint within 50 kb (the E2E's main far-pair FP)
+        from combine_insertions_tprt_filters import outward_reference, slippage_junction
+        line, j = outward_reference(ref_fetch, ins.reference_name, _ins_junction(ins, pside), pside)
+        if slippage_junction(_outward_clip(by[pside], ins), line, j, cfg):
+            reason = "polya_side_slippage"
+    return None if not reason else (reason, pside)
+
+
+def _inside_mates(rec, min_mapq=20, max_dist=1000):
+    """Mates of a junction's evidence fragments that lie inside the insertion (unmapped, other
+    contig, > max_dist away or MAPQ < min_mapq), one per fragment, oriented like the outward
+    clip (RIGHT: allele-forward; LEFT: its reverse complement)."""
+    ev = {(r.sample, r.frag): r for r in rec.rows if r.role in ("CLIP", "DISC")}
+    out = {}
+    for r in rec.rows:
+        k = (r.sample, r.frag)
+        if r.role != "MATE" or k not in ev or k in out or not r.seq or r.seq == "*":
+            continue
+        p = ev[k]
+        inside = (not r.mapped or r.ref != p.ref or abs(r.pos - p.pos) > max_dist or r.mapq < min_mapq)
+        if inside:
+            s = allele_forward_seq(r).upper()
+            out[k] = revcomp(s) if rec.side == "LEFT" else s
+    return list(out.values())
+
+
+def _to_one_sided(ins, real_side):
+    """Reduce a two-sided insertion to a one-sided locus on `real_side` (discovery naming:
+    `contig:L-oneside_L` / `contig:oneside_R-R`)."""
+    c = ins.reference_name
+    if real_side == "LEFT":
+        ins.right_clipped = ins.right_aligned = None
+        ins.right_pos = ins.left_pos
+        ins.right_mates = []
+        ins.type, ins.open_side = 4, "RIGHT"          # TYPE_RIGHT_DISC
+        ins.name = f"{c}:{ins.left_pos}-oneside_{ins.left_pos}"
+    else:
+        ins.left_clipped = ins.left_aligned = None
+        ins.left_pos = ins.right_pos
+        ins.left_mates = []
+        ins.type, ins.open_side = 5, "LEFT"           # TYPE_LEFT_DISC
+        ins.name = f"{c}:oneside_{ins.right_pos}-{ins.right_pos}"
+
+
+def _absorb_target(x, side, candidates, tol):
+    """Insertion among `candidates` with a real `side` junction within tol of x's (full
+    insertions first, then the nearest)."""
+    pos = _ins_junction(x, side)
+    best = None
+    for t in candidates:
+        if t.reference_name != x.reference_name or _open_side(t) == side:
+            continue
+        d = abs(_ins_junction(t, side) - pos)
+        if d <= tol:
+            key = (_open_side(t) is not None, d, t.name)
+            if best is None or key < best[0]:
+                best = (key, t)
+    return best[1] if best else None
+
+
+def _carries_element(rec, ins, matcher) -> bool:
+    """The junction's clip hits the element / transduction-source library, or (clip too short,
+    < 20 bp) >= 2 of its fragments have an inside-insertion mate that does. Mates of a slipped
+    reference tract are placed reference reads and never count as inside."""
+    if matcher.hit(_outward_clip(rec, ins), with_flanks=True):
+        return True
+    hits = 0
+    for m in _inside_mates(rec):
+        if matcher.hit(m, with_flanks=True) or matcher.hit(revcomp(m), with_flanks=True):
+            hits += 1
+            if hits >= 2:
+                return True
+    return False
+
+
+def _slippage_check(ins, recs, cfg, matcher, ref_fetch) -> str:
+    """'' or the reject reason: some junction is reference-tract slippage
+    (combine_insertions_tprt_filters.slippage_junction) and no OTHER junction carries element
+    or transduction-source sequence (a one-sided locus has no other junction)."""
+    from combine_insertions_tprt_filters import outward_reference, slippage_junction
+    slip = {}
+    for r in recs:
+        line, j = outward_reference(ref_fetch, ins.reference_name, _ins_junction(ins, r.side), r.side)
+        # slippage only if BOTH the junction-read consensus and the consensus extended by
+        # overlapping mates say so: at a real insertion in a reference tract the junction reads
+        # carry the slipped poly-A (+ SBS junk), but the mates show the element beyond it
+        slip[r.side] = slippage_junction(_outward_clip(r, ins), line, j, cfg)
+        if slip[r.side] and r.consensus.seq and len(r.consensus.seq) > len(_outward_clip(r, ins)):
+            if not slippage_junction(r.consensus.seq.upper(), line, j, cfg):
+                slip[r.side] = ""
+    for s, why in slip.items():
+        if not why:
+            continue
+        # the other junction is informative only if it is not slippage itself and carries
+        # element / transduction-source sequence; junction reads only (mates of a slipped
+        # reference tract reach the reference Alu whose tail the tract usually is)
+        others = [r for r in recs if r.side != s and not slip[r.side]]
+        if not any(_carries_element(o, ins, matcher) for o in others):
+            return f"slippage:{s}({why})"
+    return ""
 
 
 def _member_loci(ins):

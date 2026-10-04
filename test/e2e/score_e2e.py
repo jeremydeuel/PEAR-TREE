@@ -158,11 +158,13 @@ def main():
             for c in dcalls[s]:
                 if match(c, r):
                     explained_disc.add((s, c))
-        cand = [n for n in ev if match(parse_name(n), r)]
+        # two-sided names first (an event may also have a one-sided duplicate)
+        cand = sorted((n for n in ev if match(parse_name(n), r)), key=lambda n: (parse_name(n)[3], n))
         r["ev_name"] = cand[0] if cand else None
+        # every junction the locus has (a one-sided locus has one real junction)
         r["pooled"] = bool(cand) and any(
-            all(ev[n].get(sd, {}).get("supported") == "1" for sd in ("LEFT", "RIGHT")) for n in cand)
-        cc = [n for n in comb if match(parse_name(n), r)]
+            ev[n] and all(row.get("supported") == "1" for row in ev[n].values()) for n in cand)
+        cc = sorted((n for n in comb if match(parse_name(n), r)), key=lambda n: (parse_name(n)[3], n))
         r["comb_name"] = cc[0] if cc else None
         explained_comb.update(cc)
         r["ann"] = annot.get(r["comb_name"]) if r["comb_name"] else None
@@ -219,6 +221,8 @@ def main():
             pass
     # unexplained combined calls (organic FPs) count as artefacts for the score separation
     unexplained = sorted(n for n in comb if n not in explained_comb)
+    with open(os.path.join(O, "unexplained.txt"), "w") as fh:
+        fh.writelines(n + "\n" for n in unexplained)
     for n in unexplained:
         an = annot.get(n)
         if an is None:

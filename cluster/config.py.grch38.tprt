@@ -163,6 +163,16 @@ CONFIG = {
         'short_overhang_min_ref_mismatch': 2, #overhang mismatches to the reference required (and a better match to the consensus than to the reference)
         'trim_far_flank_before_remap': True, #clipped-remap filter: cut a junction clip where it runs into the other junction's reference flank (short insertions spanned by the reads)
         'keep_polya_one_sided': False, #intersect: keep legacy Bp+polyA records as one-sided loci on their real junction (discovery's one_sided_loci `oneside_` loci are always kept); off until the evidence gate skips the open side
+        # --- E2E problem #1/#3 fixes (plans/tprt_hallmarks/E2E_REPORT.md); all default off in src ---
+        'merge_tolerance_bp': 8, #intersect: merge loci whose breakpoints are both within 8 bp (colonies see one insertion at slightly different clip positions); oneside_ loci join the two-sided call with the same real junction; 0 = exact names only (legacy)
+        'polya_aware_clip_agreement': True, #intersect: colonies' clips are compared homopolymer-compressed with the leading poly-A removed (poly-A length jitter dropped real loci)
+        'rte_library': 'resources/rte_library', #consensus.fa (+ transduction flanks) for the element tests below; relative = cwd, else repo root
+        'slippage_reject': True, #drop an insertion with a junction whose clip is just the continuation of the adjacent reference homopolymer (>= 8) / STR (>= 12 bp) unless another junction carries element / transduction-source sequence
+        'slippage_min_ref_run_combine': 8, #reference homopolymer at the junction that makes the slippage test apply (>= 8 stays clear of the TTTT/AA EN motif)
+        'slippage_min_str_len': 12, #same for period 2-6 repeats
+        'slippage_min_structured': 10, #clip remainder (after the repeat, before the next long homopolymer) shorter than this = nothing but the tract
+        'far_pair_strict': True, #L1DEL/L1DUP pairs (gap < -30 / > 40) need element sequence (sense) on the complex clip, poly-A on the other, same element class beyond the tail, >= 2 independent fragments per junction, same colonies at both breakpoints
+        'far_pair_split': True, #a failing far pair keeps its poly-A junction as a one-sided locus (absorbed into another colony's call of that junction when there is one); False = drop
     },
     'annotate': { #necessary for annotate_v2.py (step 3, optional element classification)
         # NOTE: annotate works in bowtie2_index2 (hs1) space, NOT GRCh38 — so rmsk and

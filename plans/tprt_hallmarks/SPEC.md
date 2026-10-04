@@ -256,6 +256,39 @@ pool when combine merged them):
    slipped homopolymer shows up as a deletion in an unclipped SHORT read and fooled the
    per-position test (157 SHORT-only junctions before, 18 after, in the E2E).
 
+### Combine-level slippage / far-pair / fuzzy-merge filters (E2E problems #1, #3)
+
+`src/combine_insertions_tprt_filters.py`, wired into `apply_evidence` / `intersect_insertions`;
+every key defaults off in `src` (legacy and keys-off `.tprt` outputs byte-identical, verified),
+on in `cluster/config.py.grch38.tprt`:
+
+- `merge_tolerance_bp` (0; 8): intersect merges two-sided loci whose two breakpoints are both
+  within tol of a heavier record's (most merged discovery records gives the name), if their clips
+  agree shift-tolerantly; `oneside_` loci of the same real side within tol merge. Evidence of a
+  member locus whose junction differs by d bp is re-anchored (`clip_at += d`). A surviving one-sided
+  locus (discovery `oneside_` or split far pair) is folded into a surviving call with the same real
+  junction (within tol) only AFTER the remap filters (`EvidencePool.absorb_one_sided`), its
+  sidecar members restricted to that side (`Insertion.member_sides`).
+- `polya_aware_clip_agreement` (False; True): the per-name clip agreement compares clips
+  homopolymer-compressed and cut at their first A/T run >= 8 (poly-A length jitter and post-poly-A
+  SBS junk dropped real loci).
+- `slippage_reject` (False; True): a junction is reference-tract slippage when a homopolymer
+  >= `slippage_min_ref_run_combine` (8) or period-2..6 repeat >= `slippage_min_str_len` (12) bp
+  touches it and its junction-read clip consensus, after stripping the tract's continuation, has
+  < `slippage_min_structured` (10) structured bases (`repeat_only`), is still >= 50 % the tract base
+  (`repeat_junk`, post-homopolymer phasing junk) or continues with the outward reference
+  (`repeat_shifted_reference`, first 12 bases); confirmed on the mate-extended consensus. The
+  insertion is dropped (`fail_reason slippage:<side>(<why>)`) unless another, non-slipped junction
+  carries element / transduction-source sequence (mappy, k=11, vs `rte_library` consensus.fa +
+  flanks). One-sided loci have no other junction.
+- `far_pair_strict` (False; True): gap < -30 or > 40 pairs need (a) a sense element hit on the
+  complex clip (or >= 2 inside-element mates), (b) a poly-T-led clip on the other side that is not
+  itself slippage, (c) no conflicting element class beyond the tail, (d) >= min_independent_fragments
+  on both junctions, (e) consistent colonies (discovery breakpoints within tol: shared colony,
+  symmetric difference <= max(1, 0.2 x union)). Failing pairs keep their poly-A junction as a
+  one-sided locus (`far_pair_split`, True; `fail_reason split_from_far_pair:<why>`), else drop.
+- `rte_library` ('resources/rte_library'): library for the element tests (combine section).
+
 ### `<patient>.insertions.evidence.tsv.gz` (combine → annotate)
 
 One row per insertion junction: `insertion_id` (as in combined.txt.gz), `side`,

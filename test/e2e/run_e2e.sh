@@ -52,8 +52,9 @@ echo "[$(ts)] 4. combine/annotate references: bowtie2 index of the reduced refer
 REF="$OUT/ref/reduced.fa"
 [ -f "$OUT/ref/reduced.1.bt2" ] || bowtie2-build --threads "$THREADS" "$REF" "$OUT/ref/reduced" > "$OUT/ref/bt2.log" 2>&1
 "$PY" "$DIR/make_refs.py" --ref "$REF" --hg38-rmsk "$GENOMES/hg38.rmsk.txt.gz" --out-dir "$OUT/ref"
+OVR=(); for o in ${CI_OVERRIDES:-}; do OVR+=(--override "$o"); done   # e.g. CI_OVERRIDES="slippage_reject=False"
 "$PY" "$DIR/make_config.py" --repo "$REPO" --out "$OUT/pyconf/config.py" --ref-dir "$OUT/ref" \
-    --hg38-2bit "$GENOMES/hg38.2bit" --hs1-2bit "$GENOMES/hs1.2bit" --workdir "$OUT/annot"
+    --hg38-2bit "$GENOMES/hg38.2bit" --hs1-2bit "$GENOMES/hs1.2bit" --workdir "$OUT/annot" ${OVR[@]+"${OVR[@]}"}
 [ -f "$REPO/test/fullstack/annotate/peartree_rte.hmm.h3m" ] || bash "$REPO/test/fullstack/annotate/build_hmm.sh"
 
 echo "[$(ts)] 5. combine_insertions (.tprt python config)"
@@ -74,6 +75,9 @@ tail -2 "$OUT/annot/annotate.log"
 echo "[$(ts)] 7. score per type + TPRT calibration (held-out half)"
 "$PY" "$DIR/score_e2e.py" --out-dir "$OUT" --samples "$SAMPLES" --report "$OUT/e2e_tables.md" \
     --calib-truth "$OUT/calib_truth" | tee "$OUT/e2e_score.txt"
+"$PY" "$DIR/classify_unexplained.py" --out-dir "$OUT" --samples "$SAMPLES" --hg38-2bit "$GENOMES/hg38.2bit" \
+    --library "$REPO/resources/rte_library/consensus.fa" > "$OUT/unexplained_classes.md"
+head -14 "$OUT/unexplained_classes.md"
 for half in fit eval; do
     (cd "$REPO" && "$PY" -m tools.rte.calibrate --truth "$OUT/calib_truth.$half.tsv" --annot "$OUT/annot/P1.annotated.tsv" \
         --json "$OUT/calibrate.$half.json" > "$OUT/calibrate.$half.txt" 2>&1) || true
