@@ -123,8 +123,9 @@ class RteLibrary:
             raise RuntimeError(f"rte library has no {cls} elements")
         return rng.choice(pool)
 
-    def source(self, rng, cls="L1", need_flank5=False):
-        pool = [s for s in self.sources[cls] if s.flank3 and (s.flank5 or not need_flank5)]
+    def source(self, rng, cls="L1", need_flank5=False, need_element=False):
+        pool = [s for s in self.sources[cls] if s.flank3 and (s.flank5 or not need_flank5)
+                and (s.element_seq or not need_element)]
         if not pool:
             raise RuntimeError(f"rte library has no {cls} transduction sources")
         return rng.choice(pool)
@@ -158,15 +159,51 @@ class RteLibrary:
                 sub = m.get("subfamily") or m.get("repName") or m.get("family") or name
                 lib.elements[klass].append(Element(k, klass, str(sub), seq.upper(),
                                                    m.get("hs1", m.get("hs1_coords", "."))))
-        f3 = os.path.join(d, "flanks_3p.fa")
-        f5 = os.path.join(d, "flanks_5p_sva.fa")
-        fl3 = {_key(n): s.upper() for n, s in read_fasta(f3).items()} if os.path.exists(f3) else {}
-        fl5 = {_key(n): s.upper() for n, s in read_fasta(f5).items()} if os.path.exists(f5) else {}
+        def _fa(name):
+            for cand in (name, name + ".gz"):      # resources/rte_library ships bgzip .fa.gz
+                pth = os.path.join(d, cand)
+                if os.path.exists(pth):
+                    return pth
+            return None
+        f3, f5 = _fa("flanks_3p.fa"), _fa("flanks_5p_sva.fa")
+        # strandless sources ship two candidate flanks `<id>/+`, `<id>/-`: the simulator needs
+        # an unambiguous source orientation, so those are not used as simulated sources
+        fl3 = {_key(n): s.upper() for n, s in read_fasta(f3).items() if "/" not in n} if f3 else {}
+        fl5 = {_key(n): s.upper() for n, s in read_fasta(f5).items() if "/" not in n} if f5 else {}
         by_id = {e.id: e for v in lib.elements.values() for e in v}
+        # hs1 intervals of the intact elements (real library: hs1_chrom/hs1_start/hs1_end,
+        # 1-based) -> a reference source without an explicit element link finds its copy
+        iv = {}
+        for e in by_id.values():
+            m = meta.get(e.id, {})
+            try:
+                c, a, b = m["hs1_chrom"], int(m["hs1_start"]), int(m["hs1_end"])
+            except (KeyError, ValueError):
+                continue
+            if c not in (".", "") and b > a:
+                iv.setdefault(c, []).append((a, b, e))
+
+        def _overlap_element(m):
+            try:
+                c, a, b = m["hs1_chrom"], int(m["hs1_start"]), int(m["hs1_end"])
+            except (KeyError, ValueError):
+                return None
+            best = None
+            for x, y, e in iv.get(c, ()):
+                ov = min(b, y) - max(a, x)
+                if ov > 0.5 * (b - a) and (best is None or ov > best[0]):
+                    best = (ov, e)
+            return best[1] if best else None
+
         for sid, flank in fl3.items():
             m = meta.get(sid, {})
-            klass = (m.get("class") or m.get("cls") or "").upper()
+            klass = (m.get("class") or m.get("element_class") or m.get("cls") or "").upper()
             el = by_id.get(sid)
+            for k in ("intact_id", "l1base_id"):      # source -> its intact element (real library)
+                if el is None and m.get(k) not in (None, "", "."):
+                    el = by_id.get(m[k])
+            if el is None and m:
+                el = _overlap_element(m)
             if not klass:
                 klass = el.cls if el else ("SVA" if "SVA" in sid.upper() else "L1")
             klass = "SVA" if "SVA" in klass else ("L1" if "L1" in klass or "LINE" in klass else klass)

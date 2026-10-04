@@ -175,7 +175,7 @@ def _td3p_tag(rng, src):
 
 
 def b_l1_td3p(rng, ctx):
-    src = ctx.lib.source(rng, "L1")
+    src = ctx.lib.source(rng, "L1", need_element=True)
     u = rng.random()
     structure = "TRUNCATED_5P" if u < 0.7 else ("INVERTED_5P" if u < 0.85 else "FULL_LENGTH")
     body, parts, info = _l1_structure(rng, src.element_seq, structure)
@@ -259,7 +259,7 @@ def b_sva_f(rng, ctx):
 def b_sva_td5p(rng, ctx):
     """SVA 5' transduction: transcription starts upstream of the source SVA, so the insert
     carries the source's real upstream flank 5' of a full-length SVA (Damert 2009)."""
-    src = ctx.lib.source(rng, "SVA", need_flank5=True)
+    src = ctx.lib.source(rng, "SVA", need_flank5=True, need_element=True)
     n5 = lognormal_int(rng, 400, 0.7, 40, min(3000, len(src.flank5)))
     up = src.flank5[len(src.flank5) - n5:]
     body = up + src.element_seq
@@ -272,7 +272,7 @@ def b_sva_td5p(rng, ctx):
 
 
 def b_sva_td3p(rng, ctx):
-    src = ctx.lib.source(rng, "SVA")
+    src = ctx.lib.source(rng, "SVA", need_element=True)
     body, structure, parts = _sva_body(rng, src.element_seq)
     tag, end = _td3p_tag(rng, src)
     pre = src.tail

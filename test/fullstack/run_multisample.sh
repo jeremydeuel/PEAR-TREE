@@ -30,6 +30,7 @@ N_PER_TYPE="${N_PER_TYPE:-3}"
 REGION="${REGION:-chr22:26000000-30000000}"
 SEED="${SEED:-1}"
 PCR_DUP="${PCR_DUP:-0.05}"
+PCR_DUP_JITTER="${PCR_DUP_JITTER:-0}"   # +-bp start/end jitter of unflagged PCR copies
 POLYA_JITTER="${POLYA_JITTER:-1.0}"
 MARKDUP="${MARKDUP:-0}"
 WINDOW="${WINDOW:-30}"
@@ -71,7 +72,7 @@ for i in $(seq 1 "$SAMPLES"); do
     S="S$i"
     echo "[$(ts)] 2. $S: reads (depth $DEPTH) -> bwa-mem -> fixmate/sort"
     "$PY" "$DIR/simulate_reads.py" --donor-dir "$OUT/donor" --sample "$i" --out-prefix "$OUT/$S" \
-        --depth "$DEPTH" --seed "$SEED" --pcr-dup-unflagged-frac "$PCR_DUP" --polya-jitter "$POLYA_JITTER"
+        --depth "$DEPTH" --seed "$SEED" --pcr-dup-unflagged-frac "$PCR_DUP" --pcr-dup-jitter "$PCR_DUP_JITTER" --polya-jitter "$POLYA_JITTER"
     bwa mem -t "$THREADS" -R "@RG\tID:$S\tSM:$S\tPL:ILLUMINA" "$HG38" "$OUT/${S}_R1.fq" "$OUT/${S}_R2.fq" \
         2>"$OUT/$S.bwa.log" \
       | samtools fixmate -m -u -@ "$THREADS" - - \
