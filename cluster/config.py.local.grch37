@@ -121,6 +121,16 @@ CONFIG = {
         'bowtie2_index2_lo': '/Users/jeremy/.pyliftover/hs1ToHg19.over.chain.gz', #hs1 -> hg19 chain: reconciles clip hits with the GRCh37 breakpoints. UCSC chain direct from pyliftover's cache; equivalent to the farm's hs1.hg19.all.chain.gz.
         'clean_remap_max_insertion': 12, #a consensus is "maps to reference" (dropped) only if its end-to-end remap opens no insertion this long or longer
         'clean_remap_min_as': -15, #...and only if the end-to-end alignment score (bowtie2 AS) is at least this
+        # TPRT-hallmarks (plans/tprt_hallmarks/SPEC.md). Only active when discovery wrote
+        # <sample>.evidence.tsv.gz sidecars (evidence_sidecar=true); without sidecars combine
+        # is byte-identical whatever these say. Legacy defaults here; the new pipeline mode
+        # (cluster/config.py.grch38.tprt) switches them on.
+        'require_independent_fragments': False, #drop insertions with any junction (LEFT/RIGHT, incl. the poly-A end) below min_independent_fragments, pooled over all colonies
+        'min_independent_fragments': 2, #independent fragments per junction after (sample,frag) collapse + within-sample PCR/optical dedup (never the 0x400 flag)
+        'indel_aware_consensus': False, #use the homopolymer-aware pooled clip consensus (src/indel_consensus.py) in combined.txt.gz when >= the legacy longest clip
+        'dup_coord_tolerance': 2, #bp tolerance on read/mate outer coordinates for within-sample duplicates
+        'dup_max_edit': 2, #max edit distance of junction-clip (and mate) sequence for within-sample duplicates
+        'polya_min_len': 8, #min consensus homopolymer A/T run reported as the poly-A (evidence.tsv polya_len_*/beyond_polya)
     },
     # NOTE: the 'annotate' paths below are still FARM paths — step 3 has not been
     # localised. rmsk is repointed at the in-repo copy; hmm/dfamscan/hmmer/tmp are not.

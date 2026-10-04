@@ -75,9 +75,21 @@ def write_combined_splice(input_files, insertions, combined_insertions, window=2
     print(f"aggregated {n} discovery splice-hallmark rows -> {out_path}")
 
 
-def combine_insertions(input_files, insertions_genotyping_file, combined_insertions, insertions_fasta, insertion_bam, threads):
+def _evidence_paths(combined_insertions):
+    """`<stem>.combined.txt.gz` -> (`<stem>.insertions.evidence.tsv.gz`, `<stem>.insertions.reads.fa.gz`)."""
+    stem = combined_insertions
+    for suffix in (".combined.txt.gz", ".txt.gz"):
+        if stem.endswith(suffix):
+            stem = stem[:-len(suffix)]
+            break
+    return f"{stem}.insertions.evidence.tsv.gz", f"{stem}.insertions.reads.fa.gz"
+
+
+def combine_insertions(input_files, insertions_genotyping_file, combined_insertions, insertions_fasta, insertion_bam, threads,
+                       evidence_tsv=None, reads_fa=None):
 
     all_insertions = []
+    accepted_files = []
     j_cutoff = 0
     for f in input_files:
         j_cutoff += 1
@@ -89,6 +101,7 @@ def combine_insertions(input_files, insertions_genotyping_file, combined_inserti
             print(f"\033[31mremoved file {f} since it contains too many insertions.\033[0m")
         else:
             all_insertions += file_insertions
+            accepted_files.append(f)
     print(f"intersecting insertions from {len(input_files)} files...")
     insertions = intersect_insertions(all_insertions)
     #remove insertions in regions with far too high count
@@ -96,6 +109,16 @@ def combine_insertions(input_files, insertions_genotyping_file, combined_inserti
     ins_cutoff = 4
     insertions, removed, regions = filter_dense_regions(insertions, bin_range, ins_cutoff)
     print(f"filtering regions with very high insertion rate of {ins_cutoff} or higher per {bin_range} bases ,removed {removed} insertions in {regions} regions, {len(insertions)} insertions are remaining")
+    # TPRT-hallmarks: pooled per-patient junction evidence from discovery's optional
+    # `<sample>.evidence.tsv.gz` sidecars (independent-fragment gate + indel-aware clip
+    # consensus). Returns None when no sidecar exists -> legacy behaviour, byte-identical.
+    # Imported lazily so the legacy path needs neither the module nor its edlib dependency.
+    evidence = None
+    if any(os.path.exists((f[:-7] if f.endswith(".txt.gz") else f) + ".evidence.tsv.gz") for f in accepted_files):
+        from combine_insertions_evidence import apply_evidence
+        evidence = apply_evidence(insertions, accepted_files, CONFIG['combine_insertions'])
+    if evidence is not None:
+        insertions, evidence_records, evidence_failed, _ = evidence
     print(f"writing summarised insertions fasta file {insertions_fasta}")
     # compresslevel=1: this is a scratch file bowtie2 reads back immediately, so the
     # default level 9 spends CPU shrinking bytes nothing keeps.
@@ -209,6 +232,14 @@ def combine_insertions(input_files, insertions_genotyping_file, combined_inserti
     # carry discovery's splice-hallmark (Feature B) evidence forward, re-keyed onto the
     # combined insertion names, for stage-4 processed-pseudogene annotation.
     write_combined_splice(input_files, insertions, combined_insertions)
+    if evidence is not None:
+        from combine_insertions_evidence import write_evidence_outputs
+        default_tsv, default_fa = _evidence_paths(combined_insertions)
+        # surviving insertions first (combined.txt.gz order), then the gated-out ones
+        # (supported=0) for diagnostics.
+        write_evidence_outputs(evidence_records,
+                               [i.name for i in insertions] + sorted(evidence_failed),
+                               evidence_tsv or default_tsv, reads_fa or default_fa)
     n_excluded = 0
     n_included = 0
     with gzip.open(insertions_genotyping_file, 'wt') as f:

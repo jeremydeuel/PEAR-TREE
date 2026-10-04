@@ -61,6 +61,11 @@
 # cluster/config.discovery.grch38 and cluster/config.genotype.grch38. The allowlist in the
 # discovery config is the one setting that MUST be chr-prefixed for this cohort.
 
+# TPRT-hallmarks pipeline mode: identical to cluster/config.py.grch38 except that the
+# combine_insertions evidence keys (require_independent_fragments, indel_aware_consensus)
+# are ON. Pair with a discovery config that sets evidence_sidecar=true.
+#   cp cluster/config.py.grch38.tprt src/config.py
+
 CONFIG = {
 
     # settings for step 1: discovery phase:
@@ -146,9 +151,9 @@ CONFIG = {
         # <sample>.evidence.tsv.gz sidecars (evidence_sidecar=true); without sidecars combine
         # is byte-identical whatever these say. Legacy defaults here; the new pipeline mode
         # (cluster/config.py.grch38.tprt) switches them on.
-        'require_independent_fragments': False, #drop insertions with any junction (LEFT/RIGHT, incl. the poly-A end) below min_independent_fragments, pooled over all colonies
+        'require_independent_fragments': True, #drop insertions with any junction (LEFT/RIGHT, incl. the poly-A end) below min_independent_fragments, pooled over all colonies
         'min_independent_fragments': 2, #independent fragments per junction after (sample,frag) collapse + within-sample PCR/optical dedup (never the 0x400 flag)
-        'indel_aware_consensus': False, #use the homopolymer-aware pooled clip consensus (src/indel_consensus.py) in combined.txt.gz when >= the legacy longest clip
+        'indel_aware_consensus': True, #use the homopolymer-aware pooled clip consensus (src/indel_consensus.py) in combined.txt.gz when >= the legacy longest clip
         'dup_coord_tolerance': 2, #bp tolerance on read/mate outer coordinates for within-sample duplicates
         'dup_max_edit': 2, #max edit distance of junction-clip (and mate) sequence for within-sample duplicates
         'polya_min_len': 8, #min consensus homopolymer A/T run reported as the poly-A (evidence.tsv polya_len_*/beyond_polya)

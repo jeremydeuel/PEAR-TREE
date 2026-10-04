@@ -110,6 +110,26 @@ combined.txt.gz), `consensus_depth` (comma list per clip base), `polya_len_media
 `polya_len_range`, `beyond_polya` (sequence 3' of the poly-A recovered by consensus, may be
 empty), `beyond_polya_support` (independent fragments covering it).
 
+Implementation notes (combine worker; `src/combine_insertions_evidence.py`, `src/indel_consensus.py`):
+- Orientation: `clip_consensus`, `consensus_depth` (one value per lowercase clip base, same
+  order) and `beyond_polya` are all **reference-forward**. "Beyond" = 3' of the poly-A in
+  element sense: for a poly-A seen as an A-run going outward from the junction it is the
+  sequence further out; for a T-run it is the sequence between junction and run (empty when
+  the T-run starts at the junction). `polya_len_range` = `min-max` of trusted per-read runs.
+- `supported` is `NA` when an input file contributing to the insertion has no sidecar
+  (such insertions are never gated).
+- `clip_consensus` here uses junction reads **and** overlapping mates (may extend through a
+  short insertion into the far flank); the clip written to `combined.txt.gz`
+  (`indel_aware_consensus=true`) uses junction reads only, so the clipped-remap filter is not
+  fooled by flank sequence.
+- Additive trailing columns (after the SPEC ones, order fixed): `polya_end` (0/1),
+  `n_duplicates` (within-sample merges), `n_cross_sample_identical`, `fail_reason`,
+  `consensus_stop` (`end`/`depth`/`disagreement`/`empty`).
+- Rows: surviving insertions first (combined.txt.gz order), then gated-out ones (supported=0).
+- Config (`CONFIG['combine_insertions']`): `require_independent_fragments` (False; True in
+  `cluster/config.py.grch38.tprt`), `min_independent_fragments` (2), `indel_aware_consensus`
+  (False; True in .tprt), `dup_coord_tolerance` (2), `dup_max_edit` (2), `polya_min_len` (8).
+
 ### `<patient>.insertions.reads.fa.gz` (combine → annotate)
 
 FASTA, record name `insertion_id|side|role|sample|frag|r12`, sequence in reference-forward
