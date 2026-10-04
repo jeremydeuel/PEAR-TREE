@@ -289,6 +289,46 @@ pub struct DiscoveryConfig {
     /// Sidecar DISC rows: a non-proper high-MAPQ anchor (mate unmapped / other contig /
     /// far / same strand) pointing at the junction from within this many bp.
     pub sidecar_disc_span: i64,
+    // --- TPRT pairing modes (all off by default => output byte-identical) ---
+    /// Drop 0x400 duplicates also in the low-MAPQ poly-A path (`find_polya`), which
+    /// historically never checked the flag. Off = legacy (byte-identical).
+    pub drop_dup_in_polya_path: bool,
+    /// Target-site deletion: after the normal TSD pairing, pair a leftover LEFT/RIGHT
+    /// breakpoint whose RIGHT lies up to this many bp LEFT of the LEFT (negative TSD).
+    /// 0 = off.
+    pub max_target_site_deletion: i64,
+    /// Blunt / EN-independent joins: pair leftover breakpoints with gap 0..tsd_min-1.
+    pub allow_blunt_pairs: bool,
+    /// L1-mediated deletion / duplication: pair leftover breakpoints up to this many bp
+    /// apart (gap < -max_target_site_deletion, or gap > tsd_max) when the pair is
+    /// TPRT-polarised (one clip a poly-A/T tail, the other a complex element clip).
+    /// 0 = off.
+    pub max_l1_mediated_span: i64,
+    /// Poly-T run (stored, junction-outward orientation) that marks the poly-A side of a
+    /// polarised L1-mediated pair.
+    pub l1_mediated_min_polya: usize,
+    /// One-sided loci: emit a still-unpaired breakpoint as `contig:L-oneside_L` /
+    /// `contig:oneside_R-R` when it has >= `one_sided_min_fragments` fragments and passes
+    /// the SPEC-8 reference-tract slippage test (always applied here).
+    pub one_sided_loci: bool,
+    pub one_sided_min_fragments: usize,
+    /// Only poly-A/T-tail junctions (stored clip starts with >= `one_sided_min_polya` T).
+    pub one_sided_require_polya: bool,
+    pub one_sided_min_polya: usize,
+    /// SPEC-8b junction spare: a Bp+Bp pair is never SPEC-8b-rejected when either stored
+    /// clip's first k junction-proximal bases are structured (no homopolymer >= 8, >= 3
+    /// distinct bases). Rescues short-tag orphan transductions / short inserts whose long
+    /// poly-A drags the whole-clip entropy under the threshold. 0 = off (legacy).
+    pub clip_slippage_junction_spare: usize,
+    /// Sidecar SHORT rows: primary, non-dup, MAPQ >= min_mapq reads crossing an emitted
+    /// junction by only a few bases — (a) a junction-side soft clip of 1..MIN_CLIP_LEN-1
+    /// bases starting within ±`short_overhang_window` of the breakpoint, or (b) aligned
+    /// through it by 1..`short_overhang_max` bases. Collection only (combine decides).
+    /// Needs `evidence_sidecar`. Off = sidecar byte-identical.
+    pub short_overhang_evidence: bool,
+    pub short_overhang_window: i64,
+    pub short_overhang_max: i64,
+    pub max_short_per_breakpoint: usize,
 }
 
 impl Default for DiscoveryConfig {
@@ -357,6 +397,20 @@ impl Default for DiscoveryConfig {
             max_mates_per_breakpoint: 50,
             max_evidence_reads_per_breakpoint: 200,
             sidecar_disc_span: 500,
+            drop_dup_in_polya_path: false,
+            max_target_site_deletion: 0,
+            allow_blunt_pairs: false,
+            max_l1_mediated_span: 0,
+            l1_mediated_min_polya: 10,
+            one_sided_loci: false,
+            one_sided_min_fragments: 2,
+            one_sided_require_polya: true,
+            one_sided_min_polya: 10,
+            clip_slippage_junction_spare: 0,
+            short_overhang_evidence: false,
+            short_overhang_window: 3,
+            short_overhang_max: 20,
+            max_short_per_breakpoint: 100,
         }
     }
 }
@@ -374,6 +428,12 @@ fn parse_bool(v: &str) -> Result<bool, String> {
 }
 
 impl DiscoveryConfig {
+    /// True when any post-TSD pairing mode (deletion / blunt / L1-mediated / one-sided)
+    /// is enabled. Off = the legacy pairing only.
+    pub fn extra_pairing(&self) -> bool {
+        self.max_target_site_deletion > 0 || self.allow_blunt_pairs || self.max_l1_mediated_span > 0 || self.one_sided_loci
+    }
+
     /// Build config: start from defaults, overlay a `key = value` file (if given),
     /// then overlay environment overrides (which always win). `#` starts a comment.
     pub fn load(path: Option<&str>) -> Result<DiscoveryConfig, String> {
@@ -475,6 +535,20 @@ impl DiscoveryConfig {
             "max_mates_per_breakpoint" => self.max_mates_per_breakpoint = parse_num(val)?,
             "max_evidence_reads_per_breakpoint" => self.max_evidence_reads_per_breakpoint = parse_num(val)?,
             "sidecar_disc_span" => self.sidecar_disc_span = parse_num(val)?,
+            "drop_dup_in_polya_path" => self.drop_dup_in_polya_path = parse_bool(val)?,
+            "max_target_site_deletion" => self.max_target_site_deletion = parse_num(val)?,
+            "allow_blunt_pairs" => self.allow_blunt_pairs = parse_bool(val)?,
+            "max_l1_mediated_span" => self.max_l1_mediated_span = parse_num(val)?,
+            "l1_mediated_min_polya" => self.l1_mediated_min_polya = parse_num(val)?,
+            "one_sided_loci" => self.one_sided_loci = parse_bool(val)?,
+            "one_sided_min_fragments" => self.one_sided_min_fragments = parse_num(val)?,
+            "one_sided_require_polya" => self.one_sided_require_polya = parse_bool(val)?,
+            "one_sided_min_polya" => self.one_sided_min_polya = parse_num(val)?,
+            "clip_slippage_junction_spare" => self.clip_slippage_junction_spare = parse_num(val)?,
+            "short_overhang_evidence" => self.short_overhang_evidence = parse_bool(val)?,
+            "short_overhang_window" => self.short_overhang_window = parse_num(val)?,
+            "short_overhang_max" => self.short_overhang_max = parse_num(val)?,
+            "max_short_per_breakpoint" => self.max_short_per_breakpoint = parse_num(val)?,
             other => eprintln!("warning: ignoring unknown config key '{other}'"),
         }
         Ok(())
@@ -608,6 +682,21 @@ mod tests {
         c.set("min_evidence_fragments_per_sample", "1").unwrap();
         assert!(c.evidence_sidecar && c.fetch_all_mates && c.ignore_dup_flag);
         assert_eq!(c.min_evidence_fragments_per_sample, Some(1));
+    }
+
+    #[test]
+    fn pairing_mode_keys_default_off_and_parse() {
+        let c = DiscoveryConfig::default();
+        assert!(!c.extra_pairing() && !c.drop_dup_in_polya_path);
+        let mut c = c;
+        c.set("max_target_site_deletion", "30").unwrap();
+        c.set("allow_blunt_pairs", "true").unwrap();
+        c.set("max_l1_mediated_span", "50000").unwrap();
+        c.set("one_sided_loci", "true").unwrap();
+        c.set("one_sided_min_fragments", "3").unwrap();
+        c.set("drop_dup_in_polya_path", "true").unwrap();
+        assert!(c.extra_pairing() && c.drop_dup_in_polya_path && c.allow_blunt_pairs);
+        assert_eq!((c.max_target_site_deletion, c.max_l1_mediated_span, c.one_sided_min_fragments), (30, 50000, 3));
     }
 
     #[test]

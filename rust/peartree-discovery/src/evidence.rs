@@ -9,6 +9,7 @@
 //! breakpoints that can still be emitted; fragments are identified by a 64-bit FNV-1a
 //! hash of the qname (`frag`) plus the r12 bit, never by the qname string.
 
+use std::collections::{BTreeSet, VecDeque};
 use std::io::{self, Write};
 
 use crate::read::BamRead;
@@ -32,6 +33,9 @@ pub enum Role {
     PolyA,
     Mate,
     Disc,
+    /// short-overhang read: crosses the junction by only 1..`short_overhang_max` bases
+    /// (soft clip < MIN_CLIP_LEN, or aligned through) — collected, never judged here
+    Short,
 }
 
 impl Role {
@@ -41,6 +45,7 @@ impl Role {
             Role::PolyA => "POLYA",
             Role::Mate => "MATE",
             Role::Disc => "DISC",
+            Role::Short => "SHORT",
         }
     }
 }
@@ -178,9 +183,139 @@ pub struct EvExtra {
     pub clip_lite: Vec<ClipLite>,
     /// discordant anchors selected for this breakpoint
     pub disc_lite: Vec<DiscLite>,
+    /// short-overhang reads selected for this breakpoint (`short_overhang_evidence`)
+    pub short_lite: Vec<ShortLite>,
     pub clip: Vec<EvRec>,
     pub disc: Vec<EvRec>,
+    pub short: Vec<EvRec>,
     pub mates: Vec<EvRec>,
+}
+
+/// Compact identity of a primary high-MAPQ read that may cross a junction by only a few
+/// bases (short-overhang candidate), collected during the extract scan. Soft-clip lengths
+/// are the ones adjacent to the alignment (hard clips skipped).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ShortLite {
+    pub frag: u64,
+    pub flag: u16,
+    pub ref_id: i32,
+    pub start: i64,
+    pub end: i64,
+    pub lead_soft: u32,
+    pub trail_soft: u32,
+}
+
+impl ShortLite {
+    #[inline]
+    pub fn r12(&self) -> u8 {
+        r12_of(self.flag)
+    }
+    #[inline]
+    pub fn mate_r12(&self) -> u8 {
+        match self.r12() {
+            1 => 2,
+            2 => 1,
+            _ => 0,
+        }
+    }
+}
+
+/// Is `r` a short-overhang read for a junction at `b`? LEFT junction (reads start at b,
+/// clip to the left): (a) a leading soft clip of 1..min_clip-1 bases with the alignment
+/// starting within ±`window` of b, or (b) no leading soft clip and the alignment starting
+/// 1..`max` bases before b while still ending past b. RIGHT junction mirrored on the
+/// alignment end. Strand-agnostic (the junction side is a reference property).
+pub fn short_candidate(r: &ShortLite, b: i64, left: bool, window: i64, max: i64, min_clip: u32) -> bool {
+    if left {
+        let a = r.lead_soft >= 1 && r.lead_soft < min_clip && (r.start - b).abs() <= window;
+        let bb = r.lead_soft == 0 && r.start < b && b - r.start <= max && r.end > b;
+        a || bb
+    } else {
+        let a = r.trail_soft >= 1 && r.trail_soft < min_clip && (r.end - b).abs() <= window;
+        let bb = r.trail_soft == 0 && r.end > b && r.end - b <= max && r.start < b;
+        a || bb
+    }
+}
+
+/// Extract-scan collector for short-overhang candidates (one contig at a time). Every
+/// eligible read enters a start-ordered look-back buffer; a junction-clipped read (clip
+/// >= MIN_CLIP_LEN) marks its breakpoint "hot". A buffered read is kept only if a hot
+/// position of the matching side lies within its candidate window when it leaves the
+/// buffer (all clipped reads that could define such a window have been seen by then:
+/// `horizon` > the longest aligned span). Memory: O(reads in `horizon` bp + kept).
+#[derive(Default)]
+pub struct ShortCollector {
+    buf: VecDeque<ShortLite>,
+    hot_l: BTreeSet<i64>,
+    hot_r: BTreeSet<i64>,
+    kept: Vec<ShortLite>,
+    pub window: i64,
+    pub max: i64,
+    pub horizon: i64,
+}
+
+impl ShortCollector {
+    pub fn new(window: i64, max: i64) -> Self {
+        ShortCollector { window, max, horizon: 1500, ..Default::default() }
+    }
+
+    fn is_hot(&self, r: &ShortLite) -> bool {
+        let (w, m) = (self.window, self.max);
+        // LEFT: (a) b in [start-w, start+w]; (b) b in [start+1, start+m]
+        let l = self.hot_l.range(r.start - w..=r.start + w.max(m)).next().is_some();
+        // RIGHT: (a) b in [end-w, end+w]; (b) b in [end-m, end-1]
+        let rr = self.hot_r.range(r.end - w.max(m)..=r.end + w).next().is_some();
+        l || rr
+    }
+
+    fn evict_before(&mut self, pos: i64) {
+        while let Some(front) = self.buf.front() {
+            if front.start >= pos {
+                break;
+            }
+            let r = self.buf.pop_front().unwrap();
+            if self.is_hot(&r) {
+                self.kept.push(r);
+            }
+        }
+        let cut = pos - 2 * self.horizon;
+        while let Some(&x) = self.hot_l.iter().next() {
+            if x >= cut {
+                break;
+            }
+            self.hot_l.remove(&x);
+        }
+        while let Some(&x) = self.hot_r.iter().next() {
+            if x >= cut {
+                break;
+            }
+            self.hot_r.remove(&x);
+        }
+    }
+
+    /// Add one eligible read (coordinate-sorted input).
+    pub fn push(&mut self, r: ShortLite) {
+        self.evict_before(r.start - self.horizon);
+        self.buf.push_back(r);
+    }
+
+    pub fn hot(&mut self, b: i64, left: bool) {
+        if left {
+            self.hot_l.insert(b);
+        } else {
+            self.hot_r.insert(b);
+        }
+    }
+
+    /// End of contig: flush the buffer and return the kept candidates (start-sorted).
+    pub fn finish(&mut self) -> Vec<ShortLite> {
+        self.evict_before(i64::MAX);
+        self.hot_l.clear();
+        self.hot_r.clear();
+        let mut v = std::mem::take(&mut self.kept);
+        v.sort_by_key(|r| (r.start, r.frag, r.flag));
+        v
+    }
 }
 
 /// Compact identity of a poly-A read, kept from the extract scan: its placement and
@@ -248,6 +383,8 @@ pub enum ReqKind {
     ClipSelf,
     /// a poly-A read itself (primary; placement checked, or unmapped)
     PolySelf,
+    /// a short-overhang read itself (primary; placement checked)
+    ShortSelf,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -268,7 +405,9 @@ impl MateReq {
         let same_ref = || read.reference_sequence_id.map(|i| i as i32) == Some(self.ref_id);
         match self.kind {
             ReqKind::Mate => !read.is_supplementary,
-            ReqKind::DiscSelf => !read.is_supplementary && read.mapped && same_ref() && read.reference_start == self.pos,
+            ReqKind::DiscSelf | ReqKind::ShortSelf => {
+                !read.is_supplementary && read.mapped && same_ref() && read.reference_start == self.pos
+            }
             ReqKind::PolySelf => {
                 !read.is_supplementary
                     && if self.ref_id < 0 { !read.mapped } else { read.mapped && same_ref() && read.reference_start == self.pos }
@@ -356,6 +495,9 @@ pub struct SidecarStats {
     pub rows_polya: u64,
     pub rows_mate: u64,
     pub rows_disc: u64,
+    pub rows_short: u64,
+    /// SHORT rows per emitted breakpoint side (Bp ends only)
+    pub short_per_bp: Vec<u32>,
     /// MATE rows per emitted breakpoint side (Bp ends only), for the distribution
     pub mates_per_bp: Vec<u32>,
 }
@@ -367,11 +509,12 @@ impl SidecarStats {
             Role::PolyA => self.rows_polya += 1,
             Role::Mate => self.rows_mate += 1,
             Role::Disc => self.rows_disc += 1,
+            Role::Short => self.rows_short += 1,
         }
     }
 
     pub fn summary(&mut self) -> String {
-        let total = self.rows_clip + self.rows_polya + self.rows_mate + self.rows_disc;
+        let total = self.rows_clip + self.rows_polya + self.rows_mate + self.rows_disc + self.rows_short;
         self.mates_per_bp.sort_unstable();
         let n = self.mates_per_bp.len();
         let (med, max, mean) = if n == 0 {
@@ -380,10 +523,21 @@ impl SidecarStats {
             let s: u64 = self.mates_per_bp.iter().map(|&x| x as u64).sum();
             (self.mates_per_bp[n / 2], self.mates_per_bp[n - 1], s as f64 / n as f64)
         };
-        format!(
+        let mut out = format!(
             "evidence sidecar: {} loci, {} rows (CLIP {}, POLYA {}, MATE {}, DISC {}); mates/breakpoint-side: mean {:.2} median {} max {} over {} sides",
             self.loci, total, self.rows_clip, self.rows_polya, self.rows_mate, self.rows_disc, mean, med, max, n
-        )
+        );
+        if self.rows_short > 0 || !self.short_per_bp.is_empty() {
+            self.short_per_bp.sort_unstable();
+            let k = self.short_per_bp.len();
+            let (smed, smax) = if k == 0 { (0, 0) } else { (self.short_per_bp[k / 2], self.short_per_bp[k - 1]) };
+            let with = self.short_per_bp.iter().filter(|&&x| x > 0).count();
+            out.push_str(&format!(
+                "; SHORT {} rows, per breakpoint-side median {} max {} ({} of {} sides with >= 1)",
+                self.rows_short, smed, smax, with, k
+            ));
+        }
+        out
     }
 }
 
@@ -551,6 +705,51 @@ mod tests {
         assert!(pos.windows(2).all(|w| w[0] < w[1]));
         // under the cap: untouched
         assert_eq!(select_lowest(vec![3, 1, 2], 5, |&x| x), vec![3, 1, 2]);
+    }
+
+    fn sl(frag: u64, flag: u16, start: i64, end: i64, lead: u32, trail: u32) -> ShortLite {
+        ShortLite { frag, flag, ref_id: 0, start, end, lead_soft: lead, trail_soft: trail }
+    }
+
+    #[test]
+    fn short_candidate_modes_both_sides_both_strands() {
+        let b = 1000;
+        for flag in [0x1u16 | 0x40, 0x1 | 0x10 | 0x80] {
+            // LEFT (a): 5 bp leading clip, alignment starts at b (+-window)
+            assert!(short_candidate(&sl(1, flag, 1000, 1140, 5, 0), b, true, 3, 20, 12));
+            assert!(short_candidate(&sl(1, flag, 1002, 1140, 5, 0), b, true, 3, 20, 12));
+            assert!(!short_candidate(&sl(1, flag, 1005, 1140, 5, 0), b, true, 3, 20, 12)); // outside window
+            assert!(!short_candidate(&sl(1, flag, 1000, 1140, 12, 0), b, true, 3, 20, 12)); // a CLIP read
+            // LEFT (b): unclipped, aligned 1..20 bp past b into the clip side, far-side clip ok
+            assert!(short_candidate(&sl(1, flag, 990, 1140, 0, 0), b, true, 3, 20, 12));
+            assert!(short_candidate(&sl(1, flag, 980, 1100, 0, 30), b, true, 3, 20, 12));
+            assert!(!short_candidate(&sl(1, flag, 979, 1130, 0, 0), b, true, 3, 20, 12)); // 21 bp: plain reference read
+            assert!(!short_candidate(&sl(1, flag, 1000, 1150, 0, 0), b, true, 3, 20, 12)); // does not cross
+            // RIGHT (a): 7 bp trailing clip, alignment ends at b
+            assert!(short_candidate(&sl(1, flag, 860, 1000, 0, 7), b, false, 3, 20, 12));
+            assert!(short_candidate(&sl(1, flag, 860, 997, 0, 7), b, false, 3, 20, 12));
+            assert!(!short_candidate(&sl(1, flag, 860, 996, 0, 7), b, false, 3, 20, 12));
+            // RIGHT (b): unclipped, alignment ends 1..20 bp past b
+            assert!(short_candidate(&sl(1, flag, 870, 1015, 0, 0), b, false, 3, 20, 12));
+            assert!(short_candidate(&sl(1, flag, 870, 1020, 40, 0), b, false, 3, 20, 12));
+            assert!(!short_candidate(&sl(1, flag, 870, 1021, 0, 0), b, false, 3, 20, 12));
+            assert!(!short_candidate(&sl(1, flag, 870, 1000, 0, 0), b, false, 3, 20, 12)); // ends exactly at b
+        }
+    }
+
+    #[test]
+    fn short_collector_keeps_only_reads_near_hot_junctions() {
+        let mut c = ShortCollector::new(3, 20);
+        c.push(sl(1, 0x41, 500, 650, 0, 0)); // nowhere near
+        c.push(sl(2, 0x41, 990, 1140, 0, 0)); // LEFT (b) for b=1000 — hot marked later
+        c.push(sl(3, 0x41, 1000, 1140, 30, 0)); // the clipped read itself
+        c.hot(1000, true);
+        c.push(sl(4, 0x41, 1001, 1150, 4, 0)); // LEFT (a)
+        c.push(sl(5, 0x51, 1900, 2050, 0, 6)); // RIGHT (a) for b=2050, marked later
+        c.hot(2050, false);
+        c.push(sl(6, 0x41, 9000, 9150, 0, 0));
+        let kept: Vec<u64> = c.finish().iter().map(|r| r.frag).collect();
+        assert_eq!(kept, vec![2, 3, 4, 5]);
     }
 
     #[test]

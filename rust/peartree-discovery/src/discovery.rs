@@ -16,17 +16,176 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use crate::config::*;
 use crate::coverage::Coverage;
 use crate::evidence::{
-    frag_hash, select_lowest, DiscLite, EvExtra, EvRec, MateReq, PaLite, ReqKind, Role, Sidecar, Target,
+    frag_hash, select_lowest, short_candidate, DiscLite, EvExtra, EvRec, MateReq, PaLite, ReqKind, Role, ShortCollector,
+    ShortLite, Sidecar, Target,
     FLAG_PAIRED, FLAG_REVERSE, FLAG_SUPPLEMENTARY,
 };
 use crate::exons::GeneModel;
-use crate::filters::{both_clips_slippage, clean_clipped_seq, is_adapter, is_low_complexity, is_slippage_clip, mean_kmer_diversity};
+use crate::filters::{both_clips_slippage, clean_clipped_seq, is_adapter, is_low_complexity, is_slippage_clip, longest_homopolymer_run, mean_kmer_diversity};
 use crate::intervals::IntervalIndex;
 use crate::model::{join, Breakpoint};
 use crate::polya::PolyABreakpoint;
 use crate::qseq::{revcomp_bytes, QualitySeq};
 use crate::read::BamRead;
 use crate::stats::Stats;
+
+/// Post-TSD pairing modes, in greedy priority order (lower first).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum PairMode {
+    TsdDeletion = 0,
+    Blunt = 1,
+    L1Del = 2,
+    L1Dup = 3,
+}
+
+/// One buffered emission of `output` (see there).
+struct Out<'a> {
+    left: Emit<'a>,
+    right: Emit<'a>,
+    pal: Vec<&'a PolyABreakpoint>,
+    par: Vec<&'a PolyABreakpoint>,
+    dead: bool,
+}
+
+/// True when >= 80 % of the first `n` bases of a stored (junction-outward) clip are T —
+/// the poly-A tail seen from the junction (both sides store it so; tolerant of the
+/// interruptions/sequencing errors real and simulated poly-A tails carry).
+fn leading_polyt(seq: &[u8], n: usize) -> bool {
+    leading_run_of(seq, n, b'T')
+}
+
+fn leading_polya(seq: &[u8], n: usize) -> bool {
+    leading_run_of(seq, n, b'A')
+}
+
+fn leading_run_of(seq: &[u8], n: usize, base: u8) -> bool {
+    n > 0 && seq.len() >= n && seq[..n].iter().filter(|&&b| b.to_ascii_uppercase() == base).count() * 5 >= n * 4
+}
+
+/// SPEC-8b junction spare (`clip_slippage_junction_spare` = k > 0): the first k bases of a
+/// stored clip (junction-proximal) are structured sequence — no homopolymer >= 8, >= 3
+/// distinct bases. A short insert (orphan transduction tag, short element) followed by a
+/// long poly-A lowers the WHOLE-clip entropy below the SPEC-8b threshold although the
+/// junction itself is not a tract continuation; reference-tract slippage is homopolymer
+/// right at the junction and is never spared.
+fn junction_structured(seq: &[u8], k: usize) -> bool {
+    if k == 0 || seq.len() < k {
+        return false;
+    }
+    let pre = &seq[..k];
+    let mut seen = [false; 4];
+    for b in pre {
+        match b.to_ascii_uppercase() {
+            b'A' => seen[0] = true,
+            b'C' => seen[1] = true,
+            b'G' => seen[2] = true,
+            b'T' => seen[3] = true,
+            _ => {}
+        }
+    }
+    longest_homopolymer_run(pre).0 < 8 && seen.iter().filter(|&&x| x).count() >= 3
+}
+
+/// A clip that looks like element body: long enough, no homopolymer start in either
+/// orientation, not low-complexity.
+fn complex_clip(seq: &[u8], n: usize) -> bool {
+    seq.len() >= MIN_CLIP_LEN && !leading_polyt(seq, n) && !leading_polya(seq, n) && !is_low_complexity(seq, 0.8)
+}
+
+/// TPRT polarity of a LEFT/RIGHT pair: exactly one side is the poly-A tail, the other a
+/// complex element clip (used to admit far-apart L1-mediated pairs).
+fn polarised_pair(lb: &Breakpoint, rb: &Breakpoint, n: usize) -> bool {
+    let (lp, rp) = (leading_polyt(&lb.clipped.seq, n), leading_polyt(&rb.clipped.seq, n));
+    (lp && complex_clip(&rb.clipped.seq, n)) || (rp && complex_clip(&lb.clipped.seq, n))
+}
+
+/// Pairing mode of a LEFT/RIGHT pair outside the normal TSD window (None = not admitted).
+/// gap = r - l: [-max_target_site_deletion, -1] target-site deletion; [0, tsd_min) blunt;
+/// polarised and [-max_l1_mediated_span, -max_target_site_deletion-1] L1-mediated
+/// deletion; polarised and (tsd_max, max_l1_mediated_span] L1-mediated duplication.
+fn pair_mode(c: &DiscoveryConfig, lb: &Breakpoint, rb: &Breakpoint) -> Option<PairMode> {
+    let gap = rb.breakpoint - lb.breakpoint;
+    if gap >= c.tsd_min && gap <= c.tsd_max {
+        return None; // normal TSD window: the legacy loop's business
+    }
+    if c.max_target_site_deletion > 0 && gap < 0 && gap >= -c.max_target_site_deletion {
+        return Some(PairMode::TsdDeletion);
+    }
+    if c.allow_blunt_pairs && gap >= 0 && gap < c.tsd_min {
+        return Some(PairMode::Blunt);
+    }
+    let span = c.max_l1_mediated_span;
+    if span > 0 && polarised_pair(lb, rb, c.l1_mediated_min_polya) {
+        if gap < -c.max_target_site_deletion.max(0) && gap >= -span {
+            return Some(PairMode::L1Del);
+        }
+        if gap > c.tsd_max && gap <= span {
+            return Some(PairMode::L1Dup);
+        }
+    }
+    None
+}
+
+/// Greedy one-to-one matching of the not-yet-paired (`used != 2`) LEFT/RIGHT breakpoints
+/// (both sorted by position) under `pair_mode`, ordered by mode rank, |gap|, LEFT position,
+/// indices — deterministic. `reject` is the SPEC-8b both-clips gate. Returns (li, ri).
+fn greedy_extra_pairs<F: Fn(&Breakpoint, &Breakpoint) -> bool>(
+    c: &DiscoveryConfig,
+    l: &[&Breakpoint],
+    r: &[&Breakpoint],
+    used_l: &[u8],
+    used_r: &[u8],
+    reject: F,
+) -> Vec<(usize, usize)> {
+    let reach = c.max_target_site_deletion.max(0).max(c.tsd_max).max(c.max_l1_mediated_span.max(0));
+    let mut edges: Vec<(u8, i64, i64, usize, usize)> = Vec::new();
+    for (li, lb) in l.iter().enumerate() {
+        if used_l[li] == 2 {
+            continue;
+        }
+        let lo = r.partition_point(|b| b.breakpoint < lb.breakpoint - reach);
+        for (ri, rb) in r.iter().enumerate().skip(lo) {
+            if rb.breakpoint > lb.breakpoint + reach {
+                break;
+            }
+            if used_r[ri] == 2 {
+                continue;
+            }
+            if let Some(m) = pair_mode(c, lb, rb) {
+                edges.push((m as u8, (rb.breakpoint - lb.breakpoint).abs(), lb.breakpoint, li, ri));
+            }
+        }
+    }
+    edges.sort_unstable();
+    let (mut ul, mut ur) = (vec![false; l.len()], vec![false; r.len()]);
+    let mut out = Vec::new();
+    for (_, _, _, li, ri) in edges {
+        if ul[li] || ur[ri] || reject(l[li], r[ri]) {
+            continue;
+        }
+        ul[li] = true;
+        ur[ri] = true;
+        out.push((li, ri));
+    }
+    out
+}
+
+/// One-sided locus gate: fragment floor, optional poly-A/T-tail requirement, and the
+/// SPEC-8 reference-tract slippage test, applied here even when `slippage_filter` is off
+/// (a lone poly-A clip at a reference A-tract is the main FP source), plus a
+/// low-complexity-flank veto (satellite/tract mismap).
+fn one_sided_ok(c: &DiscoveryConfig, b: &Breakpoint) -> bool {
+    if b.n_frags < c.one_sided_min_fragments {
+        return false;
+    }
+    if c.one_sided_require_polya && !leading_polyt(&b.clipped.seq, c.one_sided_min_polya) {
+        return false;
+    }
+    if is_slippage_clip(b.side, &b.clipped.seq, &b.unclipped.seq, c.slippage_min_ref_run, c.slippage_min_clip_frac, c.slippage_max_period.max(1)) {
+        return false;
+    }
+    !is_low_complexity(&b.unclipped.seq, 0.8)
+}
 
 #[derive(Clone, Copy)]
 enum BpRef {
@@ -35,8 +194,12 @@ enum BpRef {
     PolyA(usize),
 }
 
+#[derive(Clone, Copy)]
 enum Emit<'a> {
     Bp(&'a Breakpoint),
+    /// One-sided locus: the missing end (no reads), named `oneside_<pos>` with the real
+    /// breakpoint's coordinate.
+    Open(i64),
     Pa(&'a PolyABreakpoint),
     /// Feature A: a discordant-cluster end (coordinate only, no reads). Dormant since the
     /// both-sided rescue rework — Feature A now requires a direct clip on the missing side
@@ -240,6 +403,9 @@ pub struct Discovery {
     /// sequence), attached to nearby final breakpoints in `cleanup`. Empty unless
     /// `evidence_sidecar` is on.
     sc_disc_tmp: Vec<DiscLite>,
+    /// TPRT sidecar: short-overhang candidate collector for the current contig (None
+    /// unless `evidence_sidecar` && `short_overhang_evidence`).
+    sc_short: Option<ShortCollector>,
 }
 
 impl Discovery {
@@ -273,6 +439,7 @@ impl Discovery {
             stats: Stats::default(),
             bam_threads: bam_threads.max(1),
             sc_disc_tmp: Vec::new(),
+            sc_short: None,
         }
     }
 
@@ -571,6 +738,8 @@ impl Discovery {
     }
 
     fn cleanup(&mut self) {
+        // short-overhang candidates of the just-finished contig (empty when off)
+        let shorts: Vec<ShortLite> = self.sc_short.as_mut().map(|c| c.finish()).unwrap_or_default();
         if self.reference_name.is_none() {
             self.sc_disc_tmp.clear();
             return;
@@ -663,6 +832,12 @@ impl Discovery {
             attach_disc(&mut self.final_left_breakpoints[l0..], &disc, true, span, cap);
             attach_disc(&mut self.final_right_breakpoints[r0..], &disc, false, span, cap);
         }
+        if !shorts.is_empty() {
+            let c = &self.config;
+            let (w, m, cap) = (c.short_overhang_window, c.short_overhang_max, c.max_short_per_breakpoint);
+            attach_short(&mut self.final_left_breakpoints[l0..], &shorts, true, w, m, cap);
+            attach_short(&mut self.final_right_breakpoints[r0..], &shorts, false, w, m, cap);
+        }
     }
 
     pub fn extract_chimeric(&mut self) -> io::Result<()> {
@@ -739,6 +914,10 @@ impl Discovery {
             if !rescued {
                 // NB: this path never checked the 0x400 flag (legacy, kept for
                 // byte-identity); with `ignore_dup_flag` dups are kept everywhere anyway.
+                // `drop_dup_in_polya_path` applies the clip-path drop rule here too.
+                if self.config.drop_dup_in_polya_path && drop_read(&read, self.config.ignore_dup_flag) {
+                    return Ok(());
+                }
                 if let Some(mut b) = PolyABreakpoint::find_polya(&read) {
                     if self.config.evidence_sidecar {
                         let mate_ok = read.mate_is_mapped && read.mate_pos >= 0;
@@ -844,6 +1023,23 @@ impl Discovery {
             return Ok(());
         }
 
+        // TPRT sidecar: short-overhang candidates (primary, MAPQ >= min_mapq; the 0x400
+        // rule was applied by drop_read above).
+        if self.config.evidence_sidecar && self.config.short_overhang_evidence {
+            if read.mapped && !read.is_supplementary && read.mapq >= min_mapq && read.reference_start >= 0 {
+                let (w, m) = (self.config.short_overhang_window, self.config.short_overhang_max);
+                self.sc_short.get_or_insert_with(|| ShortCollector::new(w, m)).push(ShortLite {
+                    frag: frag_hash(read.name_bytes()),
+                    flag: read.flag,
+                    ref_id: ref_id as i32,
+                    start: read.reference_start,
+                    end: read.reference_end,
+                    lead_soft: read.lead_soft as u32,
+                    trail_soft: read.trail_soft as u32,
+                });
+            }
+        }
+
         let left_soft = read.left_is_soft;
         let right_soft = read.right_is_soft;
         let left_len = read.left_len;
@@ -913,6 +1109,9 @@ impl Discovery {
                 full.pyslice(Some(left_len as isize), None)
             };
             self.add_breakpoint(clip, read.reference_start, &qname, clipped, unclipped, read.is_read1, read.is_forward(), exclude_flag, read.mapq, read.flag);
+            if let Some(c) = self.sc_short.as_mut() {
+                c.hot(read.reference_start, true);
+            }
         } else {
             // CLIP_RIGHT: adapter check on the first MIN_CLIP_LEN of the clipped part
             let clip_part = &seq[n - right_len..];
@@ -927,6 +1126,9 @@ impl Discovery {
                 full.pyslice(None, Some(-(right_len as isize)))
             };
             self.add_breakpoint(clip, read.reference_end, &qname, clipped, unclipped, read.is_read1, read.is_forward(), exclude_flag, read.mapq, read.flag);
+            if let Some(c) = self.sc_short.as_mut() {
+                c.hot(read.reference_end, false);
+            }
         }
         Ok(())
     }
@@ -1090,20 +1292,34 @@ impl Discovery {
                 i < v.len() && v[i] <= hi
             })
         };
-        let (tmin, tmax, far) = (self.config.tsd_min, self.config.tsd_max, self.config.polya_far_dist);
+        let (mut tmin, mut tmax, far) = (self.config.tsd_min, self.config.tsd_max, self.config.polya_far_dist);
+        // post-TSD pairing modes widen the partner window (a conservative superset of
+        // `extra_pairs`); one-sided loci need no partner at all.
+        let c = &self.config;
+        if c.max_target_site_deletion > 0 {
+            tmin = tmin.min(-c.max_target_site_deletion);
+        }
+        if c.allow_blunt_pairs {
+            tmin = tmin.min(0);
+        }
+        if c.max_l1_mediated_span > 0 {
+            tmin = tmin.min(-c.max_l1_mediated_span);
+            tmax = tmax.max(c.max_l1_mediated_span);
+        }
+        let lone_ok = |b: &Breakpoint| c.one_sided_loci && one_sided_ok(c, b);
         let mut keep_l = vec![false; self.final_left_breakpoints.len()];
         for (i, b) in self.final_left_breakpoints.iter().enumerate() {
             let (rn, p) = (b.reference_name.as_str(), b.breakpoint);
             keep_l[i] = b.ev.is_some()
                 && self.bp_visible(rn, p)
-                && (any_in(rpos.get(rn), p + tmin, p + tmax) || any_in(pa_pos.get(rn), p - slack, p + far + slack));
+                && (any_in(rpos.get(rn), p + tmin, p + tmax) || any_in(pa_pos.get(rn), p - slack, p + far + slack) || lone_ok(b));
         }
         let mut keep_r = vec![false; self.final_right_breakpoints.len()];
         for (i, b) in self.final_right_breakpoints.iter().enumerate() {
             let (rn, p) = (b.reference_name.as_str(), b.breakpoint);
             keep_r[i] = b.ev.is_some()
                 && self.bp_visible(rn, p)
-                && (any_in(lpos.get(rn), p - tmax, p - tmin) || any_in(pa_pos.get(rn), p - far - slack, p + slack));
+                && (any_in(lpos.get(rn), p - tmax, p - tmin) || any_in(pa_pos.get(rn), p - far - slack, p + slack) || lone_ok(b));
         }
         // poly-A reads that may pair with a kept breakpoint (on the mate's contig)
         let klpos = positions(&self.final_left_breakpoints, Some(&keep_l));
@@ -1128,6 +1344,7 @@ impl Discovery {
             }
         }
         let (all, cap) = (self.config.fetch_all_mates, self.config.max_mates_per_breakpoint);
+        let short_cap = self.config.max_short_per_breakpoint;
         for (target, bps, keep) in [
             (Target::Left, &mut self.final_left_breakpoints, &keep_l),
             (Target::Right, &mut self.final_right_breakpoints, &keep_r),
@@ -1140,6 +1357,7 @@ impl Discovery {
                 let ref_id = name_id.get(bp.reference_name.as_str()).copied().unwrap_or(-1);
                 if let Some(ev) = bp.ev.as_deref() {
                     build_requests(ev, target, i as u32, ref_id, all, cap, &mut reqs);
+                    build_short_requests(ev, target, i as u32, all, short_cap, &mut reqs);
                 }
             }
         }
@@ -1168,6 +1386,15 @@ impl Discovery {
                 ReqKind::Mate => (Role::Mate, -1),
                 ReqKind::DiscSelf => (Role::Disc, -1),
                 ReqKind::PolySelf => (Role::PolyA, -1),
+                ReqKind::ShortSelf => {
+                    // read offset of the junction, from the breakpoint coordinate + CIGAR
+                    let b = if q.target == Target::Left {
+                        self.final_left_breakpoints[q.idx as usize].breakpoint
+                    } else {
+                        self.final_right_breakpoints[q.idx as usize].breakpoint
+                    };
+                    (Role::Short, read.query_offset_at(b) as i32)
+                }
                 ReqKind::ClipSelf => {
                     // read offset of the junction in the stored (reference-forward) sequence
                     let at = if q.target == Target::Left { read.left_len } else { read.record_len().saturating_sub(read.right_len) };
@@ -1191,6 +1418,7 @@ impl Discovery {
                         match role {
                             Role::Mate => ev.mates.push(r),
                             Role::Disc => ev.disc.push(r),
+                            Role::Short => ev.short.push(r),
                             _ => ev.clip.push(r),
                         }
                     }
@@ -1216,10 +1444,13 @@ impl Discovery {
             match e {
                 Emit::Bp(b) => {
                     if let Some(ev) = b.ev.as_deref() {
-                        for r in ev.clip.iter().chain(&ev.disc).chain(&ev.mates) {
+                        for r in ev.clip.iter().chain(&ev.disc).chain(&ev.short).chain(&ev.mates) {
                             sc.row(&locus, side, r)?;
                         }
                         sc.stats.mates_per_bp.push(ev.mates.len() as u32);
+                        if self.config.short_overhang_evidence {
+                            sc.stats.short_per_bp.push(ev.short.len() as u32);
+                        }
                     }
                 }
                 Emit::Pa(_) => {
@@ -1240,7 +1471,7 @@ impl Discovery {
                         }
                     }
                 }
-                Emit::Disc(_) => {}
+                Emit::Disc(_) | Emit::Open(_) => {}
             }
         }
         Ok(())
@@ -1599,6 +1830,17 @@ impl Discovery {
                 r.retain(keep);
             }
 
+            // Emissions are buffered per contig (left, right, poly-A pools) and flushed in
+            // order below, so the optional post-TSD pairing modes can add pairs and upgrade a
+            // Bp+polyA emission. With every mode off the flushed sequence equals the legacy
+            // streamed one (byte-identical).
+            let want_pools = sc.is_some();
+            let mut outs: Vec<Out> = Vec::new();
+            // per-breakpoint use: 0 = free, 1 = in a Bp+polyA emission, 2 = in a Bp+Bp pair
+            let mut used_l: Vec<u8> = vec![0; l.len()];
+            let mut used_r: Vec<u8> = vec![0; r.len()];
+            let mut pa_out_l: Vec<usize> = vec![usize::MAX; l.len()];
+            let mut pa_out_r: Vec<usize> = vec![usize::MAX; r.len()];
             let (mut il, mut ir, mut ip) = (0usize, 0usize, 0usize);
             while il < l.len() && ir < r.len() {
                 let tsd = r[ir].breakpoint - l[il].breakpoint;
@@ -1607,13 +1849,15 @@ impl Discovery {
                         ip += 1;
                     }
                     if ip != p.len() && p[ip].breakpoint.unwrap() - l[il].breakpoint < self.config.polya_far_dist && p[ip].clip == CLIP_RIGHT {
-                        if hm {
-                            write_hallmark(hallmarks, rn, &Emit::Bp(l[il]), &Emit::Pa(p[ip]))?;
-                        }
-                        if let Some(s) = sc.as_deref_mut() {
-                            self.sidecar_locus(s, &Emit::Bp(l[il]), &Emit::Pa(p[ip]), &[], &pa_pool(&p, ip, cw))?;
-                        }
-                        print_output(writer, Emit::Bp(l[il]), Emit::Pa(p[ip]))?;
+                        used_l[il] = 1;
+                        pa_out_l[il] = outs.len();
+                        outs.push(Out {
+                            left: Emit::Bp(l[il]),
+                            right: Emit::Pa(p[ip]),
+                            pal: Vec::new(),
+                            par: if want_pools { pa_pool(&p, ip, cw) } else { Vec::new() },
+                            dead: false,
+                        });
                         il += 1;
                         continue;
                     }
@@ -1624,13 +1868,15 @@ impl Discovery {
                         ip += 1;
                     }
                     if ip != p.len() && r[ir].breakpoint - p[ip].breakpoint.unwrap() > self.config.polya_near_dist && p[ip].clip == CLIP_LEFT {
-                        if hm {
-                            write_hallmark(hallmarks, rn, &Emit::Pa(p[ip]), &Emit::Bp(r[ir]))?;
-                        }
-                        if let Some(s) = sc.as_deref_mut() {
-                            self.sidecar_locus(s, &Emit::Pa(p[ip]), &Emit::Bp(r[ir]), &pa_pool(&p, ip, cw), &[])?;
-                        }
-                        print_output(writer, Emit::Pa(p[ip]), Emit::Bp(r[ir]))?;
+                        used_r[ir] = 1;
+                        pa_out_r[ir] = outs.len();
+                        outs.push(Out {
+                            left: Emit::Pa(p[ip]),
+                            right: Emit::Bp(r[ir]),
+                            pal: if want_pools { pa_pool(&p, ip, cw) } else { Vec::new() },
+                            par: Vec::new(),
+                            dead: false,
+                        });
                         ir += 1;
                         continue;
                     }
@@ -1643,40 +1889,96 @@ impl Discovery {
                     // print_output emits them (left CLIPPED is revcomp'd, right CLIPPED plain),
                     // so the gate matches the emitted consensus exactly. A real MEI keeps a
                     // structured element body on one side, so it survives (one-sided spare).
-                    if self.config.clip_slippage_filter
-                        && both_clips_slippage(
-                            &l[il].clipped.revcomp().seq,
-                            &r[ir].clipped.seq,
-                            self.config.clip_slippage_min_run,
-                            self.config.clip_slippage_max_entropy,
-                            self.config.clip_slippage_require_same_base,
-                            self.config.clip_slippage_any_base,
-                        )
-                    {
-                        // both breakpoints consumed by this (rejected) insertion — advance both
-                        il += 1;
-                        ir += 1;
-                        continue;
-                    }
-                    if hm {
-                        write_hallmark(hallmarks, rn, &Emit::Bp(l[il]), &Emit::Bp(r[ir]))?;
-                    }
-                    if let Some(s) = sc.as_deref_mut() {
-                        self.sidecar_locus(s, &Emit::Bp(l[il]), &Emit::Bp(r[ir]), &[], &[])?;
-                    }
-                    print_output(writer, Emit::Bp(l[il]), Emit::Bp(r[ir]))?;
-                    // Both breakpoints are consumed by this insertion — advance BOTH
+                    // Both breakpoints are consumed (emitted or rejected) — advance BOTH
                     // pointers. (Previously only `il` advanced, leaving `ir` stuck on the
                     // just-paired right breakpoint; the next left breakpoint then saw a
                     // stale, too-far-left right → negative tsd → it was mis-routed into the
                     // poly-A rescue instead of pairing with its true right partner. Those
                     // mis-paired calls became poly-A-type and were dropped by combine.)
+                    used_l[il] = 2;
+                    used_r[ir] = 2;
+                    if !self.spec8b_rejects(l[il], r[ir]) {
+                        outs.push(Out { left: Emit::Bp(l[il]), right: Emit::Bp(r[ir]), pal: Vec::new(), par: Vec::new(), dead: false });
+                    }
                     il += 1;
                     ir += 1;
                 }
             }
+            if self.config.extra_pairing() {
+                self.extra_pairs(&l, &r, &mut used_l, &mut used_r, &pa_out_l, &pa_out_r, &mut outs);
+            }
+            for o in &outs {
+                if o.dead {
+                    continue;
+                }
+                if hm {
+                    write_hallmark(hallmarks, rn, &o.left, &o.right)?;
+                }
+                if let Some(s) = sc.as_deref_mut() {
+                    self.sidecar_locus(s, &o.left, &o.right, &o.pal, &o.par)?;
+                }
+                print_output(writer, o.left, o.right)?;
+            }
         }
         Ok(())
+    }
+
+    /// SPEC-8b gate on a Bp+Bp pair (see `output`).
+    fn spec8b_rejects(&self, lb: &Breakpoint, rb: &Breakpoint) -> bool {
+        let k = self.config.clip_slippage_junction_spare;
+        if k > 0 && (junction_structured(&lb.clipped.seq, k) || junction_structured(&rb.clipped.seq, k)) {
+            return false;
+        }
+        self.config.clip_slippage_filter
+            && both_clips_slippage(
+                &lb.clipped.revcomp().seq,
+                &rb.clipped.seq,
+                self.config.clip_slippage_min_run,
+                self.config.clip_slippage_max_entropy,
+                self.config.clip_slippage_require_same_base,
+                self.config.clip_slippage_any_base,
+            )
+    }
+
+    /// Post-TSD pairing (TPRT modes, all off by default). Runs on the breakpoints the
+    /// legacy loop left unpaired (free, or only in a Bp+polyA emission, which a Bp+Bp pair
+    /// upgrades): (1) target-site deletion / blunt / L1-mediated pairs, greedily by mode
+    /// rank, then |gap|, then position (deterministic); (2) one-sided loci for the rest.
+    #[allow(clippy::too_many_arguments)]
+    fn extra_pairs<'a>(
+        &self,
+        l: &[&'a Breakpoint],
+        r: &[&'a Breakpoint],
+        used_l: &mut [u8],
+        used_r: &mut [u8],
+        pa_out_l: &[usize],
+        pa_out_r: &[usize],
+        outs: &mut Vec<Out<'a>>,
+    ) {
+        let c = &self.config;
+        for (li, ri) in greedy_extra_pairs(c, l, r, used_l, used_r, |lb, rb| self.spec8b_rejects(lb, rb)) {
+            for (u, idx) in [(used_l[li], pa_out_l[li]), (used_r[ri], pa_out_r[ri])] {
+                if u == 1 && idx != usize::MAX {
+                    outs[idx].dead = true; // upgraded: Bp+Bp supersedes Bp+polyA
+                }
+            }
+            used_l[li] = 2;
+            used_r[ri] = 2;
+            outs.push(Out { left: Emit::Bp(l[li]), right: Emit::Bp(r[ri]), pal: Vec::new(), par: Vec::new(), dead: false });
+        }
+        if !c.one_sided_loci {
+            return;
+        }
+        for (side_l, bps, used) in [(true, l, &*used_l), (false, r, &*used_r)] {
+            for (i, b) in bps.iter().enumerate() {
+                if used[i] != 0 || !one_sided_ok(c, b) {
+                    continue;
+                }
+                let open = Emit::Open(b.breakpoint);
+                let (left, right) = if side_l { (Emit::Bp(b), open) } else { (open, Emit::Bp(b)) };
+                outs.push(Out { left, right, pal: Vec::new(), par: Vec::new(), dead: false });
+            }
+        }
     }
 
     /// Feature A (both-sided rescue): append discordant-anchored calls after the normal
@@ -1882,6 +2184,59 @@ fn attach_disc(bps: &mut [Breakpoint], disc: &[DiscLite], left: bool, span: i64,
     }
 }
 
+/// Attach short-overhang candidates (one contig, start-sorted) to that contig's new final
+/// breakpoints: `short_candidate` against the consensus breakpoint, excluding fragments
+/// already present as CLIP evidence with the same r12, capped at `cap` (lowest (frag, flag)).
+fn attach_short(bps: &mut [Breakpoint], shorts: &[ShortLite], left: bool, window: i64, max: i64, cap: usize) {
+    let reach = window.max(max) + 2000; // the longest aligned span considered
+    for bp in bps.iter_mut() {
+        let b = bp.breakpoint;
+        let Some(ev) = bp.ev.as_mut() else { continue };
+        let lo = shorts.partition_point(|r| r.start < b - reach);
+        let mut sel: Vec<ShortLite> = Vec::new();
+        for r in &shorts[lo..] {
+            if r.start > b + window {
+                break;
+            }
+            if short_candidate(r, b, left, window, max, MIN_CLIP_LEN as u32)
+                && !ev.clip_lite.iter().any(|c| c.frag == r.frag && c.r12() == r.r12())
+            {
+                sel.push(*r);
+            }
+        }
+        sel.dedup();
+        ev.short_lite = select_lowest(sel, cap, |r| (r.frag, r.flag));
+    }
+}
+
+/// SHORT capture requests for one breakpoint side: each short-overhang read itself
+/// (ShortSelf, placement checked) and — with `fetch_all_mates` — its primary mate, capped
+/// separately at `cap` (lowest (frag, r12)) and skipping mates the CLIP/DISC requests
+/// already cover, so the legacy MATE selection is unchanged.
+fn build_short_requests(ev: &EvExtra, target: Target, idx: u32, fetch_all: bool, cap: usize, out: &mut Vec<MateReq>) {
+    if ev.short_lite.is_empty() {
+        return;
+    }
+    let req = |hash, r12, kind, ref_id, pos| MateReq { hash, idx, ref_id, pos, r12, kind, target, supp: false };
+    let mut cands: Vec<(u64, u8)> = Vec::new();
+    for s in &ev.short_lite {
+        out.push(req(s.frag, s.r12(), ReqKind::ShortSelf, s.ref_id, s.start));
+        if fetch_all && s.flag & FLAG_PAIRED != 0 && s.mate_r12() != 0 {
+            cands.push((s.frag, s.mate_r12()));
+        }
+    }
+    cands.sort_unstable();
+    cands.dedup();
+    let covered = |f: u64, r: u8| {
+        ev.clip_lite.iter().any(|c| c.frag == f && (c.mate_r12() == r || (c.r12() == r && c.is_primary())))
+            || ev.disc_lite.iter().any(|d| d.frag == f)
+    };
+    cands.retain(|&(f, r)| !covered(f, r));
+    for (hash, r12) in select_lowest(cands, cap, |&c| c) {
+        out.push(req(hash, r12, ReqKind::Mate, -1, -1));
+    }
+}
+
 /// Capture requests for one breakpoint side. CLIP reads: each recorded clipped read
 /// itself (ClipSelf). Mates: the legacy `has_mate` orientation (LEFT reverse / RIGHT
 /// forward) of CLIP reads, or — with `fetch_all_mates` — the mate of every CLIP (incl.
@@ -1941,14 +2296,14 @@ fn emit_clip<'a>(e: &'a Emit) -> Option<&'a QualitySeq> {
     match e {
         Emit::Bp(b) => Some(&b.clipped),
         Emit::Pa(p) => p.clipped.as_ref(),
-        Emit::Disc(_) => None,
+        Emit::Disc(_) | Emit::Open(_) => None,
     }
 }
 
 fn emit_unclip<'a>(e: &'a Emit) -> Option<&'a QualitySeq> {
     match e {
         Emit::Bp(b) => Some(&b.unclipped),
-        Emit::Pa(_) | Emit::Disc(_) => None,
+        Emit::Pa(_) | Emit::Disc(_) | Emit::Open(_) => None,
     }
 }
 
@@ -1979,6 +2334,7 @@ fn write_hallmark(buf: &mut Vec<u8>, contig: &str, left: &Emit, right: &Emit) ->
             Emit::Bp(b) => b.breakpoint,
             Emit::Pa(p) => p.breakpoint.unwrap_or(0),
             Emit::Disc(c) => c.pos,
+            Emit::Open(p) => *p,
         }
     };
     let (l_pos, r_pos): (i64, i64) = (epos(left), epos(right));
@@ -2026,6 +2382,9 @@ fn locus_name(left: &Emit, right: &Emit) -> String {
             format!("disc_{}", c.pos),
             format!("{}", rb.breakpoint),
         ),
+        // TPRT one-sided locus: the missing end repeats the real coordinate.
+        (Emit::Bp(lb), Emit::Open(p)) => (lb.reference_name.clone(), format!("{}", lb.breakpoint), format!("oneside_{p}")),
+        (Emit::Open(p), Emit::Bp(rb)) => (rb.reference_name.clone(), format!("oneside_{p}"), format!("{}", rb.breakpoint)),
         _ => unreachable!("invalid pairing: polyA/disc ends are only paired with a real breakpoint"),
     };
     format!("{}:{}-{}", reference_name, left_str, right_str)
@@ -2047,7 +2406,7 @@ fn print_output<W: Write>(writer: &mut W, left: Emit, right: Emit) -> io::Result
             }
         }
         // Feature A: discordant left end emits no reads (coordinate only).
-        Emit::Disc(_) => {}
+        Emit::Disc(_) | Emit::Open(_) => {}
     }
     match &right {
         Emit::Pa(pa) => {
@@ -2062,7 +2421,7 @@ fn print_output<W: Write>(writer: &mut W, left: Emit, right: Emit) -> io::Result
             }
         }
         // Feature A: discordant right end emits no reads (coordinate only).
-        Emit::Disc(_) => {}
+        Emit::Disc(_) | Emit::Open(_) => {}
     }
     Ok(())
 }
@@ -2195,5 +2554,262 @@ mod tests {
         let rf: Vec<u64> = r[0].ev.as_ref().unwrap().disc_lite.iter().map(|d| d.frag).collect();
         assert_eq!(lf, vec![2]);
         assert_eq!(rf, vec![1]);
+    }
+
+    // ---- TPRT pairing modes ----
+
+    /// deterministic pseudo-random DNA (LCG) — structured, high-entropy clip/flank
+    fn dna(seed: u64, n: usize) -> Vec<u8> {
+        let mut x = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        (0..n)
+            .map(|_| {
+                x = x.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                b"ACGT"[(x >> 33) as usize % 4]
+            })
+            .collect()
+    }
+
+    /// final (consensus) breakpoint with a STORED clip (junction-outward) and flank
+    fn fbp(side: i32, pos: i64, clip: &[u8], frags: usize) -> Breakpoint {
+        let flank = dna(pos as u64 + 7, 80);
+        let mut b = Breakpoint::new(
+            side,
+            "1".into(),
+            pos,
+            None,
+            QualitySeq::new(clip.to_vec(), vec![30; clip.len()]),
+            QualitySeq::new(flank, vec![30; 80]),
+            None,
+            None,
+            false,
+            0,
+        );
+        b.n_frags = frags;
+        b.n_reads = frags;
+        b
+    }
+
+    fn polyt(n: usize, tail_seed: u64) -> Vec<u8> {
+        let mut v = vec![b'T'; n];
+        v.extend(dna(tail_seed, 20));
+        v
+    }
+
+    fn cfg_modes() -> DiscoveryConfig {
+        DiscoveryConfig {
+            max_target_site_deletion: 30,
+            allow_blunt_pairs: true,
+            max_l1_mediated_span: 50_000,
+            one_sided_loci: true,
+            ..DiscoveryConfig::default()
+        }
+    }
+
+    #[test]
+    fn pair_mode_windows() {
+        let c = cfg_modes();
+        let body = dna(1, 40);
+        let tail = polyt(25, 2);
+        let l = |p| fbp(CLIP_LEFT, p, &tail, 3);
+        let r = |p| fbp(CLIP_RIGHT, p, &body, 3);
+        // normal TSD window is the legacy loop's business
+        assert_eq!(pair_mode(&c, &l(1000), &r(1015)), None);
+        // target-site deletion: RIGHT up to 30 bp LEFT of LEFT
+        assert_eq!(pair_mode(&c, &l(1000), &r(985)), Some(PairMode::TsdDeletion));
+        assert_eq!(pair_mode(&c, &l(1000), &r(970)), Some(PairMode::TsdDeletion));
+        // blunt (0..tsd_min-1)
+        assert_eq!(pair_mode(&c, &l(1000), &r(1000)), Some(PairMode::Blunt));
+        assert_eq!(pair_mode(&c, &l(1000), &r(1001)), Some(PairMode::Blunt));
+        // polarised far pairs: L1-mediated deletion / duplication
+        assert_eq!(pair_mode(&c, &l(5000), &r(1000)), Some(PairMode::L1Del));
+        assert_eq!(pair_mode(&c, &l(1000), &r(4000)), Some(PairMode::L1Dup));
+        assert_eq!(pair_mode(&c, &l(1000), &r(60_000)), None); // beyond the span
+        // the same far pairs WITHOUT polarity (both complex, or both poly-A) are refused
+        let lc = fbp(CLIP_LEFT, 5000, &dna(3, 40), 3);
+        assert_eq!(pair_mode(&c, &lc, &r(1000)), None);
+        let rt = fbp(CLIP_RIGHT, 4000, &polyt(25, 4), 3);
+        assert_eq!(pair_mode(&c, &l(1000), &rt), None);
+        // modes off -> nothing
+        let off = DiscoveryConfig::default();
+        assert!(!off.extra_pairing());
+        for (a, b) in [(1000, 985), (1000, 1000), (5000, 1000), (1000, 4000)] {
+            assert_eq!(pair_mode(&off, &l(a), &r(b)), None);
+        }
+    }
+
+    #[test]
+    fn greedy_pairs_prefer_small_gaps_and_are_one_to_one() {
+        let c = cfg_modes();
+        let tail = polyt(25, 2);
+        let body = dna(1, 40);
+        let l1 = fbp(CLIP_LEFT, 1000, &tail, 3);
+        let l2 = fbp(CLIP_LEFT, 3000, &tail, 3);
+        let r1 = fbp(CLIP_RIGHT, 990, &body, 3); // TSD deletion partner of l1 (gap -10)
+        let r2 = fbp(CLIP_RIGHT, 2000, &body, 3); // L1 dup for l1 (+1000) / L1 del for l2 (-1000)
+        let l = vec![&l1, &l2];
+        let r = vec![&r1, &r2];
+        let pairs = greedy_extra_pairs(&c, &l, &r, &[0, 0], &[0, 0], |_, _| false);
+        assert_eq!(pairs, vec![(0, 0), (1, 1)]);
+        // an already-paired (used == 2) breakpoint is never re-used
+        let pairs = greedy_extra_pairs(&c, &l, &r, &[2, 0], &[0, 0], |_, _| false);
+        assert_eq!(pairs, vec![(1, 1)]);
+        // a breakpoint only in a Bp+polyA emission (used == 1) can be upgraded
+        let pairs = greedy_extra_pairs(&c, &l, &r, &[1, 0], &[0, 0], |_, _| false);
+        assert_eq!(pairs[0], (0, 0));
+        // the SPEC-8b gate vetoes a pair
+        let pairs = greedy_extra_pairs(&c, &l, &r, &[0, 0], &[0, 0], |a, _| a.breakpoint == 1000);
+        assert_eq!(pairs, vec![(1, 1)]);
+    }
+
+    #[test]
+    fn one_sided_gate() {
+        let c = cfg_modes();
+        // poly-A tail junction with 2 fragments passes
+        assert!(one_sided_ok(&c, &fbp(CLIP_LEFT, 1000, &polyt(20, 5), 2)));
+        // fragment floor
+        assert!(!one_sided_ok(&c, &fbp(CLIP_LEFT, 1000, &polyt(20, 5), 1)));
+        // complex clip needs one_sided_require_polya = false
+        let cx = fbp(CLIP_RIGHT, 1000, &dna(9, 40), 3);
+        assert!(!one_sided_ok(&c, &cx));
+        assert!(one_sided_ok(&DiscoveryConfig { one_sided_require_polya: false, ..cfg_modes() }, &cx));
+        // SPEC-8 reference-tract slippage is always applied: LEFT clip T-run continuing a
+        // reference T-run at the junction (aligned side starts with T x 12)
+        let mut slip = fbp(CLIP_LEFT, 1000, &polyt(20, 5), 4);
+        let mut flank = vec![b'T'; 12];
+        flank.extend(dna(11, 60));
+        slip.unclipped = QualitySeq::new(flank, vec![30; 72]);
+        assert!(!one_sided_ok(&c, &slip));
+    }
+
+    #[test]
+    fn junction_spare_and_polyt_detection() {
+        // tolerant poly-T start (2 interruptions in 10)
+        assert!(leading_polyt(b"TTTTATTTCTTTTTTT", 10));
+        assert!(!leading_polyt(b"TTTAATTCCTTTTTTT", 10));
+        assert!(!leading_polyt(b"TTTT", 10));
+        // structured junction-proximal prefix vs homopolymer at the junction
+        let orphan = [b"GGGGGCTGCGCTAGTCGCATCAAAACTAAG".as_slice(), &[b'A'; 40]].concat();
+        assert!(junction_structured(&orphan, 20));
+        assert!(!junction_structured(&[b'T'; 40], 20));
+        assert!(!junction_structured(&orphan, 0)); // off
+        // SPEC-8b spare only with the key on
+        let mut d = Discovery::new(String::new(), 1, DiscoveryConfig::default(), None, None);
+        let lb = fbp(CLIP_LEFT, 1000, &orphan, 3);
+        let rb = fbp(CLIP_RIGHT, 1013, &[b'T'; 60], 3);
+        let legacy = d.spec8b_rejects(&lb, &rb);
+        d.config.clip_slippage_junction_spare = 20;
+        assert!(!d.spec8b_rejects(&lb, &rb));
+        // a genuinely double-homopolymer pair is still rejected with the spare on
+        let lh = fbp(CLIP_LEFT, 1000, &[b'T'; 60], 3);
+        assert!(d.spec8b_rejects(&lh, &rb));
+        let _ = legacy;
+    }
+
+    #[test]
+    fn oneside_locus_names() {
+        let b = fbp(CLIP_LEFT, 5000, &polyt(20, 1), 2);
+        assert_eq!(locus_name(&Emit::Bp(&b), &Emit::Open(5000)), "1:5000-oneside_5000");
+        let r = fbp(CLIP_RIGHT, 7000, &polyt(20, 1), 2);
+        assert_eq!(locus_name(&Emit::Open(7000), &Emit::Bp(&r)), "1:oneside_7000-7000");
+        // non-TSD Bp+Bp pairs keep plain numeric names (deletion: left > right)
+        let l = fbp(CLIP_LEFT, 5015, &polyt(20, 1), 2);
+        let rr = fbp(CLIP_RIGHT, 5000, &dna(2, 30), 2);
+        assert_eq!(locus_name(&Emit::Bp(&l), &Emit::Bp(&rr)), "1:5015-5000");
+        let mut out = Vec::new();
+        print_output(&mut out, Emit::Bp(&b), Emit::Open(5000)).unwrap();
+        let s = String::from_utf8(out).unwrap();
+        assert!(s.contains("@1:5000-oneside_5000:LEFT:CLIPPED") && s.contains(":LEFT:ALIGNED") && !s.contains("RIGHT"));
+    }
+
+    // ---- SHORT overhang ----
+
+    fn short_rec(flags: u16, start: usize, cigar: Vec<Op>, len: usize) -> RecordBuf {
+        RecordBuf::builder()
+            .set_flags(Flags::from_bits_truncate(flags))
+            .set_reference_sequence_id(0)
+            .set_alignment_start(Position::new(start + 1).unwrap())
+            .set_cigar(cigar.into())
+            .set_sequence(dna(start as u64, len).into())
+            .build()
+    }
+
+    #[test]
+    fn short_clip_at_from_cigar_both_sides_both_strands() {
+        let h = Header::default();
+        for strand in [0u16, 0x10] {
+            // (a) LEFT: 5S95M at 1000 -> junction at b=1000 is offset 5
+            let rec = short_rec(0x1 | 0x40 | strand, 1000, vec![Op::new(Kind::SoftClip, 5), Op::new(Kind::Match, 95)], 100);
+            let r = BamRead::from_record(&rec, &h).unwrap();
+            assert_eq!(r.query_offset_at(1000), 5);
+            assert_eq!(r.query_offset_at(1002), 7); // window +-3
+            assert_eq!(r.query_offset_at(998), 3);
+            // (b) LEFT: unclipped 100M at 990 crossing b=1000 by 10 bp -> offset 10
+            let rec = short_rec(0x1 | 0x80 | strand, 990, vec![Op::new(Kind::Match, 100)], 100);
+            let r = BamRead::from_record(&rec, &h).unwrap();
+            assert_eq!(r.query_offset_at(1000), 10);
+            // (a) RIGHT: 93M7S ending at 1000 -> first clipped base offset 93
+            let rec = short_rec(0x1 | 0x40 | strand, 907, vec![Op::new(Kind::Match, 93), Op::new(Kind::SoftClip, 7)], 100);
+            let r = BamRead::from_record(&rec, &h).unwrap();
+            assert_eq!(r.reference_end, 1000);
+            assert_eq!(r.query_offset_at(1000), 93);
+            // (b) RIGHT: 50M2I48M from 915 ends at 1013; b=1000 -> 85 + 2 (insertion) = 87
+            let rec = short_rec(0x1 | 0x80 | strand, 915, vec![Op::new(Kind::Match, 50), Op::new(Kind::Insertion, 2), Op::new(Kind::Match, 48)], 100);
+            let r = BamRead::from_record(&rec, &h).unwrap();
+            assert_eq!(r.reference_end, 1013);
+            assert_eq!(r.query_offset_at(1000), 87);
+            // deletion before b shifts the offset back
+            let rec = short_rec(0x1 | 0x80 | strand, 900, vec![Op::new(Kind::Match, 50), Op::new(Kind::Deletion, 4), Op::new(Kind::Match, 50)], 100);
+            let r = BamRead::from_record(&rec, &h).unwrap();
+            assert_eq!(r.query_offset_at(1000), 96);
+        }
+    }
+
+    fn slite(i: u64, start: i64, end: i64, lead: u32, trail: u32) -> ShortLite {
+        ShortLite { frag: frag_hash(format!("s{i}").as_bytes()), flag: 0x1 | 0x40, ref_id: 0, start, end, lead_soft: lead, trail_soft: trail }
+    }
+
+    #[test]
+    fn short_attach_cap_is_deterministic_and_skips_clip_frags() {
+        let mk = |side: i32| {
+            let mut b = Breakpoint::new(side, "1".into(), 1000, None, QualitySeq::empty(), QualitySeq::empty(), None, None, false, 0);
+            b.ev = Some(Box::new(EvExtra::default()));
+            b
+        };
+        // 150 LEFT (b) candidates + one that is a CLIP read of the cluster (same frag/r12)
+        let mut shorts: Vec<ShortLite> = (0..150).map(|i| slite(i, 985 + (i % 10) as i64, 1135, 0, 0)).collect();
+        shorts.push(slite(999, 1000, 1140, 4, 0));
+        shorts.sort_by_key(|r| (r.start, r.frag, r.flag));
+        let mut l = vec![mk(CLIP_LEFT)];
+        l[0].ev.as_mut().unwrap().clip_lite.push(ClipLite { frag: frag_hash(b"s999"), flag: 0x1 | 0x40, pos: 1000 });
+        attach_short(&mut l, &shorts, true, 3, 20, 100);
+        let got: Vec<u64> = l[0].ev.as_ref().unwrap().short_lite.iter().map(|r| r.frag).collect();
+        assert_eq!(got.len(), 100);
+        assert!(!got.contains(&frag_hash(b"s999")));
+        let mut want: Vec<u64> = (0..150).map(|i| frag_hash(format!("s{i}").as_bytes())).collect();
+        want.sort();
+        let mut g = got.clone();
+        g.sort();
+        assert_eq!(g, want[..100].to_vec()); // the 100 lowest fragment hashes
+        // permuted input -> same subset
+        let mut perm = shorts.clone();
+        perm.reverse();
+        perm.sort_by_key(|r| (r.start, r.frag, r.flag));
+        let mut l2 = vec![mk(CLIP_LEFT)];
+        attach_short(&mut l2, &perm, true, 3, 20, 100);
+        let mut g2: Vec<u64> = l2[0].ev.as_ref().unwrap().short_lite.iter().map(|r| r.frag).filter(|f| *f != frag_hash(b"s999")).collect();
+        g2.sort();
+        assert_eq!(g2[..99], g[..99]);
+        // RIGHT side: none of the LEFT candidates qualify
+        let mut r = vec![mk(CLIP_RIGHT)];
+        attach_short(&mut r, &shorts, false, 3, 20, 100);
+        assert!(r[0].ev.as_ref().unwrap().short_lite.is_empty());
+        // requests: ShortSelf per read + capped mates (fetch_all_mates)
+        let mut reqs = Vec::new();
+        build_short_requests(l[0].ev.as_ref().unwrap(), Target::Left, 3, true, 40, &mut reqs);
+        assert_eq!(reqs.iter().filter(|q| q.kind == ReqKind::ShortSelf).count(), 100);
+        assert_eq!(reqs.iter().filter(|q| q.kind == ReqKind::Mate).count(), 40);
+        let mut reqs = Vec::new();
+        build_short_requests(l[0].ev.as_ref().unwrap(), Target::Left, 3, false, 40, &mut reqs);
+        assert_eq!(reqs.iter().filter(|q| q.kind == ReqKind::Mate).count(), 0);
     }
 }
