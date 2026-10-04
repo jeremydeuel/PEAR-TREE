@@ -290,18 +290,50 @@ cmd_stage_discover() {
     if [ -s "$OUT" ]; then log "$SAMPLE: discovery exists, skipping"; exit 0; fi
 
     local BAM; BAM="$(bam_path "$PROJ" "$SAMPLE")"
+    local SDIR="$STAGING_ROOT/$PROJ/$SAMPLE"          # stageBam.pl -o; it appends mapped_sample/
+    # adopt a copy staged by hand with `-o $STAGING_ROOT` (lands flat in $STAGING_ROOT/mapped_sample/)
+    local FLAT="$STAGING_ROOT/mapped_sample/$SAMPLE.sample.dupmarked.bam"
+    if [ ! -s "$BAM" ] && [ -s "$FLAT" ]; then
+        mkdir -p "$(dirname "$BAM")"
+        for f in "$FLAT" "$FLAT.bai" "$FLAT.bas" "$FLAT.met.gz"; do [ -e "$f" ] && mv -f "$f" "$(dirname "$BAM")/"; done
+        log "$SAMPLE: adopted hand-staged BAM from $STAGING_ROOT/mapped_sample/"
+    fi
     if [ ! -s "$BAM" ]; then
-        log "$SAMPLE: staging from iRODS project $PROJ"
+        log "$SAMPLE: staging from iRODS project $PROJ -> $SDIR"
         module load dataImportExport >/dev/null 2>&1 || true
-        stageBam.pl --lustre 126 --types m --sample "$SAMPLE" \
-            --project "$PROJ" -o "$STAGING_ROOT" -fo || \
-            log "$SAMPLE: stageBam.pl returned non-zero (continuing)"
+        mkdir -p "$SDIR"
+        # stageBam.pl is ASYNCHRONOUS: it prints the file list, submits its own LSF transfer
+        # job ("Job <N> is submitted to queue <normal>.") and returns at once. Waiting on that
+        # job is mandatory -- without it every colony looked "missing" 13 s after start
+        # (PD37449 pilot, 2026-10-04).
+        local so rc=0
+        so="$(stageBam.pl --lustre 126 --types m --sample "$SAMPLE" --project "$PROJ" -o "$SDIR" -fo 2>&1)" || rc=$?
+        printf '%s\n' "$so"
+        if grep -qE 'total files 0\b' <<<"$so"; then
+            : > "$RUNDIR/missing/$SAMPLE"      # iRODS has nothing for this sample: legit no-data
+            log "$SAMPLE: iRODS lists no files for project $PROJ -> skipping (not an error)"
+            exit 0
+        fi
+        local tj; tj="$(sed -n 's/^Job <\([0-9]*\)> is submitted.*/\1/p' <<<"$so" | tail -1)"
+        if [ -n "$tj" ]; then
+            log "$SAMPLE: waiting for stageBam.pl transfer job $tj"
+            wait_job "$tj"
+        elif [ "$rc" -ne 0 ]; then
+            log "$SAMPLE: stageBam.pl failed (rc=$rc) and submitted no transfer job"; exit 1
+        fi
+        # the transfer job can end before lustre shows the final file; allow a short grace period
+        local t=0
+        while [ ! -s "$BAM" ] && [ "$t" -lt "${STAGE_GRACE_S:-600}" ]; do sleep 30; t=$((t+30)); done
     fi
 
     if [ ! -s "$BAM" ]; then
-        : > "$RUNDIR/missing/$SAMPLE"          # one marker file per sample: no shared-file writes
-        log "$SAMPLE: no BAM after staging -> skipping (this is normal, not an error)"
-        exit 0
+        log "$SAMPLE: STAGING FAILED -- no BAM at $BAM after stageBam.pl (see output above)"
+        exit 1
+    fi
+    module load "$SAMTOOLS_MODULE" >/dev/null 2>&1 || true
+    if command -v samtools >/dev/null 2>&1 && ! samtools quickcheck "$BAM"; then
+        log "$SAMPLE: staged BAM fails samtools quickcheck (truncated?): $BAM -- delete it and rerun"
+        exit 1
     fi
 
     log "$SAMPLE: discovering"
