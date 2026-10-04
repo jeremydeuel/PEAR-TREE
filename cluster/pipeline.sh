@@ -570,7 +570,10 @@ write_bam_stats() {
     module load "$SAMTOOLS_MODULE" >/dev/null 2>&1 || true
     local idx rl
     idx="$(samtools idxstats "$BAM" 2>/dev/null)" || { log "$S: idxstats failed (no stats)"; return 0; }
-    rl="$(samtools view "$BAM" 2>/dev/null | head -1 | awk '{print length($10)}')"; [ -n "$rl" ] || rl=NA
+    # read length from the first record. NOT `samtools view | head -1`: head closing the pipe
+    # kills samtools with SIGPIPE, and under `set -euo pipefail` that killed the whole genotype
+    # task (exit 141, all 10 PD37449 arm-A tasks, 2026-10-04). Mask samtools' status instead.
+    rl="$( { samtools view "$BAM" 2>/dev/null || true; } | awk 'NR==1 {print length($10); exit}')"; [ -n "$rl" ] || rl=NA
     printf '%s\n' "$idx" | awk -v s="$S" -v rl="$rl" '
         $1 ~ /^(chr)?([0-9]+|X|Y)$/ { m+=$3; L+=$2 }
         END { cov=(L>0 && rl!="NA") ? sprintf("%.2f", m*rl/L) : "NA";
