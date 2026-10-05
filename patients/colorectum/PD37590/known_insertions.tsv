@@ -3,7 +3,8 @@
 # carriers = heterozygous/homozygous tips in the tree) + human/output_tables/annot.jd862.xlsx (manual class).
 # tier known  = the 5 LINE insertions counted in the paper figures (figures/output/fig1_stats.txt, PD37590 nins = 5,
 #               figures run 2026-09-30 off annot.jd862 as it was then = annot.jd862.backup-2026-10-02.xlsx).
-# tier other  = shared non-L1 call kept for reference, NOT part of the 5 (hAT-Charlie DNA transposon class).
+#               chr7:131206236 is kept although annot.jd862.xlsx re-labelled it 'rejected' on 2026-10-02.
+# + the shared hAT-Charlie call (4 tips), included on Jeremy's request 2026-10-05 -> 6 known loci, 3 multi-tip.
 # Locus names are the old run's `contig:L-R` (R<L = target-site deletion), the same convention as the current pipeline.
 locus	tier	class	subclass	n_carriers	carriers	note
 chr10:115802225-115802229	known	LINE	L1HS	1	PD37590b_lo0075
@@ -11,4 +12,4 @@ chr12:81091797-81091794	known	LINE	L1HS	1	PD37590b_lo0033
 chr5:113843086-113843100	known	LINE	L1PA2	1	PD37590b_lo0015
 chr7:87178413-87178423	known	LINE	L1PA3	2	PD37590b_lo0083,PD37590b_lo0107
 chr7:131206236-131206252	known	LINE	L1HS	5	PD37590b_lo0053,PD37590b_lo0083,PD37590b_lo0084,PD37590b_lo0107,PD37590b_lo0108	re-labelled 'rejected (downstream of a L1HS)' in annot.jd862.xlsx on 2026-10-02; still one of the 5 in the figures
-chr13:57220768-57220785	other	Transposon	hAT-Charlie	4	PD37590b_lo0117,PD37590c_lo0001,PD37590c_lo0012,PD37590c_lo0048	same site also listed as chr13:57220768-57220778 (duplicate)
+chr13:57220768-57220785	known	Transposon	hAT-Charlie	4	PD37590b_lo0117,PD37590c_lo0001,PD37590c_lo0012,PD37590c_lo0048	same site also listed as chr13:57220768-57220778 (duplicate)
