@@ -88,6 +88,7 @@ def main():
     ap.add_argument('--patient', help='default: basename of --rundir')
     ap.add_argument('--label', default='', help='arm label for the report title')
     ap.add_argument('--tol', type=int, default=30, help='breakpoint tolerance in bp (default 30)')
+    ap.add_argument('--near', type=int, default=1000, help='search radius for a missed carrier\'s nearest locus')
     ap.add_argument('--germline-frac', type=float, default=0.8)
     ap.add_argument('--threads', type=int, default=int(os.environ.get('LSB_DJOB_NUMPROC', '4')))
     args = ap.parse_args()
@@ -138,7 +139,7 @@ def main():
             s += f'; +{len(extra)} extra ({",".join(extra[:6])}{"..." if len(extra) > 6 else ""})'
         return s, m[0]
 
-    trace, md_rows = [], []
+    trace, md_rows, detail = [], [], []
     matched_final = set()
     for k in known:
         loc, car = k['locus'], k['carriers']
@@ -146,33 +147,55 @@ def main():
         no_file = [c for c in car if c not in per_colony]
         disc_other = sorted(c for c, loci in per_colony.items() if c not in car and best(loc, loci, args.tol))
         disc_names = sorted({h[0] for c in disc_car for h in near(loc, per_colony[c], args.tol)})
+        other_names = sorted({h[0] for c in disc_other for h in near(loc, per_colony[c], args.tol)})
+        # carriers whose (finished) discovery file lacks the locus: nearest locus within --near bp
+        missed = []
+        for c in car:
+            if c in per_colony and c not in disc_car:
+                h = near(loc, per_colony[c], args.near)
+                missed.append(f'{c}: ' + (f'nearest {h[0][0]} ({h[0][2]} bp)' if h else f'nothing within {args.near} bp'))
         cm = best(loc, combined, args.tol) if combined is not None else None
         ct = best(loc, contract, args.tol) if contract is not None else None
         su, _ = gt_summary(unf, unf_cols, loc, car)
         sf, fname = gt_summary(fin, fin_cols, loc, car)
         if fname:
             matched_final.add(fname)
-        am = best(loc, ann.keys(), args.tol)
+        am = best(loc, ann.keys(), args.tol) if ann_header else None
         a = ann.get(am[0], {}) if am else {}
         acls = (f"{a.get('class', '')} / {a.get('tprt_call', '') or '-'} (score {a.get('tprt_score', '') or '-'})"
-                if am else 'absent')
+                if am else ('absent' if ann_header else 'n/a'))
         lab = labels.get(am[0], '') if am else ''
         stages = [('discovery', bool(disc_car)), ('combined', cm is not None if combined is not None else None),
                   ('contract', ct is not None if contract is not None else None),
                   ('genotyped', not su.startswith('absent') if unf is not None else None),
-                  ('final calls', bool(fname) if fin is not None else None), ('annotated', am is not None)]
-        lost = next((s for s, ok in stages if ok is False), 'found' if all(ok for _, ok in stages) else 'n/a')
-        if lost == 'discovery' and car and len(no_file) == len(car):
-            lost = 'discovery (no discovery file for any carrier)'
+                  ('final calls', bool(fname) if fin is not None else None),
+                  ('annotated', am is not None if ann_header else None)]
+        lost = next((s for s, ok in stages if ok is False), None)
+        if lost is None:
+            reached = [s for s, ok in stages if ok]
+            lost = 'found' if len(reached) == len(stages) else f'pending (reached {reached[-1] if reached else "-"})'
+        if lost == 'discovery':
+            pending = [c for c in car if c not in per_colony]
+            if pending and len(pending) == len(car):
+                lost = 'pending (no carrier discovery file yet)'
+            elif pending:
+                lost = f'discovery so far ({len(pending)} carrier file(s) pending)'
+
+        def mark(ok):
+            return 'n/a' if ok is None else ('✓' if ok else '✗')
         trace.append({'locus': loc, 'tier': k.get('tier', ''), 'class_known': f"{k.get('class', '')}/{k.get('subclass', '')}",
                       'n_carriers': len(car), 'discovery_carriers': f'{len(disc_car)}/{len(car)}',
                       'discovery_carrier_ids': ','.join(disc_car), 'carriers_no_discovery_file': ','.join(no_file),
-                      'discovery_noncarriers': len(disc_other), 'discovery_names': ','.join(disc_names[:5]),
+                      'carriers_missed': '; '.join(missed),
+                      'discovery_noncarriers': len(disc_other), 'discovery_noncarrier_ids': ','.join(disc_other),
+                      'discovery_names': ','.join(disc_names[:5]), 'discovery_noncarrier_names': ','.join(other_names[:5]),
                       'combined': cm[0] if cm else '', 'contract': ct[0] if ct else '',
                       'genotyped_unfiltered': su, 'final_calls': sf, 'annotated': am[0] if am else '',
                       'annotation': acls, 'phylo_label': lab, 'lost_at': lost})
-        md_rows.append([loc, k.get('tier', ''), f"{k.get('subclass', '')}", len(car), f'{len(disc_car)}/{len(car)}',
-                        len(disc_other), '✓' if cm else '✗', '✓' if ct else '✗', su, sf, acls, lab or '-', lost])
+        md_rows.append([loc, k.get('tier', ''), f"{k.get('subclass', '')}", len(car),
+                        f'{len(disc_car)}/{len(car)}' + (f' ({len(no_file)} pending)' if no_file else ''),
+                        ','.join(disc_other) or '0', mark(stages[1][1]), mark(stages[2][1]), su, sf, acls, lab or '-', lost])
+        detail.append((loc, disc_names, missed, other_names))
 
     # ---- potentially more: final calls matching no known locus
     new = []
@@ -203,7 +226,11 @@ def main():
            f'**{n_found}/{len(n_known)} known insertions reach the annotated calls.** '
            f'Discovery files: {len(per_colony)} colonies.', '',
            md_table(['known locus', 'tier', 'element', 'carriers', 'disc carriers', 'disc non-carriers', 'combined',
-                     'contract', 'genotyped (unfiltered)', 'final calls', 'annotation', 'phylo', 'lost at'], md_rows),
+                     'contract', 'genotyped (unfiltered)', 'final calls', 'annotation', 'phylo', 'lost at / status'], md_rows),
+           '', '## Discovery detail', '',
+           *[f'- **{loc}**: carrier names {", ".join(dn) or "-"}'
+             + (f'; missed in {"; ".join(ms)}' if ms else '')
+             + (f'; non-carrier names {", ".join(on)}' if on else '') for loc, dn, ms, on in detail],
            '', f'## Potentially more: {len(new)} non-germline final calls match no known locus', '',
            f'{sum(1 for r in new if r["phylo_bucket"] == "consistent")} phylo-consistent, '
            f'{sum(1 for r in new if r["class"] in RTE_CLASSES)} RTE-classed, '
