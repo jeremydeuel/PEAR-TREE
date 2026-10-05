@@ -56,15 +56,16 @@ for ARM in "${ALL_ARMS[@]}"; do
 done
 [ "$NHAVE" -gt 0 ] || die "neither arm of $P has finished outputs under $TPRT_ROOT/$P"
 
-if [ -s "$(arm_rundir "$P" B)/$P.annotated.csv.gz" ]; then
+HAVE_A=0; [ -s "$(arm_rundir "$P" A)/$P.annotated.csv.gz" ] && HAVE_A=1
+if [ "$HAVE_A" = 1 ] && [ -s "$(arm_rundir "$P" B)/$P.annotated.csv.gz" ]; then
     note "compare_arms A vs B"
     "$PY" "$TPRT_KIT_DIR/compare_arms.py" --patient "$P" \
         --rundir-a "$(arm_rundir "$P" A)" --rundir-b "$(arm_rundir "$P" B)" \
         --eval-a "$EV/A" --eval-b "$EV/B" --tree "$TREE" --out-dir "$EV"
 else
-    note "arm B has no annotated output — A vs B report skipped"
+    note "arm A or B has no annotated output — A vs B report skipped"
 fi
-if [ -s "$(arm_rundir "$P" C)/$P.annotated.csv.gz" ]; then
+if [ "$HAVE_A" = 1 ] && [ -s "$(arm_rundir "$P" C)/$P.annotated.csv.gz" ]; then
     note "compare_arms A vs C"
     mkdir -p "$EV/AC" "$RESULTS_BASE/$P"
     "$PY" "$TPRT_KIT_DIR/compare_arms.py" --patient "$P" --label-b C \
