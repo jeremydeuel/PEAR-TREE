@@ -134,17 +134,6 @@ def combine_insertions(input_files, insertions_genotyping_file, combined_inserti
     if CONFIG['combine_insertions'].get('far_pair_strict', False):
         from combine_insertions_evidence import discovery_breakpoints
         breakpoints = discovery_breakpoints(all_insertions)
-    ci_cfg = CONFIG['combine_insertions']
-    if (ci_cfg.get('require_independent_fragments', False) and ci_cfg.get('evidence_prefilter_early', False)
-            and any(os.path.exists(f + ".evidence.tsv.gz") for f in accepted_files)):
-        # TPRT: the pooled >= 2-fragment gate as an upper bound BEFORE merging, so the merge and
-        # the dense-region filter only see loci that can still pass it
-        from combine_insertions_evidence import early_prefilter
-        n_before = len(all_insertions)
-        all_insertions, n_early = early_prefilter(all_insertions, accepted_files, ci_cfg)
-        print(f"early fragment pre-filter: dropped {n_early} of {n_before} discovery loci "
-              f"(pooled distinct fragments < {ci_cfg.get('min_independent_fragments', 2)} within "
-              f"+-{ci_cfg.get('merge_tolerance_bp', 0)} bp)")
     insertions = intersect_insertions(all_insertions)
     #remove insertions in regions with far too high count
     bin_range = 100
@@ -161,8 +150,11 @@ def combine_insertions(input_files, insertions_genotyping_file, combined_inserti
            or os.path.exists((f[:-7] if f.endswith(".txt.gz") else f) + ".evidence.tsv.gz")
            for f in accepted_files):
         from combine_insertions_evidence import apply_evidence
+        # bounded memory + `threads` workers: rows are routed into per-chunk shards next to
+        # the outputs and evaluated chunk by chunk (removed after the evidence outputs are written)
+        shard_dir = _evidence_paths(combined_insertions)[0][:-len(".insertions.evidence.tsv.gz")] + ".evidence_shards"
         evidence = apply_evidence(insertions, accepted_files, CONFIG['combine_insertions'],
-                                  breakpoints=breakpoints)
+                                  breakpoints=breakpoints, threads=threads, shard_dir=shard_dir)
     if evidence is not None:
         insertions, evidence_records, evidence_failed, _ = evidence
     print(f"writing summarised insertions fasta file {insertions_fasta}")
@@ -294,11 +286,15 @@ def combine_insertions(input_files, insertions_genotyping_file, combined_inserti
     if evidence is not None:
         from combine_insertions_evidence import write_evidence_outputs
         default_tsv, default_fa = _evidence_paths(combined_insertions)
-        # surviving insertions first (combined.txt.gz order), then the gated-out ones
-        # (supported=0) for diagnostics.
+        # surviving insertions first (combined.txt.gz order), then the ones the TPRT filters
+        # dropped (slippage_reject / far_pair_strict) for diagnostics.
+        store = evidence[3].get("store")
         write_evidence_outputs(evidence_records,
                                [i.name for i in insertions] + sorted(evidence_failed),
-                               evidence_tsv or default_tsv, reads_fa or default_fa)
+                               evidence_tsv or default_tsv, reads_fa or default_fa,
+                               store=store, preload_from=len(insertions))
+        if store is not None:
+            store.cleanup()
     n_excluded = 0
     n_included = 0
     with gzip.open(insertions_genotyping_file, 'wt') as f:

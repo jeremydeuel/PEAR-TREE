@@ -110,7 +110,7 @@ def describe(arm):
     """Human-readable summary for preflight / setup (python3 arm_config.py A)."""
     cfg = build(arm)
     ci, ann = cfg['combine_insertions'], cfg['annotate']
-    keys = ['require_independent_fragments', 'indel_aware_consensus', 'count_short_overhang',
+    keys = ['min_independent_fragments', 'indel_aware_consensus', 'count_short_overhang',
             'merge_tolerance_bp', 'slippage_reject', 'far_pair_strict']
     out = [f"arm {arm}: base {BASES[arm]}",
            f"  combine genome_2bit={ci['genome_2bit']}",

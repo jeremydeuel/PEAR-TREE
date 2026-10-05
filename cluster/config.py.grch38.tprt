@@ -62,7 +62,7 @@
 # discovery config is the one setting that MUST be chr-prefixed for this cohort.
 
 # TPRT-hallmarks pipeline mode: identical to cluster/config.py.grch38 except that the
-# combine_insertions evidence keys (require_independent_fragments, indel_aware_consensus)
+# combine_insertions evidence keys (indel_aware_consensus, slippage_reject, far_pair_strict, ...)
 # are ON. Pair with a discovery config that sets evidence_sidecar=true.
 #   cp cluster/config.py.grch38.tprt src/config.py
 
@@ -151,14 +151,18 @@ CONFIG = {
         # <sample>.evidence.tsv.gz sidecars (evidence_sidecar=true); without sidecars combine
         # is byte-identical whatever these say. Legacy defaults here; the new pipeline mode
         # (cluster/config.py.grch38.tprt) switches them on.
-        'require_independent_fragments': True, #drop insertions with any junction (LEFT/RIGHT, incl. the poly-A end) below min_independent_fragments, pooled over all colonies
-        'min_independent_fragments': 2, #independent fragments per junction after (sample,frag) collapse + within-sample PCR/optical dedup (never the 0x400 flag)
+        # Pooled fragment gate OFF (2026-10-05, Jeremy): discovery requires >= 2 distinct fragments per
+        # junction WITHIN one colony (min_evidence_fragments_per_sample = 2). NB on PD37449 arm C the gate
+        # (on) still dropped 94,693 of 145,912 loci (kept 51,219) -- after the lenient dedup, not by raw
+        # fragment count (the upper bound dropped 49). True restores it.
+        'require_independent_fragments': False,
+        'min_independent_fragments': 2, #reported (evidence.tsv n_independent / supported), consensus depth floor, and the gate's threshold when on
         'indel_aware_consensus': True, #use the homopolymer-aware pooled clip consensus (src/indel_consensus.py) in combined.txt.gz when >= the legacy longest clip
         'dup_coord_tolerance': 5, #bp tolerance on read outer, mate outer/mpos and junction position (lenient 2nd dedup; 0x400 reads are dropped by discovery)
         'dup_max_edit': 3, #edit budget for clip/mate sequence (homopolymer-compressed, cut after a long poly-A) of within-sample duplicates
         'dup_max_edit_frac': 0.02, #... or this fraction of the compared length, whichever is larger
         'polya_min_len': 8, #min consensus homopolymer A/T run reported as the poly-A (evidence.tsv polya_len_*/beyond_polya)
-        'count_short_overhang': True, #SHORT sidecar reads (1-11 bp overhang) may ADD independent fragments to a junction with >= 1 CLIP fragment
+        'count_short_overhang': False, #SHORT sidecar reads (1-11 bp overhang) may ADD independent fragments to a junction; only fed the removed pooled gate (now a diagnostic, costs a reference fetch + alignment per read)
         'short_overhang_min_bases': 5, #overhang bases that must match the junction clip consensus
         'short_overhang_min_ref_mismatch': 2, #overhang mismatches to the reference required (and a better match to the consensus than to the reference)
         'trim_far_flank_before_remap': True, #clipped-remap filter: cut a junction clip where it runs into the other junction's reference flank (short insertions spanned by the reads)
@@ -171,9 +175,8 @@ CONFIG = {
         'slippage_min_ref_run_combine': 8, #reference homopolymer at the junction that makes the slippage test apply (>= 8 stays clear of the TTTT/AA EN motif)
         'slippage_min_str_len': 12, #same for period 2-6 repeats
         'slippage_min_structured': 10, #clip remainder (after the repeat, before the next long homopolymer) shorter than this = nothing but the tract
-        'far_pair_strict': True, #L1DEL/L1DUP pairs (gap < -30 / > 40) need element sequence (sense) on the complex clip, poly-A on the other, same element class beyond the tail, >= 2 independent fragments per junction, same colonies at both breakpoints
+        'far_pair_strict': True, #L1DEL/L1DUP pairs (gap < -30 / > 40) need element sequence (sense) on the complex clip, poly-A on the other, same element class beyond the tail, same colonies at both breakpoints
         'far_pair_split': True, #a failing far pair keeps its poly-A junction as a one-sided locus (absorbed into another colony's call of that junction when there is one); False = drop
-        'evidence_prefilter_early': False, #(PD37449: useless once discovery needs 2 fragments per colony -- 90 of 294k dropped) pooled >= 2-fragment gate as an upper bound BEFORE intersect (merge + dense-region filter see only loci that can pass)
     },
     'annotate': { #necessary for annotate_v2.py (step 3, optional element classification)
         # NOTE: annotate works in bowtie2_index2 (hs1) space, NOT GRCh38 — so rmsk and

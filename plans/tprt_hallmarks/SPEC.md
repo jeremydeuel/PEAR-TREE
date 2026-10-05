@@ -316,11 +316,15 @@ Implementation notes (combine worker; `src/combine_insertions_evidence.py`, `src
   `n_duplicates`), `member_loci` (comma list of merged discovery loci when they differ from the
   insertion id, else `.`), `n_short_used`, `n_short_rejected`, `n_short_mate_inside` (used SHORT
   fragments whose mate is unmapped / elsewhere / MAPQ < 20), `n_independent_no_short`.
-- Rows: surviving insertions first (combined.txt.gz order), then gated-out ones (supported=0).
-- Config (`CONFIG['combine_insertions']`): `require_independent_fragments` (False; True in
-  `cluster/config.py.grch38.tprt`), `min_independent_fragments` (2), `indel_aware_consensus`
+- Rows: surviving insertions first (combined.txt.gz order), then the ones slippage_reject /
+  far_pair_strict dropped. **Pooled fragment gate off by default (2026-10-05):** discovery requires
+  >= 2 distinct fragments per junction within one colony; `n_independent` / `supported` are reported,
+  and drop a call only with `require_independent_fragments` = True. Combine evaluates in chunks from on-disk shards (`<stem>.evidence_shards/`, removed after)
+  with `--threads` worker processes.
+- Config (`CONFIG['combine_insertions']`): `require_independent_fragments` (False),
+  `min_independent_fragments` (2; reported, consensus depth floor, gate threshold), `indel_aware_consensus`
   (False; True in .tprt), `dup_coord_tolerance` (5), `dup_max_edit` (3), `dup_max_edit_frac`
-  (0.02), `polya_min_len` (8), `count_short_overhang` (False; True in .tprt),
+  (0.02), `polya_min_len` (8), `count_short_overhang` (False; diagnostic only),
   `short_overhang_min_bases` (5), `short_overhang_min_ref_mismatch` (2), `dup_mate_min_mapq` (20),
   `trim_far_flank_before_remap` (False; True in .tprt).
 

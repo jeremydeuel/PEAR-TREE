@@ -23,7 +23,9 @@ Discovery may write, per sample, `<sample>.evidence.tsv.gz` next to `<sample>.tx
   * applies the SPEC "Independence rule (combine)": collapse by (sample, frag), merge
     within-sample PCR/optical duplicates from coordinates + sequence (NEVER the 0x400
     flag), keep cross-sample fragments independent unless exactly identical (flagged),
-    and counts `n_independent` per junction (LEFT, RIGHT -- the poly-A end is one of them),
+    and counts `n_independent` per junction (LEFT, RIGHT -- the poly-A end is one of them) --
+    reported (evidence.tsv n_independent / supported); only `require_independent_fragments`
+    (default off) drops calls on it,
   * builds the indel-aware clip consensus (src/indel_consensus.py) per junction,
   * writes `<patient>.insertions.evidence.tsv.gz` and `<patient>.insertions.reads.fa.gz`.
 
@@ -171,142 +173,6 @@ def load_evidence(input_files: List[str], wanted_loci) -> (Dict, set):
                 r = EvidenceRow(sample, dict(zip(header, p)))
                 rows[((fb, r.locus) if by_file else r.locus, r.side)].append(r)
     return rows, have
-
-
-def _capped_fragments(input_files, cap: int):
-    """One streaming pass over every sidecar: {(file basename, locus, side): (frag, ...)} with at
-    most `cap` distinct fragment ids per key, and the set of basenames that have a sidecar."""
-    seen = {}
-    have = set()
-    for f in input_files:
-        sp = sidecar_path(f)
-        if not os.path.exists(sp):
-            continue
-        fb = os.path.basename(f)
-        have.add(fb)
-        with gzip.open(sp, "rt") as fh:
-            header = fh.readline().rstrip("\n").split("\t")
-            li, si, fi = header.index("locus"), header.index("side"), header.index("frag")
-            mx = max(li, si, fi) + 1
-            for line in fh:
-                p = line.split("\t", mx)
-                if len(p) < mx:
-                    continue
-                key = (fb, p[li], p[si])
-                cur = seen.get(key)
-                if cur is None:
-                    seen[key] = (p[fi],)
-                elif len(cur) < cap and p[fi] not in cur:
-                    seen[key] = cur + (p[fi],)
-    return seen, have
-
-
-def early_prefilter(insertions, input_files, cfg):
-    """Pooled fragment gate BEFORE intersect_insertions (and so before the dense-region filter):
-    single-linkage clusters of every per-colony locus's junction coordinate (per contig and side,
-    links <= merge_tolerance_bp, the fuzzy-merge tolerance -- every merge group lies inside one
-    cluster on each side) pool their distinct (file, frag) ids from the sidecars. A locus is
-    dropped when a gated junction's cluster stays below min_independent_fragments (both
-    junctions for far-geometry pairs with far_pair_strict, which may be split one-sided):
-    no merge it can take part in could pass the gate. Legacy Bp+poly-A records (no position on
-    the poly-A side) and files without a sidecar are left alone. Returns (kept, n_dropped)."""
-    min_ind = int(cfg.get("min_independent_fragments", 2))
-    if min_ind <= 1:
-        return insertions, 0
-    tol = int(cfg.get("merge_tolerance_bp", 0) or 0)
-    far_pair = bool(cfg.get("far_pair_strict", False))
-    seen, have = _capped_fragments(input_files, min_ind)
-    if not have:
-        return insertions, 0
-    cluster_of = {}                       # (index, side) -> cluster id
-    pooled = []                           # cluster id -> set of (file, frag), capped
-    for side in SIDES:
-        pts = []
-        for k, ins in enumerate(insertions):
-            if side == _open_side(ins):
-                continue
-            pos = _ins_junction(ins, side)
-            if pos is None:
-                continue
-            pts.append((ins.reference_name, pos, k))
-        pts.sort()
-        prev = None
-        for contig, pos, k in pts:
-            if prev is None or prev[0] != contig or pos - prev[1] > tol:
-                pooled.append(set())
-            cid = len(pooled) - 1
-            cluster_of[(k, side)] = cid
-            fr = pooled[cid]
-            if len(fr) < min_ind:
-                for fb in insertions[k].files:
-                    for x in seen.get((fb, insertions[k].name, side), ()):
-                        fr.add((fb, x))
-            prev = (contig, pos)
-    kept, n_drop = [], 0
-    far_geometry = None
-    for k, ins in enumerate(insertions):
-        if not all(f in have for f in ins.files):
-            kept.append(ins)
-            continue
-        ups = [len(pooled[cluster_of[(k, s)]]) for s in SIDES if (k, s) in cluster_of]
-        if len(ups) < (1 if _open_side(ins) else 2):
-            kept.append(ins)              # a junction without a position: not judged here
-            continue
-        far = False
-        if far_pair and len(ups) == 2:
-            if far_geometry is None:
-                from combine_insertions_tprt_filters import far_geometry
-            far = far_geometry(ins.right_pos - ins.left_pos, cfg)
-        if (max(ups) if far else min(ups)) < min_ind:
-            n_drop += 1
-        else:
-            kept.append(ins)
-    return kept, n_drop
-
-
-def prefilter_fragments(insertions, input_files, min_ind: int, far_pair: bool, cfg=None):
-    """Drop insertions that cannot pass the independent-fragment gate, from one streaming pass
-    over the sidecars that keeps at most `min_ind` distinct fragment ids per (file, locus,
-    side). The pooled count of distinct (file, frag) over an insertion's member loci is an
-    upper bound on `n_independent` (dedup only merges fragments; SHORT rows are counted, so a
-    junction rescued by SHORT reads is kept). Without `far_pair` an insertion goes when ANY
-    gated junction is below `min_ind`; with it, a far-geometry pair only when ALL are (it may
-    still be split into a one-sided call on its good side). Insertions with a file lacking a sidecar are never
-    gated, so they are kept. Returns (kept insertions, number dropped)."""
-    if min_ind <= 1:
-        return insertions, 0
-    seen, have = _capped_fragments(input_files, min_ind)
-    if not have:
-        return insertions, 0
-    kept, n_drop = [], 0
-    for ins in insertions:
-        if not all(f in have for f in ins.files):
-            kept.append(ins)
-            continue
-        open_side = _open_side(ins)
-        allowed = getattr(ins, "member_sides", None) or {}
-        ms = _member_loci(ins)
-        ups = []
-        for side in SIDES:
-            if side == open_side:
-                continue
-            fr = set()
-            for m in ms:
-                if side in allowed.get(m, SIDES):
-                    for x in seen.get((m[0], m[1], side), ()):
-                        fr.add((m[0], x))
-                if len(fr) >= min_ind:
-                    break
-            ups.append(len(fr))
-        far = False
-        if far_pair and len(ups) == 2:
-            from combine_insertions_tprt_filters import far_geometry
-            far = far_geometry(ins.right_pos - ins.left_pos, cfg or {})
-        if ups and (max(ups) if far else min(ups)) < min_ind:
-            n_drop += 1
-        else:
-            kept.append(ins)
-    return kept, n_drop
 
 
 # ------------------------------------------------------------------ fragments
@@ -674,6 +540,7 @@ class JunctionRecord:
         self.polya_end = 0
         self.fail_reason = ""
         self.aligned = ""   # reference part, in clip_consensus convention (uppercase)
+        self.fa_ref = None  # (chunk, index, side) of the reads on disk when rows is None (shard store)
 
     def tsv(self) -> str:
         c = self.consensus
@@ -895,51 +762,55 @@ def _aligned_part(ins, side) -> str:
     return str(a).upper() if a is not None else ""
 
 
-def apply_evidence(insertions, input_files, cfg, ref_fetch=None, breakpoints=None):
+def apply_evidence(insertions, input_files, cfg, ref_fetch=None, breakpoints=None, threads=1,
+                   shard_dir=None):
     """Evaluate every junction of every insertion from the pooled sidecars.
 
     Returns (kept, records, failed_names, stats) or None when no sidecar exists (the
     caller then behaves exactly as before). `records` maps insertion name -> [JunctionRecord];
-    gated-out insertions keep their records (supported=0) for diagnostics.
+    insertions dropped by the TPRT filters (slippage_reject, far_pair_strict) keep their records
+    for diagnostics. `require_independent_fragments` (default off) additionally drops insertions
+    with a junction below `min_independent_fragments` pooled independent fragments (after the
+    lenient within-sample dedup); off, n_independent / `supported` are only reported.
     Mutates kept insertions' clips when `indel_aware_consensus` is on and the new
     consensus is at least as long as the legacy longest-clip choice.
 
     `breakpoints` (optional, from `discovery_breakpoints`): every per-sample discovery
-    breakpoint, for the far-pair colony-consistency test (`far_pair_strict`)."""
-    # Pooling follows combine's own cross-sample grouping: every discovery locus that
-    # intersect_insertions merged into this Insertion (Insertion.member_loci, one
-    # (file, locus) per contributing record) contributes its sidecar rows, so colony A's
-    # chr1:100-115 and colony B's chr1:101-115 pool when combine merged them.
-    gate = bool(cfg.get("require_independent_fragments", False))
+    breakpoint, for the far-pair colony-consistency test (`far_pair_strict`).
+
+    `shard_dir` (combine passes `<stem>.evidence_shards`): bounded memory and `threads` worker
+    processes. One streaming pass routes every wanted sidecar row into the chunk of the
+    insertion it belongs to (chunks = consecutive runs of `insertions`); each chunk is then
+    evaluated on its own (`threads` > 1: forked workers), its rows dropped, and its reads kept on
+    disk for write_evidence_outputs (JunctionRecord.rows is None, `fa_ref` points at them).
+    Without `shard_dir` every row is held in memory (tests, small inputs). Both modes give the
+    same records, in the same order."""
     min_ind = cfg.get("min_independent_fragments", 2)
-    n_pre = 0
-    if gate and cfg.get("evidence_prefilter", True):
-        # cheap streaming upper bound first: with a 1-fragment discovery floor most loci are
-        # single-read noise that cannot reach min_ind, and loading + evaluating their rows
-        # dominated combine (PD37449 arm B: >2 h, 58 GB). Dropped loci are not written to the
-        # evidence diagnostics; every survivor is evaluated exactly as before.
-        far_pre = bool(cfg.get("far_pair_strict", False))
-        insertions, n_pre = prefilter_fragments(insertions, input_files, min_ind, far_pre, cfg)
+    gate = bool(cfg.get("require_independent_fragments", False))
     members = {i.name: _member_loci(i) for i in insertions}
-    wanted = {m for ms in members.values() for m in ms}
-    rows, have = load_evidence(input_files, wanted)
+    by_id = {id(i): members[i.name] for i in insertions}
+    if shard_dir is None:
+        wanted = {m for ms in members.values() for m in ms}
+        rows, have = load_evidence(input_files, wanted)
+        store = _MemoryStore(rows)
+        chunks = [(0, len(insertions))]
+    else:
+        store = _ShardStore(shard_dir)
+        chunks = store.build(input_files, insertions, by_id, threads)
+        have = store.have
     if not have:
         return None
     use_cons = bool(cfg.get("indel_aware_consensus", False))
     missing = [os.path.basename(f) for f in input_files if os.path.basename(f) not in have]
     if missing:
         print(f"WARNING: {len(missing)} discovery file(s) have no evidence sidecar; insertions "
-              f"they contribute to are not gated (supported=NA): {','.join(missing[:5])}"
+              f"they contribute to have supported=NA: {','.join(missing[:5])}"
               f"{' ...' if len(missing) > 5 else ''}")
-    kept, failed, records = [], set(), {}
-    reasons = Counter()
-    short_reasons = Counter()
     if cfg.get("count_short_overhang", False) and ref_fetch is None:
         try:
             from combine_insertions_get_sequence import get_sequence as ref_fetch
         except Exception as e:     # no genome: SHORT reads are rejected ("no_reference")
             print(f"WARNING: count_short_overhang without a reference ({e}); SHORT reads ignored")
-    n_replaced = 0
     slip_on = bool(cfg.get("slippage_reject", False))
     far_on = bool(cfg.get("far_pair_strict", False))
     if (slip_on or far_on) and ref_fetch is None:
@@ -952,85 +823,32 @@ def apply_evidence(insertions, input_files, cfg, ref_fetch=None, breakpoints=Non
     if slip_on or far_on:
         from combine_insertions_tprt_filters import LibraryMatcher
         matcher = LibraryMatcher(cfg.get("rte_library") or "resources/rte_library")
-    by_id = {id(i): members[i.name] for i in insertions}
-    recmap = {}                     # id(insertion) -> [JunctionRecord]
+
+    global _CTX
+    _CTX = dict(insertions=insertions, by_id=by_id, store=store, have=have, cfg=cfg,
+                ref_fetch=ref_fetch, matcher=matcher, breakpoints=breakpoints, use_cons=use_cons,
+                slip_on=slip_on, far_on=far_on, min_ind=min_ind, chunks=chunks, gate=gate)
+    try:
+        results = _run_chunks(len(chunks), threads if shard_dir is not None else 1)
+    finally:
+        _CTX = None
+
+    kept, failed, records = [], set(), {}
     failed_objs = []
-    tprt_reasons = Counter()
-
-    def evaluate(ins, side):
-        ms = by_id[id(ins)]
-        allowed = getattr(ins, "member_sides", None) or {}
-        pooled = [r for m in ms if side in allowed.get(m, SIDES)
-                  for r in (rows.get((m, side)) or rows.get((m[1], side), []))]
-        pooled = _reanchor(pooled, side, _ins_junction(ins, side))
-        rec = evaluate_junction(ins.name, side, pooled, cfg, ref_fetch)
-        short_reasons.update(rec.short_reasons)
-        rec.aligned = _aligned_part(ins, side)
-        loci = sorted({l for _, l in ms})
-        if loci != [ins.name]:
-            rec.member_loci = ",".join(loci)
-        return rec
-
-    for ins in insertions:
-        recs = []
-        open_side = _open_side(ins)
-        for side in SIDES:
-            if side == open_side:
-                # one-sided locus (discovery `oneside_`, Feature-A disc end, kept poly-A
-                # record): the open end has no reads by construction -- only the real side is
-                # gated (it still needs >= min_independent_fragments)
-                continue
-            recs.append(evaluate(ins, side))
-        recmap[id(ins)] = recs
-        if far_on and open_side is None and len(recs) == 2:
-            verdict = _far_pair_check(ins, recs, cfg, matcher, breakpoints, ref_fetch)
-            if verdict is not None:
-                reason, pside = verdict
-                tprt_reasons[f"far_pair:{reason}"] += 1
-                prec = [r for r in recs if r.side == pside]
-                if (pside is not None and cfg.get("far_pair_split", True) and prec
-                        and prec[0].n_independent >= min_ind):
-                    old_name = ins.name
-                    _to_one_sided(ins, pside)
-                    ins.member_sides = {m: (pside,) for m in by_id[id(ins)]}
-                    prec[0].insertion_id = ins.name
-                    prec[0].member_loci = ",".join(sorted({l for _, l in by_id[id(ins)]} | {old_name}))
-                    prec[0].fail_reason = f"split_from_far_pair:{reason}"
-                    recs = prec
-                    recmap[id(ins)] = recs
-                    tprt_reasons["far_pair:split_to_one_sided"] += 1
-                else:
-                    for r in recs:
-                        r.fail_reason = f"far_pair:{reason}"
-                    failed_objs.append(ins)
-                    reasons[f"far_pair:{reason}"] += 1
-                    continue
-        if slip_on:
-            why = _slippage_check(ins, recs, cfg, matcher, ref_fetch)
-            if why:
-                tprt_reasons[why.split(":")[0]] += 1
-                for r in recs:
-                    r.fail_reason = why
-                failed_objs.append(ins)
-                reasons[why.split("(")[0]] += 1
-                continue
-        eligible = all(f in have for f in ins.files)
-        fails = [r for r in recs if r.n_independent < min_ind]
-        for r in recs:
-            if eligible:
-                r.supported = 0 if r in fails else 1
-                if r in fails:
-                    r.fail_reason = f"n_independent<{min_ind}"
-        if gate and eligible and fails:
-            failed_objs.append(ins)
-            if all(r.n_reads == 0 for r in recs):
-                reasons["no_evidence_reads"] += 1
-            else:
-                reasons["+".join(r.side + ("(polyA)" if r.polya_end else "") for r in fails)] += 1
-            continue
-        if use_cons:
-            n_replaced += _replace_clips(ins, recs)
-        kept.append(ins)
+    recmap = {}                     # id(insertion) -> [JunctionRecord]
+    reasons, tprt_reasons, short_reasons = Counter(), Counter(), Counter()
+    n_replaced = 0
+    for res in results:             # chunk order = insertion order
+        reasons.update(res["reasons"])
+        tprt_reasons.update(res["tprt"])
+        short_reasons.update(res["short"])
+        n_replaced += res["replaced"]
+        for k, ok, recs, patch in res["out"]:
+            ins = insertions[k]
+            for a, v in patch.items():
+                setattr(ins, a, v)
+            recmap[id(ins)] = recs
+            (kept if ok else failed_objs).append(ins)
     # records by name (a split far pair can share its new one-sided name with another locus;
     # EvidencePool.absorb_one_sided merges such duplicates after the remap filters)
     for i in kept:
@@ -1042,27 +860,323 @@ def apply_evidence(insertions, input_files, cfg, ref_fetch=None, breakpoints=Non
             failed.add(i.name)
     if tprt_reasons:
         print("TPRT combine filters: " + ", ".join(f"{k}={v}" for k, v in sorted(tprt_reasons.items())))
-    print(f"evidence sidecars: {len(have)}/{len(input_files)} files; {len(insertions)} insertions evaluated, "
-          f"{sum(len(v) for v in rows.values())} evidence rows")
+    print(f"evidence sidecars: {len(have)}/{len(input_files)} files; {len(insertions)} insertions evaluated "
+          f"in {len(chunks)} chunk(s), {store.n_rows} evidence rows")
     if gate:
         print(f"independent-fragment gate (>= {min_ind} per junction, pooled over samples): "
-              f"kept {len(kept)}, dropped {len(failed)}")
-        if n_pre:
-            print(f"  dropped before loading (pooled distinct fragments < {min_ind}, upper bound): {n_pre}")
+              f"kept {len(kept)}, dropped {sum(n for k, n in reasons.items() if not k.startswith(('far_pair', 'slippage')))}")
         for reason, n in sorted(reasons.items()):
             print(f"  dropped: failing junction(s) {reason}: {n}")
+    else:
+        n_sup = sum(1 for i in kept for r in recmap[id(i)] if r.supported == 0)
+        print(f"junctions below {min_ind} pooled independent fragments (reported as supported=0, not dropped): {n_sup}")
     if use_cons:
         print(f"indel-aware consensus replaced {n_replaced} junction clip(s) in combined output")
     if cfg.get("count_short_overhang", False):
         n_used = sum(r.n_short_used for recs in records.values() for r in recs)
-        n_only = sum(1 for recs in records.values() for r in recs
-                     if r.n_independent >= min_ind > r.n_independent_no_short)
         print(f"SHORT overhang reads: {n_used} fragment(s) used, {sum(short_reasons.values())} rejected "
-              f"({', '.join(f'{k}={v}' for k, v in sorted(short_reasons.items())) or '-'}); "
-              f"{n_only} junction(s) reach >= {min_ind} independent fragments only thanks to them")
-    pool = EvidencePool(evaluate, by_id, recmap, records, cfg, use_cons)
+              f"({', '.join(f'{k}={v}' for k, v in sorted(short_reasons.items())) or '-'})")
+    pool = EvidencePool(_make_evaluate(store.lookup, by_id, cfg, ref_fetch, short_reasons),
+                        by_id, recmap, records, cfg, use_cons)
     return kept, records, failed, {"reasons": reasons, "replaced": n_replaced, "pool": pool,
-                                   "tprt": tprt_reasons}
+                                   "tprt": tprt_reasons, "store": store}
+
+
+# per-chunk evaluation state, set by apply_evidence for the duration of _run_chunks (forked
+# workers inherit it, so the insertion list is never pickled)
+_CTX = None
+_PATCH_KEYS = ("name", "type", "open_side", "left_clipped", "right_clipped", "left_aligned",
+               "right_aligned", "left_pos", "right_pos", "left_mates", "right_mates", "member_sides")
+_MISSING = object()
+
+
+def _make_evaluate(lookup, by_id, cfg, ref_fetch, short_reasons):
+    """evaluate(ins, side) -> JunctionRecord over every member locus's rows of that side."""
+    def evaluate(ins, side):
+        ms = by_id[id(ins)]
+        allowed = getattr(ins, "member_sides", None) or {}
+        pooled = [r for m in ms if side in allowed.get(m, SIDES) for r in lookup(m, side)]
+        pooled = _reanchor(pooled, side, _ins_junction(ins, side))
+        rec = evaluate_junction(ins.name, side, pooled, cfg, ref_fetch)
+        short_reasons.update(rec.short_reasons)
+        rec.aligned = _aligned_part(ins, side)
+        loci = sorted({l for _, l in ms})
+        if loci != [ins.name]:
+            rec.member_loci = ",".join(loci)
+        return rec
+    return evaluate
+
+
+def _reopen_genome():
+    """Forked worker: the 2bit handle (one FILE*, shared offset) must not be shared."""
+    import sys
+    gs = sys.modules.get("combine_insertions_get_sequence")
+    if gs is not None and hasattr(gs, "GENOME"):
+        import py2bit
+        from config import CONFIG
+        gs.GENOME = py2bit.open(CONFIG['combine_insertions']['genome_2bit'])
+
+
+def _run_chunks(n_chunks, threads):
+    if threads <= 1 or n_chunks <= 1:
+        return [_judge_chunk(c) for c in range(n_chunks)]
+    import multiprocessing as mp
+    with mp.get_context("fork").Pool(min(threads, n_chunks), initializer=_reopen_genome) as pool:
+        return list(pool.imap(_judge_chunk, range(n_chunks)))
+
+
+def _judge_chunk(c):
+    """Evaluate insertions[lo:hi] of chunk c -> {'out': [(index, kept, recs, patch)], counters}.
+    `patch` = the insertion attributes this chunk changed (a forked worker mutates its own copy;
+    apply_evidence re-applies them to the parent's objects)."""
+    ctx = _CTX
+    insertions, by_id, cfg, store = ctx["insertions"], ctx["by_id"], ctx["cfg"], ctx["store"]
+    ref_fetch, matcher, breakpoints = ctx["ref_fetch"], ctx["matcher"], ctx["breakpoints"]
+    min_ind, have = ctx["min_ind"], ctx["have"]
+    lo, hi = ctx["chunks"][c]
+    lookup = store.chunk_lookup(c)
+    reasons, tprt_reasons, short_reasons = Counter(), Counter(), Counter()
+    evaluate = _make_evaluate(lookup, by_id, cfg, ref_fetch, short_reasons)
+    n_replaced = 0
+    out = []
+    for k in range(lo, hi):
+        ins = insertions[k]
+        snap = {a: getattr(ins, a, _MISSING) for a in _PATCH_KEYS}
+        ok = True
+        recs = []
+        open_side = _open_side(ins)
+        for side in SIDES:
+            if side == open_side:
+                # one-sided locus (discovery `oneside_`, Feature-A disc end, kept poly-A
+                # record): the open end has no reads by construction
+                continue
+            recs.append(evaluate(ins, side))
+        if ctx["far_on"] and open_side is None and len(recs) == 2:
+            verdict = _far_pair_check(ins, recs, cfg, matcher, breakpoints, ref_fetch)
+            if verdict is not None:
+                reason, pside = verdict
+                tprt_reasons[f"far_pair:{reason}"] += 1
+                prec = [r for r in recs if r.side == pside]
+                if (pside is not None and cfg.get("far_pair_split", True) and prec
+                        and (not ctx["gate"] or prec[0].n_independent >= min_ind)):
+                    old_name = ins.name
+                    _to_one_sided(ins, pside)
+                    ins.member_sides = {m: (pside,) for m in by_id[id(ins)]}
+                    prec[0].insertion_id = ins.name
+                    prec[0].member_loci = ",".join(sorted({l for _, l in by_id[id(ins)]} | {old_name}))
+                    prec[0].fail_reason = f"split_from_far_pair:{reason}"
+                    recs = prec
+                    tprt_reasons["far_pair:split_to_one_sided"] += 1
+                else:
+                    for r in recs:
+                        r.fail_reason = f"far_pair:{reason}"
+                    reasons[f"far_pair:{reason}"] += 1
+                    ok = False
+        if ok and ctx["slip_on"]:
+            why = _slippage_check(ins, recs, cfg, matcher, ref_fetch)
+            if why:
+                tprt_reasons[why.split(":")[0]] += 1
+                for r in recs:
+                    r.fail_reason = why
+                reasons[why.split("(")[0]] += 1
+                ok = False
+        if ok:
+            if all(f in have for f in ins.files):
+                fails = [r for r in recs if r.n_independent < min_ind]
+                for r in recs:
+                    r.supported = 0 if r in fails else 1
+                if ctx["gate"] and fails:
+                    # optional pooled gate (require_independent_fragments, default off)
+                    for r in fails:
+                        r.fail_reason = f"n_independent<{min_ind}"
+                    if all(r.n_reads == 0 for r in recs):
+                        reasons["no_evidence_reads"] += 1
+                    else:
+                        reasons["+".join(r.side + ("(polyA)" if r.polya_end else "") for r in fails)] += 1
+                    ok = False
+        if ok and ctx["use_cons"]:
+            n_replaced += _replace_clips(ins, recs)
+        store.detach(c, k, recs)
+        patch = {a: getattr(ins, a) for a in _PATCH_KEYS
+                 if getattr(ins, a, _MISSING) is not snap[a] and hasattr(ins, a)}
+        out.append((k, ok, recs, patch))
+    store.finish_chunk(c)
+    return {"out": out, "reasons": reasons, "tprt": tprt_reasons, "short": short_reasons,
+            "replaced": n_replaced}
+
+
+class _MemoryStore:
+    """Every wanted row in memory (load_evidence); records keep their rows."""
+
+    def __init__(self, rows):
+        self.rows = rows
+        self.n_rows = sum(len(v) for v in rows.values())
+
+    def lookup(self, m, side):
+        return self.rows.get((m, side)) or self.rows.get((m[1], side), [])
+
+    def chunk_lookup(self, c):
+        return self.lookup
+
+    def detach(self, c, k, recs):
+        pass
+
+    def finish_chunk(self, c):
+        pass
+
+    def fa_text(self, ref):
+        raise KeyError(ref)
+
+    def preload(self, refs):
+        return {}
+
+    def cleanup(self):
+        pass
+
+
+class _ShardStore:
+    """Sidecar rows routed into one gzip shard per chunk of insertions (rows.<c>.tsv.gz, each
+    line `<txt.gz basename>\\t<sidecar line>`); evaluated chunks leave their records' reads in
+    reads.<c>.pkl ({(index, side): FASTA text}). A row of a member locus shared by several
+    chunks is written to each of them."""
+
+    def __init__(self, shard_dir):
+        self.dir = shard_dir
+        self.have = set()
+        self.headers = {}
+        self.n_rows = 0
+        self.locus_chunk = {}       # (txt.gz basename, locus) -> first chunk holding its rows
+        self._rows_cache = {}       # chunk -> rows dict (parent-side lookups, absorb)
+        self._fa_cache = {}         # chunk -> reads dict
+        self._fa_pending = None     # (chunk, {(index, side): text}) of the chunk being evaluated
+
+    def build(self, input_files, insertions, by_id, threads):
+        import shutil
+        shutil.rmtree(self.dir, ignore_errors=True)
+        os.makedirs(self.dir)
+        n = len(insertions)
+        n_chunks = max(1, min(256, max(4 * max(1, threads), n // 2000)))
+        size = max(1, -(-n // n_chunks))
+        chunks = [(lo, min(n, lo + size)) for lo in range(0, n, size)] or [(0, 0)]
+        route = defaultdict(list)
+        for c, (lo, hi) in enumerate(chunks):
+            for k in range(lo, hi):
+                for m in by_id[id(insertions[k])]:
+                    lst = route[m]
+                    if not lst or lst[-1] != c:
+                        lst.append(c)
+        for m, lst in route.items():
+            self.locus_chunk[m] = lst[0]
+        outs = [gzip.open(self._rows_path(c), "wt", compresslevel=1) for c in range(len(chunks))]
+        try:
+            for f in input_files:
+                sp = sidecar_path(f)
+                if not os.path.exists(sp):
+                    continue
+                fb = os.path.basename(f)
+                self.have.add(fb)
+                with gzip.open(sp, "rt") as fh:
+                    header = fh.readline().rstrip("\n").split("\t")
+                    self.headers[fb] = header
+                    li = header.index("locus")
+                    for line in fh:
+                        p = line.split("\t", li + 1)
+                        if len(p) <= li:
+                            continue
+                        cs = route.get((fb, p[li]))
+                        if not cs:
+                            continue
+                        self.n_rows += 1
+                        rec = fb + "\t" + line
+                        for c in cs:
+                            outs[c].write(rec)
+        finally:
+            for o in outs:
+                o.close()
+        print(f"evidence shards: {self.n_rows} rows of {len(route)} member loci routed into "
+              f"{len(chunks)} chunk(s) under {self.dir}")
+        return chunks
+
+    def _rows_path(self, c):
+        return os.path.join(self.dir, f"rows.{c}.tsv.gz")
+
+    def _fa_path(self, c):
+        return os.path.join(self.dir, f"reads.{c}.pkl")
+
+    def _load_rows(self, c):
+        """rows dict of chunk c, keyed like load_evidence: ((basename, locus), side)."""
+        rows = defaultdict(list)
+        with gzip.open(self._rows_path(c), "rt") as fh:
+            for line in fh:
+                fb, rest = line.split("\t", 1)
+                header = self.headers[fb]
+                p = rest.rstrip("\n").split("\t")
+                if len(p) != len(header):
+                    continue
+                r = EvidenceRow(sample_name(fb), dict(zip(header, p)))
+                rows[((fb, r.locus), r.side)].append(r)
+        return rows
+
+    def chunk_lookup(self, c):
+        rows = self._load_rows(c)
+        self._fa_pending = (c, {})
+        return lambda m, side: rows.get((m, side), [])
+
+    def detach(self, c, k, recs):
+        """Move a record's reads out of memory into chunk c's reads file."""
+        _, fa = self._fa_pending
+        for rec in recs:
+            fa[(k, rec.side)] = _render_reads(rec.insertion_id, rec)
+            rec.rows = None
+            rec.fa_ref = (c, k, rec.side)
+
+    def finish_chunk(self, c):
+        import pickle
+        _, fa = self._fa_pending
+        with open(self._fa_path(c), "wb") as fh:
+            pickle.dump(fa, fh, protocol=pickle.HIGHEST_PROTOCOL)
+        self._fa_pending = None
+
+    def lookup(self, m, side):
+        """Parent-side lookup (EvidencePool re-evaluation after the remap filters)."""
+        c = self.locus_chunk.get(m)
+        if c is None:
+            return []
+        if c not in self._rows_cache:
+            if len(self._rows_cache) >= 4:
+                self._rows_cache.pop(next(iter(self._rows_cache)))
+            self._rows_cache[c] = self._load_rows(c)
+        return self._rows_cache[c].get((m, side), [])
+
+    def fa_text(self, ref):
+        import pickle
+        c, k, side = ref
+        if c not in self._fa_cache:
+            if len(self._fa_cache) >= 2:
+                self._fa_cache.pop(next(iter(self._fa_cache)))
+            with open(self._fa_path(c), "rb") as fh:
+                self._fa_cache[c] = pickle.load(fh)
+        return self._fa_cache[c][(k, side)]
+
+    def preload(self, refs):
+        """{ref: text} for refs, one load per chunk (out-of-order sections of the output)."""
+        import pickle
+        out = {}
+        by = defaultdict(list)
+        for ref in refs:
+            by[ref[0]].append(ref)
+        for c in sorted(by):
+            with open(self._fa_path(c), "rb") as fh:
+                d = pickle.load(fh)
+            for ref in by[c]:
+                out[ref] = d[(ref[1], ref[2])]
+        return out
+
+    def cleanup(self):
+        import shutil
+        self._rows_cache.clear()
+        self._fa_cache.clear()
+        shutil.rmtree(self.dir, ignore_errors=True)
 
 
 class EvidencePool:
@@ -1229,10 +1343,10 @@ def _far_pair_check(ins, recs, cfg, matcher, breakpoints, ref_fetch=None):
         old = ins.left_clipped if s == "LEFT" else ins.right_clipped
         c = [_outward_clip(by[s], ins), str(old).upper() if old is not None else ""]
         clips[s] = [x for x in dict.fromkeys(c) if x]
-    n_ind = {s: by[s].n_independent for s in by}
     cols = {s: _colonies(ins, by[s], breakpoints, tol) for s in by}
     mates = {s: _inside_mates(by[s]) for s in by}
-    reason, pside = far_pair_verdict(clips, n_ind, cols, matcher, cfg, mates)
+    n_ind = ({s: by[s].n_independent for s in by} if cfg.get("require_independent_fragments", False) else None)
+    reason, pside = far_pair_verdict(clips, cols, matcher, cfg, mates, n_ind)
     if not reason and ref_fetch is not None:
         # (f) the "poly-A tail" must not be slippage at a reference A/T tract: such a junction
         # pairs with any element-carrying breakpoint within 50 kb (the E2E's main far-pair FP)
@@ -1383,18 +1497,35 @@ def _replace_clips(ins, recs) -> int:
     return n
 
 
-def write_evidence_outputs(records: Dict[str, list], names, evidence_tsv: str, reads_fa: str):
+def _render_reads(name, rec) -> str:
+    """FASTA text of a junction record's reads (insertions.reads.fa.gz)."""
+    return "".join(f">{name}|{rec.side}|{r.role}|{r.sample}|{r.frag}|{r.r12}\n{allele_forward_seq(r)}\n"
+                   for r in rec.rows)
+
+
+def write_evidence_outputs(records: Dict[str, list], names, evidence_tsv: str, reads_fa: str,
+                           store=None, preload_from=None):
     """Write `<patient>.insertions.evidence.tsv.gz` + `<patient>.insertions.reads.fa.gz`
-    for the insertions in `names` (in that order)."""
+    for the insertions in `names` (in that order). Records whose reads were moved to disk by
+    apply_evidence's shard store (rows None) take them from `store`; names[preload_from:] (an
+    out-of-chunk-order section, e.g. the sorted gated-out names) are fetched in one pass."""
     n_rows = n_reads = 0
+    pre = {}
+    if store is not None and preload_from is not None:
+        pre = store.preload([r.fa_ref for n in names[preload_from:] for r in records.get(n, ())
+                             if r.rows is None])
     with gzip.open(evidence_tsv, "wt") as t, gzip.open(reads_fa, "wt") as fa:
         t.write("\t".join(EVIDENCE_TSV_COLUMNS) + "\n")
         for name in names:
             for rec in records.get(name, ()):
                 t.write(rec.tsv())
                 n_rows += 1
-                for r in rec.rows:
-                    fa.write(f">{name}|{rec.side}|{r.role}|{r.sample}|{r.frag}|{r.r12}\n"
-                             f"{allele_forward_seq(r)}\n")
-                    n_reads += 1
+                if rec.rows is not None:
+                    txt = _render_reads(name, rec)
+                elif rec.fa_ref in pre:
+                    txt = pre[rec.fa_ref]
+                else:
+                    txt = store.fa_text(rec.fa_ref)
+                fa.write(txt)
+                n_reads += txt.count("\n") // 2
     print(f"wrote {n_rows} junction rows -> {evidence_tsv}; {n_reads} reads -> {reads_fa}")

@@ -210,7 +210,7 @@ def test_pooling_follows_combine_grouping(monkeypatch):
         return rows, {"A.txt.gz", "B.txt.gz"}
 
     monkeypatch.setattr(ev, "load_evidence", fake_load)
-    cfg = {"require_independent_fragments": True, "min_independent_fragments": 2}
+    cfg = {"min_independent_fragments": 2}
     kept, records, failed, _ = apply_evidence([Ins()], ["A.txt.gz", "B.txt.gz"], cfg)
     assert set(Ins.member_loci) <= seen["wanted"]
     assert len(kept) == 1 and not failed
@@ -317,14 +317,14 @@ def test_short_read_duplicate_of_clip_fragment_collapses():
     assert rec.n_short_used == 1 and rec.n_independent == 1 and rec.n_duplicates == 1
 
 
-def test_one_sided_locus_gates_only_its_real_side(monkeypatch):
+def test_one_sided_locus_evaluates_only_its_real_side(monkeypatch):
     """`oneside_` / Feature-A loci: the open end has no reads by construction; only the real
-    side is evaluated, and it still needs >= 2 independent fragments."""
+    side is evaluated. Below 2 pooled fragments it is reported (supported=0), never dropped."""
     rows = {(("A.txt.gz", "chr1:100-oneside_100"), "LEFT"): [
         row(sample="A", side="LEFT", frag="l1", strand="-", outer=200),
         row(sample="A", side="LEFT", frag="l2", strand="-", outer=230)]}
     monkeypatch.setattr(ev, "load_evidence", lambda files, wanted: (rows, {"A.txt.gz"}))
-    cfg = {"require_independent_fragments": True, "min_independent_fragments": 2}
+    cfg = {"min_independent_fragments": 2}
 
     def mk(open_side, typ):
         class Ins:
@@ -338,8 +338,8 @@ def test_one_sided_locus_gates_only_its_real_side(monkeypatch):
     kept, _, _, _ = apply_evidence([mk(None, 4)], ["A.txt.gz"], cfg)      # Feature-A disc end
     assert len(kept) == 1
     rows[(("A.txt.gz", "chr1:100-oneside_100"), "LEFT")].pop()
-    kept, _, failed, _ = apply_evidence([mk("RIGHT", 4)], ["A.txt.gz"], cfg)
-    assert kept == [] and failed == {"chr1:100-oneside_100"}
+    kept, records, failed, _ = apply_evidence([mk("RIGHT", 4)], ["A.txt.gz"], cfg)
+    assert len(kept) == 1 and not failed and records["chr1:100-oneside_100"][0].supported == 0
 
 
 def test_far_flank_trim_for_short_insertions():
@@ -364,8 +364,9 @@ def test_far_flank_trim_for_short_insertions():
     assert str(ci_mod._far_flank_trimmed(i, "R")).upper() == ins_seq * 3
 
 
-def test_polya_end_is_gated(monkeypatch):
-    """RIGHT has 2 independent fragments, the poly-A (LEFT, outward poly-T) end only one."""
+def test_polya_end_is_reported_not_gated(monkeypatch):
+    """RIGHT has 2 independent fragments, the poly-A (LEFT, outward poly-T) end only one: the
+    junction is reported supported=0, the insertion kept (no pooled fragment gate)."""
     elem = "GGCTCACGCCTGTAATCCCGGATCCAGT"
     left_clip_fwd = elem[::-1][:0] + revcomp("T" * 15 + revcomp(elem))  # ref-forward [clip]
     rows = {
@@ -382,15 +383,14 @@ def test_polya_end_is_gated(monkeypatch):
         left_aligned = None
 
     monkeypatch.setattr(ev, "load_evidence", lambda files, wanted: (rows, {"S1.txt.gz"}))
-    cfg = {"require_independent_fragments": True, "min_independent_fragments": 2}
+    cfg = {"min_independent_fragments": 2}
     kept, records, failed, stats = apply_evidence([Ins()], ["S1.txt.gz"], cfg)
-    assert kept == [] and failed == {"chr1:100-110"}
+    assert len(kept) == 1 and not failed and not stats["reasons"]
     left = [r for r in records["chr1:100-110"] if r.side == "LEFT"][0]
     assert left.polya_end == 1 and left.supported == 0
-    assert stats["reasons"] == {"LEFT(polyA)": 1}
-    # same data, gate off -> kept, still reported
-    kept, records, failed, _ = apply_evidence([Ins()], ["S1.txt.gz"], {"min_independent_fragments": 2})
-    assert len(kept) == 1 and not failed
+    # the optional pooled gate drops it
+    kept, records, failed, stats = apply_evidence([Ins()], ["S1.txt.gz"], dict(cfg, require_independent_fragments=True))
+    assert kept == [] and failed == {"chr1:100-110"} and stats["reasons"] == {"LEFT(polyA)": 1}
 
 
 def test_left_clip_orientation():
@@ -589,14 +589,13 @@ def test_end_to_end_byte_identity_and_tprt_mode(tmp_path, monkeypatch):
     fa = side["insertions.reads.fa.gz"].decode()
     assert f">{X}|RIGHT|CLIP|sampleA|" in fa and f">{X}|RIGHT|MATE|sampleB|" in fa
 
-    # TPRT mode: Y gated out (still in the evidence TSV with supported=0); X's combined
-    # clip upgraded to the indel-aware consensus carrying the beyond-poly-A sequence.
-    tprt = run_combine(str(d2), build_fixture(str(d2)), monkeypatch,
-                       {"require_independent_fragments": True, "indel_aware_consensus": True})
+    # TPRT mode: no pooled fragment gate -- Y stays (supported=0 in the evidence TSV); X's
+    # combined clip upgraded to the indel-aware consensus carrying the beyond-poly-A sequence.
+    tprt = run_combine(str(d2), build_fixture(str(d2)), monkeypatch, {"indel_aware_consensus": True})
     recs = _fastq_records(tprt["combined.txt.gz"])
-    assert {k.rsplit(":", 1)[0] for k in recs} == {X}
+    assert {k.rsplit(":", 1)[0] for k in recs} == {X, Y}
     assert BEYOND.lower() in recs[f"{X}:R"]
-    assert f">{Y}" not in tprt["genotyping.txt.gz"].decode()
+    assert f">{Y}" in tprt["genotyping.txt.gz"].decode()
     assert f">{X}" in tprt["genotyping.txt.gz"].decode()
     rows = _tsv(tprt["insertions.evidence.tsv.gz"])
     assert {(r["insertion_id"], r["supported"]) for r in rows if r["side"] == "RIGHT"} == {(X, "1"), (Y, "0")}

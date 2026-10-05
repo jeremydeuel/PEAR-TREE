@@ -146,7 +146,6 @@ CONFIG = {
         # <sample>.evidence.tsv.gz sidecars (evidence_sidecar=true); without sidecars combine
         # is byte-identical whatever these say. Legacy defaults here; the new pipeline mode
         # (cluster/config.py.grch38.tprt) switches them on.
-        'require_independent_fragments': False, #drop insertions with any junction (LEFT/RIGHT, incl. the poly-A end) below min_independent_fragments, pooled over all colonies
         'min_independent_fragments': 2, #independent fragments per junction after (sample,frag) collapse + within-sample PCR/optical dedup (never the 0x400 flag)
         'indel_aware_consensus': False, #use the homopolymer-aware pooled clip consensus (src/indel_consensus.py) in combined.txt.gz when >= the legacy longest clip
         'dup_coord_tolerance': 5, #bp tolerance on read outer, mate outer/mpos and junction position (lenient 2nd dedup; 0x400 reads are dropped by discovery)

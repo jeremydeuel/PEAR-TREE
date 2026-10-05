@@ -130,8 +130,8 @@ ELEM = "GGCCGGGCGCGGTGGCTCAC"
 TAIL = "T" * 20 + "ACGTAGCTAGG"
 
 
-def verdict(clips, n=(3, 3), cols=({"A", "B"}, {"A", "B"}), mates=None, cfg=FAR_CFG):
-    return tf.far_pair_verdict({"LEFT": [clips[0]], "RIGHT": [clips[1]]}, {"LEFT": n[0], "RIGHT": n[1]},
+def verdict(clips, cols=({"A", "B"}, {"A", "B"}), mates=None, cfg=FAR_CFG):
+    return tf.far_pair_verdict({"LEFT": [clips[0]], "RIGHT": [clips[1]]},
                                {"LEFT": cols[0], "RIGHT": cols[1]}, FakeMatcher(), cfg, mates)
 
 
@@ -143,7 +143,7 @@ def test_far_pair_credible():
 def test_far_pair_failures():
     assert verdict((ELEM, ELEM))[0] == "no_polarity"
     assert verdict((TAIL, TAIL))[0] == "no_polarity"
-    assert verdict((TAIL, ELEM), n=(3, 1)) == ("few_fragments", "LEFT")
+    assert verdict((TAIL, ELEM)) == ("", "LEFT")       # no pooled-fragment criterion any more
     assert verdict((TAIL, "ACGATCGATCGTAGCTAGCTAGCATCG")) == ("no_element_on_complex_clip", "LEFT")
     assert verdict((TAIL, revcomp(ELEM)))[0] == "element_antisense"
     assert verdict((TAIL, revcomp(ELEM)), cfg=dict(FAR_CFG, far_pair_allow_antisense=True))[0] == ""
@@ -171,7 +171,7 @@ def test_colonies_consistent():
 def test_far_pair_split_into_one_sided_and_absorbed(monkeypatch):
     """A failing far pair keeps its poly-A junction as a one-sided locus, which joins another
     colony's two-sided call of that junction."""
-    cfg = {"require_independent_fragments": True, "min_independent_fragments": 2, "far_pair_strict": True,
+    cfg = {"min_independent_fragments": 2, "far_pair_strict": True,
            "merge_tolerance_bp": 8}
 
     def mkrow(locus, side, frag, sample, pos, clip, strand="+"):
@@ -328,3 +328,92 @@ def test_reanchor_moves_clip_to_insertion_junction():
     moved = ev._reanchor([r], "RIGHT", 1015)[0]
     assert moved.clip_at == 57 and r.clip_at == 60               # 3 aligned bases join the clip
     assert ev._locus_junction("chr1:1000-oneside_1000", "LEFT") == 1000
+
+
+# --------------------------------------------------------------------- shard store
+
+SIDECAR_COLS = ["locus", "side", "role", "frag", "r12", "flag", "ref", "pos", "strand", "outer", "mref",
+                "mpos", "mstrand", "tlen", "mapq", "cigar", "clip_at", "seq", "qual"]
+
+
+def _shard_fixture(tmp_path, n=60):
+    """n insertions over two colonies' sidecars (incl. one far pair that splits one-sided and is
+    absorbed by the other colony's call of the same junction), every row also written to disk."""
+    rng = random.Random(3)
+    files = [str(tmp_path / f"{s}.txt.gz") for s in ("A", "B")]
+    lines = {f: [] for f in files}
+    specs = []
+
+    def add(f, locus, side, frag, pos, clip):
+        m = 60
+        if side == "RIGHT":
+            seq, cig, at, p = "C" * m + clip, f"{m}M{len(clip)}S", m, pos - m
+        else:
+            seq, cig, at, p = revcomp(clip) + "G" * m, f"{len(clip)}S{m}M", len(clip), pos
+        outer = p + 25 * int(frag[1:]) + (7 if f.endswith("B.txt.gz") else 0)
+        lines[f].append([locus, side, "CLIP", frag, "1", "99", "chr1", str(p), "+", str(outer), "*", "-1",
+                         "*", "0", "60", cig, str(at), seq, "I" * len(seq)])
+    for k in range(n):
+        f = files[k % 2]
+        lp = 1000 + 300 * k
+        rp = lp - 10
+        name = f"chr1:{lp}-{rp}"
+        clip = "".join(rng.choice("ACGT") for _ in range(25))
+        for j in range(rng.randint(1, 4)):
+            add(f, name, "LEFT", f"l{j}", lp, TAIL)
+            add(f, name, "RIGHT", f"r{j}", rp, ELEM + clip)
+        specs.append((name, lp, rp, f))
+    far, good = "chr1:90000-86000", "chr1:90000-89990"
+    for j in range(3):
+        add(files[0], far, "LEFT", f"a{j}", 90000, TAIL)
+        add(files[0], far, "RIGHT", f"b{j}", 86000, "ACGATCGATCGTAGCTAGCTAGCATCG")
+        add(files[1], good, "LEFT", f"c{j}", 90000, TAIL)
+        add(files[1], good, "RIGHT", f"d{j}", 89990, ELEM)
+    specs += [(far, 90000, 86000, files[0]), (good, 90000, 89990, files[1])]
+    for f, ls in lines.items():
+        with gzip.open(f + ".evidence.tsv.gz", "wt") as fh:
+            fh.write("\t".join(SIDECAR_COLS) + "\n")
+            for l in ls:
+                fh.write("\t".join(l) + "\n")
+    return files, specs
+
+
+def _shard_insertions(specs):
+    out = []
+    for name, lp, rp, f in specs:
+        i = FakeIns(lp, rp, TAIL, "x")
+        i.name, i.files, i.type, i.open_side = name, [os.path.basename(f)], TYPE_FULL_INFO, None
+        i.member_loci = [(os.path.basename(f), name)]
+        i.left_aligned = i.right_aligned = None
+        i.left_mates, i.right_mates = [], []
+        out.append(i)
+    return out
+
+
+@pytest.mark.parametrize("threads,gate", [(1, False), (2, False), (2, True)])
+def test_shard_store_matches_memory(tmp_path, monkeypatch, threads, gate):
+    """Chunked evaluation from on-disk shards (serial and forked workers) gives exactly the
+    in-memory result: same kept insertions, same records, same evidence outputs after absorb."""
+    import combine_insertions_tprt_filters as tfm
+    monkeypatch.setattr(tfm, "LibraryMatcher", lambda *a, **k: FakeMatcher())
+    files, specs = _shard_fixture(tmp_path)
+    cfg = {"min_independent_fragments": 2, "far_pair_strict": True, "merge_tolerance_bp": 8,
+           "indel_aware_consensus": True, "require_independent_fragments": gate}
+
+    def run(shard_dir, thr, tag):
+        ins = _shard_insertions(specs)
+        kept, records, failed, stats = apply_evidence(ins, files, cfg, ref_fetch=lambda c, s, e: "N" * (e - s),
+                                                      threads=thr, shard_dir=shard_dir)
+        kept, n_abs = stats["pool"].absorb_one_sided(kept)
+        tsv, fa = str(tmp_path / f"{tag}.tsv.gz"), str(tmp_path / f"{tag}.fa.gz")
+        ev.write_evidence_outputs(records, [i.name for i in kept] + sorted(failed), tsv, fa,
+                                  store=stats.get("store"), preload_from=len(kept))
+        stats["store"].cleanup()
+        return ([(i.name, str(i.left_clipped), str(i.right_clipped)) for i in kept], n_abs, sorted(failed),
+                gzip.open(tsv, "rb").read(), gzip.open(fa, "rb").read())
+    mem = run(None, 1, "mem")
+    shard = run(str(tmp_path / "shards"), threads, f"shard{threads}")
+    assert mem[1] == 1                                   # the split far pair was absorbed
+    assert bool(mem[2]) == gate                          # single-fragment loci dropped only by the gate
+    assert shard == mem
+    assert not os.path.exists(tmp_path / "shards")       # cleaned up

@@ -25,13 +25,12 @@ junction), exactly like `ConsensusResult.seq` and `Insertion.left_clipped/right_
   structured (< `slippage_min_structured` bases before the next long homopolymer) or the shifted
   continuation of the outward reference. That is Illumina homopolymer / STR slippage at a
   reference tract (and STR length differences between the reads' genome and the reference):
-  every slipped molecule is independent, so the >= 2 independent-fragment gate cannot remove it.
+  every slipped molecule is independent, so a >= 2-fragment rule cannot remove it.
 * `LibraryMatcher` -- mappy hits of a clip against the RTE consensus library (and, for the
   "other junction is informative" test, the transduction-source flanks).
 * `far_pair_verdict` -- L1-mediated deletion / duplication pairs (gap < -30 or > 40) must show
   element sequence on the complex clip (sense to the consensus), a poly-A tail on the other clip,
-  no conflicting element class beyond the tail, >= min_independent_fragments on both junctions
-  and the same set of colonies at both breakpoints (one event)."""
+  no conflicting element class beyond the tail and the same set of colonies at both breakpoints (one event)."""
 
 import os
 from typing import Dict, Iterable, List, Optional, Set, Tuple
@@ -267,13 +266,13 @@ def colonies_consistent(a: Set[str], b: Set[str], frac: float = 0.2) -> bool:
     return len(a ^ b) <= max(1, int(frac * len(a | b)))
 
 
-def far_pair_verdict(clips: Dict[str, List[str]], n_ind: Dict[str, int], colonies: Dict[str, Set[str]],
-                     matcher: LibraryMatcher, cfg, inside_mates: Dict[str, List[str]] = None) -> Tuple[str, Optional[str]]:
+def far_pair_verdict(clips: Dict[str, List[str]], colonies: Dict[str, Set[str]],
+                     matcher: LibraryMatcher, cfg, inside_mates: Dict[str, List[str]] = None,
+                     n_ind: Dict[str, int] = None) -> Tuple[str, Optional[str]]:
     """('' , polya_side) if a far L1-mediated pair is credible, else (reason, polya_side).
 
     clips         side -> candidate outward clips, best first (pooled junction-read consensus,
                   discovery clip): the first that is long enough decides
-    n_ind         side -> pooled independent fragments
     colonies      side -> colonies with a discovery breakpoint / evidence at that junction
     inside_mates  side -> mates of junction fragments that lie inside the insertion (unmapped,
                   elsewhere, MAPQ < 20), oriented like the outward clip (element sense = '+')
@@ -282,7 +281,7 @@ def far_pair_verdict(clips: Dict[str, List[str]], n_ind: Dict[str, int], colonie
     L1-mediated event is a 5'-truncated element; `far_pair_allow_antisense` admits inverted 5'
     ends); (c) a poly-A tail on the other clip (>= `far_pair_min_polya` (10) bases >= 80 % T,
     outward) and, if the sequence beyond the tail hits the library, the same element class;
-    (d) >= min_independent_fragments on both junctions; (e) consistent colonies
+    (d) consistent colonies; with `n_ind` (pooled gate on) also >= min_independent_fragments per junction
     (`colonies_consistent`, `far_pair_colony_frac` 0.2)."""
     n_pa = cfg.get("far_pair_min_polya", 10)
     pt = {s: any(leading_polyt(c, n_pa) for c in clips.get(s, ())) for s in ("LEFT", "RIGHT")}
@@ -291,9 +290,8 @@ def far_pair_verdict(clips: Dict[str, List[str]], n_ind: Dict[str, int], colonie
         return ("no_polarity", None)
     pside = pa[0]
     cside = "RIGHT" if pside == "LEFT" else "LEFT"
-    min_ind = cfg.get("min_independent_fragments", 2)
-    if min(n_ind.get("LEFT", 0), n_ind.get("RIGHT", 0)) < min_ind:
-        return ("few_fragments", pside)
+    if n_ind is not None and min(n_ind.get("LEFT", 0), n_ind.get("RIGHT", 0)) < cfg.get("min_independent_fragments", 2):
+        return ("few_fragments", pside)       # only with the pooled gate (require_independent_fragments)
     h = next((x for x in (matcher.hit(c) for c in clips.get(cside, ())) if x is not None), None)
     anti = cfg.get("far_pair_allow_antisense", False)
     if h is None:

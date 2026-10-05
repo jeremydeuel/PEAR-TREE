@@ -124,9 +124,9 @@ if [ -x "$PY" ]; then
     for ARM in A B; do
         R="$(arm_root "$ARM")"; [ -d "$R" ] || continue
         if [ ! -s "$R/src/config.py" ]; then fail "no $R/src/config.py — run: bash $TPRT_KIT_DIR/setup.sh configs"; continue; fi
-        got="$(cd "$R" && TPRT_ROOT="$TPRT_ROOT" TPRT_RES="$TPRT_RES" "$PY" -c "import sys; sys.path.insert(0,'src'); import config; print(getattr(config,'TPRT_AB_ARM','none'), config.CONFIG['combine_insertions'].get('require_independent_fragments'))" 2>&1 | tail -1)"
+        got="$(cd "$R" && TPRT_ROOT="$TPRT_ROOT" TPRT_RES="$TPRT_RES" "$PY" -c "import sys; sys.path.insert(0,'src'); import config; print(getattr(config,'TPRT_AB_ARM','none'), config.CONFIG['combine_insertions'].get('indel_aware_consensus'))" 2>&1 | tail -1)"
         case "$ARM:$got" in
-            "A:A False"|"B:B True") ok "$R/src/config.py = arm $ARM (require_independent_fragments=${got#* })" ;;
+            "A:A False"|"B:B True") ok "$R/src/config.py = arm $ARM (indel_aware_consensus=${got#* })" ;;
             *) fail "$R/src/config.py is not the arm-$ARM config (got: $got) — run: bash $TPRT_KIT_DIR/setup.sh configs" ;;
         esac
     done
