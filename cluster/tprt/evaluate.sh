@@ -75,6 +75,22 @@ if [ "$HAVE_A" = 1 ] && [ -s "$(arm_rundir "$P" C)/$P.annotated.csv.gz" ]; then
 fi
 
 mkdir -p "$RESULTS_BASE/$P"
+# known insertions (patients/<organ>/<P>/known_insertions.tsv): trace each through every stage, per arm
+KNOWN="$(patient_dir "$P")/known_insertions.tsv"
+if [ -s "$KNOWN" ]; then
+    for ARM in "${ALL_ARMS[@]}"; do
+        RD="$(arm_rundir "$P" "$ARM")"
+        [ -d "$RD/discovery" ] || continue
+        note "arm $ARM: known insertions"
+        if "$PY" "$TPRT_KIT_DIR/check_known.py" --known "$KNOWN" --rundir "$RD" --eval "$EV/$ARM" \
+                --label "$ARM" --out-dir "$EV/$ARM/known" > "$EV/$ARM/known.log" 2>&1; then
+            cp -f "$EV/$ARM/known/known_report.md" "$RESULTS_BASE/$P/known_report.$ARM.md" 2>/dev/null || true
+            sed -n '1,/^## Potentially/p' "$EV/$ARM/known/known_report.md"
+        else
+            note "arm $ARM: check_known FAILED (see $EV/$ARM/known.log)"; NFAILED=$((NFAILED + 1))
+        fi
+    done
+fi
 cp -f "$EV"/ab_report.md "$EV"/*.tsv "$RESULTS_BASE/$P/" 2>/dev/null || true
 for ARM in "${ALL_ARMS[@]}"; do
     if [ -s "$EV/$ARM/fit/phylo_fit.tsv" ]; then cp -f "$EV/$ARM/fit/phylo_fit.tsv" "$RESULTS_BASE/$P/phylo_fit.$ARM.tsv"; fi
