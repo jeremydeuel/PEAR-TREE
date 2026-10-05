@@ -763,7 +763,7 @@ def _aligned_part(ins, side) -> str:
 
 
 def apply_evidence(insertions, input_files, cfg, ref_fetch=None, breakpoints=None, threads=1,
-                   shard_dir=None):
+                   shard_dir=None, pool=None):
     """Evaluate every junction of every insertion from the pooled sidecars.
 
     Returns (kept, records, failed_names, stats) or None when no sidecar exists (the
@@ -781,7 +781,8 @@ def apply_evidence(insertions, input_files, cfg, ref_fetch=None, breakpoints=Non
     `shard_dir` (combine passes `<stem>.evidence_shards`): bounded memory and `threads` worker
     processes. One streaming pass routes every wanted sidecar row into the chunk of the
     insertion it belongs to (chunks = consecutive runs of `insertions`); each chunk is then
-    evaluated on its own (`threads` > 1: forked workers), its rows dropped, and its reads kept on
+    evaluated on its own (`threads` > 1: `pool` from make_evidence_pool, created early by the caller,
+    else forked here), its rows dropped, and its reads kept on
     disk for write_evidence_outputs (JunctionRecord.rows is None, `fa_ref` points at them).
     Without `shard_dir` every row is held in memory (tests, small inputs). Both modes give the
     same records, in the same order."""
@@ -824,14 +825,21 @@ def apply_evidence(insertions, input_files, cfg, ref_fetch=None, breakpoints=Non
         from combine_insertions_tprt_filters import LibraryMatcher
         matcher = LibraryMatcher(cfg.get("rte_library") or "resources/rte_library")
 
-    global _CTX
-    _CTX = dict(insertions=insertions, by_id=by_id, store=store, have=have, cfg=cfg,
-                ref_fetch=ref_fetch, matcher=matcher, breakpoints=breakpoints, use_cons=use_cons,
-                slip_on=slip_on, far_on=far_on, min_ind=min_ind, chunks=chunks, gate=gate)
+    static = dict(have=have, cfg=cfg, use_cons=use_cons, slip_on=slip_on, far_on=far_on,
+                  min_ind=min_ind, gate=gate, store=store)
+    global _W
+    _W = {"ref_fetch": ref_fetch, "matcher": matcher}     # inherited by a pool forked below
+    own_pool = None
+    if pool is None and threads > 1 and shard_dir is not None and len(chunks) > 1:
+        own_pool = pool = make_evidence_pool(threads)
     try:
-        results = _run_chunks(len(chunks), threads if shard_dir is not None else 1)
+        results = _run_chunks(insertions, by_id, chunks, static, breakpoints,
+                              pool if shard_dir is not None else None, threads)
     finally:
-        _CTX = None
+        if own_pool is not None:
+            own_pool.close()
+            own_pool.join()
+        _W = {}
 
     kept, failed, records = [], set(), {}
     failed_objs = []
@@ -882,9 +890,9 @@ def apply_evidence(insertions, input_files, cfg, ref_fetch=None, breakpoints=Non
                                    "tprt": tprt_reasons, "store": store}
 
 
-# per-chunk evaluation state, set by apply_evidence for the duration of _run_chunks (forked
-# workers inherit it, so the insertion list is never pickled)
-_CTX = None
+# worker-side state: ref_fetch / matcher of the process (inherited when the pool was forked after
+# apply_evidence set them, else built on first use from the task's cfg)
+_W = {}
 _PATCH_KEYS = ("name", "type", "open_side", "left_clipped", "right_clipped", "left_aligned",
                "right_aligned", "left_pos", "right_pos", "left_mates", "right_mates", "member_sides")
 _MISSING = object()
@@ -917,39 +925,78 @@ def _reopen_genome():
         gs.GENOME = py2bit.open(CONFIG['combine_insertions']['genome_2bit'])
 
 
-def _run_chunks(n_chunks, threads):
-    if threads <= 1 or n_chunks <= 1:
-        return [_judge_chunk(c) for c in range(n_chunks)]
-    import gc
+def make_evidence_pool(threads):
+    """Worker pool for apply_evidence. Create it while the process is still SMALL (combine does so
+    before loading any discovery file): a fork of the full combine heap gets copied page by page
+    into every worker (allocator reuse of the parent's free slots, refcounts, GC), which on
+    PD37590 took 8 workers past 60 GB. Workers receive only their own chunk of insertions."""
     import multiprocessing as mp
-    # forked workers share the parent's heap copy-on-write; a cyclic-GC pass in a worker writes
-    # to the header of every tracked object and so copies the whole heap into each worker.
-    # freeze() moves everything allocated so far out of the collector's reach.
-    gc.collect()
-    gc.freeze()
-    try:
-        with mp.get_context("fork").Pool(min(threads, n_chunks), initializer=_reopen_genome) as pool:
-            return list(pool.imap(_judge_chunk, range(n_chunks)))
-    finally:
-        gc.unfreeze()
+    return mp.get_context("fork").Pool(threads, initializer=_reopen_genome)
 
 
-def _judge_chunk(c):
-    """Evaluate insertions[lo:hi] of chunk c -> {'out': [(index, kept, recs, patch)], counters}.
-    `patch` = the insertion attributes this chunk changed (a forked worker mutates its own copy;
-    apply_evidence re-applies them to the parent's objects)."""
-    ctx = _CTX
-    insertions, by_id, cfg, store = ctx["insertions"], ctx["by_id"], ctx["cfg"], ctx["store"]
-    ref_fetch, matcher, breakpoints = ctx["ref_fetch"], ctx["matcher"], ctx["breakpoints"]
-    min_ind, have = ctx["min_ind"], ctx["have"]
-    lo, hi = ctx["chunks"][c]
+def _chunk_task(insertions, by_id, chunks, static, breakpoints, c):
+    lo, hi = chunks[c]
+    items = [(k, insertions[k], by_id[id(insertions[k])]) for k in range(lo, hi)]
+    bp = None
+    if breakpoints is not None:
+        ctgs = {i.reference_name for _, i, _ in items}
+        bp = {key: v for key, v in breakpoints.items() if key[0] in ctgs}
+    return c, items, static, bp
+
+
+def _run_chunks(insertions, by_id, chunks, static, breakpoints, pool, threads):
+    """Results of every chunk, in chunk order. With a pool: at most 2 chunks per worker in flight,
+    so the parent never holds more than a few chunks' pickled insertions at once."""
+    n = len(chunks)
+    if pool is None or n <= 1:
+        return [_judge_task(_chunk_task(insertions, by_id, chunks, static, breakpoints, c)) for c in range(n)]
+    results = [None] * n
+    pending = {}
+    nxt = 0
+    window = 2 * max(1, threads)
+    while nxt < n or pending:
+        while nxt < n and len(pending) < window:
+            pending[nxt] = pool.apply_async(_judge_task, (_chunk_task(insertions, by_id, chunks, static,
+                                                                      breakpoints, nxt),))
+            nxt += 1
+        c = min(pending)
+        results[c] = pending.pop(c).get()
+    return results
+
+
+def _worker_tools(ctx):
+    """(ref_fetch, matcher) of this process: inherited from apply_evidence when the pool was
+    forked after it set them (or in-process), else built once per worker."""
+    if "ref_fetch" not in _W:
+        cfg = ctx["cfg"]
+        rf = None
+        if ctx["slip_on"] or ctx["far_on"] or cfg.get("count_short_overhang", False):
+            try:
+                from combine_insertions_get_sequence import get_sequence as rf
+            except Exception:
+                rf = None
+        m = None
+        if ctx["slip_on"] or ctx["far_on"]:
+            from combine_insertions_tprt_filters import LibraryMatcher
+            m = LibraryMatcher(cfg.get("rte_library") or "resources/rte_library")
+        _W.update(ref_fetch=rf, matcher=m)
+    return _W["ref_fetch"], _W["matcher"]
+
+
+def _judge_task(task):
+    """Evaluate one chunk -> {'out': [(index, kept, recs, patch)], counters}. `patch` = the
+    insertion attributes this chunk changed (a worker mutates its own copy; apply_evidence
+    re-applies them to the parent's objects)."""
+    c, items, ctx, breakpoints = task
+    cfg, store, min_ind, have = ctx["cfg"], ctx["store"], ctx["min_ind"], ctx["have"]
+    ref_fetch, matcher = _worker_tools(ctx)
+    by_id = {id(ins): ms for _, ins, ms in items}
     lookup = store.chunk_lookup(c)
     reasons, tprt_reasons, short_reasons = Counter(), Counter(), Counter()
     evaluate = _make_evaluate(lookup, by_id, cfg, ref_fetch, short_reasons)
     n_replaced = 0
     out = []
-    for k in range(lo, hi):
-        ins = insertions[k]
+    for k, ins, _ in items:
         snap = {a: getattr(ins, a, _MISSING) for a in _PATCH_KEYS}
         ok = True
         recs = []
@@ -1058,6 +1105,11 @@ class _ShardStore:
         self._rows_cache = {}       # chunk -> rows dict (parent-side lookups, absorb)
         self._fa_cache = {}         # chunk -> reads dict
         self._fa_pending = None     # (chunk, {(index, side): text}) of the chunk being evaluated
+
+    def __getstate__(self):
+        # what a worker needs (shard dir + sidecar headers); not the parent's locus map / caches
+        return {"dir": self.dir, "have": self.have, "headers": self.headers, "n_rows": self.n_rows,
+                "locus_chunk": {}, "_rows_cache": {}, "_fa_cache": {}, "_fa_pending": None}
 
     def build(self, input_files, insertions, by_id, threads):
         import shutil

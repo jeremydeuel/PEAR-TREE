@@ -417,3 +417,26 @@ def test_shard_store_matches_memory(tmp_path, monkeypatch, threads, gate):
     assert bool(mem[2]) == gate                          # single-fragment loci dropped only by the gate
     assert shard == mem
     assert not os.path.exists(tmp_path / "shards")       # cleaned up
+
+
+def test_shard_store_early_pool_matches_memory(tmp_path):
+    """The production path: the pool is forked BEFORE apply_evidence (combine forks it while small),
+    so workers build their own tools and receive only their chunk's insertions (pickled)."""
+    files, specs = _shard_fixture(tmp_path)
+    cfg = {"min_independent_fragments": 2, "merge_tolerance_bp": 8, "indel_aware_consensus": True}
+    pool = ev.make_evidence_pool(2)
+    try:
+        out = {}
+        for tag, sd, p in (("mem", None, None), ("pool", str(tmp_path / "sh"), pool)):
+            ins = _shard_insertions(specs)
+            kept, records, failed, stats = apply_evidence(ins, files, cfg, threads=2, shard_dir=sd, pool=p)
+            tsv, fa = str(tmp_path / f"{tag}.tsv.gz"), str(tmp_path / f"{tag}.fa.gz")
+            ev.write_evidence_outputs(records, [i.name for i in kept] + sorted(failed), tsv, fa,
+                                      store=stats["store"], preload_from=len(kept))
+            stats["store"].cleanup()
+            out[tag] = ([(i.name, str(i.left_clipped), str(i.right_clipped)) for i in kept],
+                        gzip.open(tsv, "rb").read(), gzip.open(fa, "rb").read())
+    finally:
+        pool.close()
+        pool.join()
+    assert out["pool"] == out["mem"]

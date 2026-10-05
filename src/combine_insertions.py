@@ -113,6 +113,12 @@ def _evidence_paths(combined_insertions):
 def combine_insertions(input_files, insertions_genotyping_file, combined_insertions, insertions_fasta, insertion_bam, threads,
                        evidence_tsv=None, reads_fa=None):
 
+    # TPRT evidence workers are forked NOW, while this process is small: forked later, every worker
+    # gradually copies the full combine heap (PD37590: 8 workers > 60 GB). Only with sidecars.
+    ev_pool = None
+    if threads > 1 and any(os.path.exists(f + ".evidence.tsv.gz") for f in input_files):
+        from combine_insertions_evidence import make_evidence_pool
+        ev_pool = make_evidence_pool(threads)
     all_insertions = []
     accepted_files = []
     j_cutoff = 0
@@ -153,8 +159,15 @@ def combine_insertions(input_files, insertions_genotyping_file, combined_inserti
         # bounded memory + `threads` workers: rows are routed into per-chunk shards next to
         # the outputs and evaluated chunk by chunk (removed after the evidence outputs are written)
         shard_dir = _evidence_paths(combined_insertions)[0][:-len(".insertions.evidence.tsv.gz")] + ".evidence_shards"
-        evidence = apply_evidence(insertions, accepted_files, CONFIG['combine_insertions'],
-                                  breakpoints=breakpoints, threads=threads, shard_dir=shard_dir)
+        try:
+            evidence = apply_evidence(insertions, accepted_files, CONFIG['combine_insertions'],
+                                      breakpoints=breakpoints, threads=threads, shard_dir=shard_dir,
+                                      pool=ev_pool)
+        finally:
+            if ev_pool is not None:
+                ev_pool.close()
+                ev_pool.join()
+                ev_pool = None
     if evidence is not None:
         insertions, evidence_records, evidence_failed, _ = evidence
     print(f"writing summarised insertions fasta file {insertions_fasta}")
