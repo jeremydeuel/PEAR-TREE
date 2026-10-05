@@ -51,11 +51,16 @@ cargo --version
 
 cargo build --release --manifest-path rust/peartree-discovery/Cargo.toml
 cargo build --release --manifest-path rust/peartree-genotype/Cargo.toml
+# combine_insertions port (only used with COMBINE_IMPL=rust; the python combine does not need
+# it, so a failure here must not block the discovery/genotype builds above)
+cargo build --release --manifest-path rust/peartree-combine/Cargo.toml \
+    || echo "WARNING: rust/peartree-combine failed to build — COMBINE_IMPL=rust unavailable (python combine unaffected)" >&2
 
 echo
 echo "built:"
 ls -la rust/peartree-discovery/target/release/peartree-discovery
 ls -la rust/peartree-genotype/target/release/peartree-genotype
+ls -la rust/peartree-combine/target/release/peartree-combine 2>/dev/null || true
 
 # Report which OPTIONAL, CONFIG-GATED features this binary actually implements. A stale binary
 # does not announce itself: config.rs tolerates unknown keys by design, so an old build fed a

@@ -1,8 +1,6 @@
 //! PEAR-TREE combine_insertions (Rust port). See SPEC.md (behaviour, formats) and PLAN.md
 //! (work packages, memory/parallelism design).
 
-// skeleton phase: todo!() bodies leave parameters unused. Remove at integration (PLAN.md WP7).
-#![allow(unused_variables, unused_imports, dead_code)]
 
 pub mod align;
 pub mod config;

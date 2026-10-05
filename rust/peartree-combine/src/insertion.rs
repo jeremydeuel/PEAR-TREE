@@ -102,7 +102,7 @@ pub fn parse_discovery_file(path: &Path, file: FileId, contigs: &Interner) -> Re
         }
 
         // the three payload lines
-        let mut next_line = |rd: &mut BufReader<MultiGzDecoder<BufReader<File>>>, buf: &mut Vec<u8>| -> Result<(), String> {
+        let next_line = |rd: &mut BufReader<MultiGzDecoder<BufReader<File>>>, buf: &mut Vec<u8>| -> Result<(), String> {
             buf.clear();
             rd.read_until(b'\n', buf).map_err(|e| format!("read error: {e}"))?;
             Ok(())

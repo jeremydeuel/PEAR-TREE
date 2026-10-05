@@ -137,6 +137,7 @@ pub(crate) mod mm {
 
     /// One raw minimap2 hit.
     #[derive(Clone, Copy, Debug)]
+    #[allow(dead_code)] // r_st/r_en/blen: only read by the mappy parity dump (tests)
     pub struct RawHit {
         pub rid: i32,
         pub rev: bool,

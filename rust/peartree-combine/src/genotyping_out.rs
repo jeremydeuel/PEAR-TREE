@@ -158,43 +158,6 @@ mod tests {
         }
     }
 
-    /// python `sequence_matching_score` (quality-weighted for QualSeq, 1 for plain), local copy so
-    /// this test does not depend on seq.rs being implemented.
-    fn sms(seqs: &[ScoreSeq]) -> f64 {
-        let len = |s: &ScoreSeq| match s {
-            ScoreSeq::Qual(q) => q.len(),
-            ScoreSeq::Plain(p) => p.len(),
-        };
-        let min_len = seqs.iter().map(len).min().unwrap().min(24);
-        let mut score: i64 = 0;
-        for i in 0..min_len {
-            let mut bases = [0i64; 5];
-            for s in seqs {
-                let (b, w) = match s {
-                    ScoreSeq::Qual(q) => (q.seq[i], q.qual[i] as i64),
-                    ScoreSeq::Plain(p) => (p[i], 1),
-                };
-                let k = match b.to_ascii_uppercase() {
-                    b'A' => 0,
-                    b'T' => 1,
-                    b'G' => 2,
-                    b'C' => 3,
-                    b'N' => 4,
-                    x => panic!("KeyError {x}"),
-                };
-                bases[k] += w;
-            }
-            let sum: i64 = bases.iter().sum();
-            let max = *bases.iter().max().unwrap();
-            if sum > 0 && (max as f64) / (sum as f64) > 0.5 {
-                score += 1;
-            } else {
-                score -= 2;
-            }
-        }
-        score as f64 / min_len as f64
-    }
-
     /// Output vs the python loop (combine_insertions.py:298-365 executed verbatim on the same
     /// synthetic insertions; generator `tests/data/genotyping_cases_gen.py`): 399 insertions
     /// covering every exclusion branch.
@@ -237,7 +200,7 @@ mod tests {
             });
         }
         let filter: FxHashSet<String> = v["filter"].as_array().unwrap().iter().map(|s| s.as_str().unwrap().to_string()).collect();
-        let got = genotyping_text_with(&ins, &filter, &contigs, &reference, max_bases, &sms);
+        let got = genotyping_text_with(&ins, &filter, &contigs, &reference, max_bases, &sequence_matching_score);
         let want = v["expected"].as_str().unwrap();
         assert_eq!(String::from_utf8(got).unwrap(), want);
     }

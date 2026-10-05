@@ -609,6 +609,39 @@ mod tests {
         assert!(why == "no_reference" || why == "overhang_too_short" || why == "bad_record", "{why}");
     }
 
+    /// An in-memory reference (coordinates only; the contig name is ignored).
+    struct Mem(Vec<u8>);
+    impl RefFetch for Mem {
+        fn fetch(&self, _seqname: &str, start: i64, end: i64) -> Vec<u8> {
+            let (s, e) = (start.max(0) as usize, (end.max(0) as usize).min(self.0.len()));
+            if s >= e { Vec::new() } else { self.0[s..e].to_vec() }
+        }
+    }
+
+    /// Step 4 of `_short_overhang_check`: a homopolymer overhang continuing a reference
+    /// homopolymer at the junction is rejected; the same overhang next to a non-A reference passes.
+    /// Expected values from python `_short_overhang_check` with the same inputs.
+    #[test]
+    fn short_overhang_ref_homopolymer() {
+        let fx = p3_fixture::checked_in();
+        let cfg = p3_fixture::config(&serde_json::json!({}));
+        let mut r = fx.junctions.iter().flat_map(|j| j.2.iter()).find(|r| r.role == Role::Short && r.mapped(&fx.contigs)).unwrap().clone();
+        r.pos = 0;
+        r.cigar = "20M8S".into();
+        r.clip_at = 20;
+        r.seq = b"CGTGCGTGCGTGCGTGCGTGAAAAAAAA".to_vec().into_boxed_slice();
+        let cons = b"AAAAAAAAAA";
+        let tail = b"GCGTCCGTGCGTCCGTGCGTCCGT";
+        // RIGHT side: ref_in = reverse(ref[14:20]); an A-tract there -> ref_homopolymer
+        let mut a = b"CGTGCGTGCGTGCG".to_vec();
+        a.extend_from_slice(b"AAAAAA");
+        a.extend_from_slice(tail);
+        assert_eq!(short_overhang_check(&r, Side::Right, cons, true, &cfg, Some(&Mem(a)), &fx.contigs), "ref_homopolymer");
+        let mut b = b"CGTGCGTGCGTGCGTGCGTG".to_vec();
+        b.extend_from_slice(tail);
+        assert_eq!(short_overhang_check(&r, Side::Right, cons, true, &cfg, Some(&Mem(b)), &fx.contigs), "");
+    }
+
     #[test]
     fn tsv_empty_record() {
         let rec = JunctionRecord {

@@ -79,6 +79,32 @@ pub fn chunk_ranges(n: usize, threads: usize) -> Vec<(usize, usize)> {
     }
 }
 
+/// Member loci per chunk above which a python chunk is split (memory bound: a chunk's parsed
+/// rows are held while it is judged, `threads` chunks at a time; rows scale with members).
+pub const MAX_CHUNK_MEMBERS: usize = 2000;
+
+/// `chunk_ranges`, then every chunk holding more than `max_members` member loci split into
+/// consecutive pieces of at most `max_members` (a single insertion is never split). Outputs
+/// never depend on the chunking; this only bounds the rows in flight as sidecars grow.
+pub fn chunk_ranges_bounded(members: &[Vec<Member>], threads: usize, max_members: usize) -> Vec<(usize, usize)> {
+    let mut out = Vec::new();
+    for (lo, hi) in chunk_ranges(members.len(), threads) {
+        let mut start = lo;
+        let mut acc = 0usize;
+        for (k, ms) in members[lo..hi].iter().enumerate() {
+            let k = lo + k;
+            if acc > 0 && acc + ms.len() > max_members {
+                out.push((start, k));
+                start = k;
+                acc = 0;
+            }
+            acc += ms.len();
+        }
+        out.push((start, hi));
+    }
+    out
+}
+
 /// Rows of one chunk, keyed by (member, side), each list in sidecar order.
 #[derive(Default)]
 pub struct ChunkRows {
@@ -171,6 +197,15 @@ pub struct Store {
     headers: OnceLock<Result<Vec<SidecarHeader>, String>>,
     reads: Reads,
     lru: Mutex<VecDeque<(usize, Arc<ChunkRows>)>>,
+    /// per-member row index for absorb lookups (`prefetch_members`); None = chunk LRU only
+    member_ix: Option<MemberIx>,
+}
+
+/// `prefetch_members` result: every wanted member's routed lines (raw, "\n"-terminated, in
+/// chunk-line order) as one raw-deflate blob in `lookup.bin`. `len == 0` = member has no rows.
+struct MemberIx {
+    fh: File,
+    map: FxHashMap<Member, (u64, u32, u32)>,
 }
 
 impl Store {
@@ -178,13 +213,13 @@ impl Store {
     /// `insertions[k]`. Returns the store and the chunks as half-open insertion index ranges
     /// (any chunking is allowed: outputs never depend on it). Routing runs on the current rayon
     /// pool (one task per sidecar).
-    pub fn build(dir: &Path, accepted: &[FileId], insertions: &[Insertion], members: &[Vec<Member>], ctx: &Ctx) -> Result<(Store, Vec<(usize, usize)>), String> {
+    pub fn build(dir: &Path, accepted: &[FileId], _insertions: &[Insertion], members: &[Vec<Member>], ctx: &Ctx) -> Result<(Store, Vec<(usize, usize)>), String> {
         let sidecars: Vec<(FileId, PathBuf)> = accepted
             .iter()
             .map(|&f| (f, sidecar_path(&ctx.files[f as usize].path)))
             .filter(|(_, p)| p.exists())
             .collect();
-        let chunks = chunk_ranges(insertions.len(), ctx.threads);
+        let chunks = chunk_ranges_bounded(members, ctx.threads, MAX_CHUNK_MEMBERS);
         let st = Store::build_from(dir, &sidecars, members, &chunks, &ctx.contigs, FLUSH_BYTES)?;
         Ok((st, chunks))
     }
@@ -247,6 +282,7 @@ impl Store {
                 base: (0..n_chunks).map(|_| OnceLock::new()).collect(),
             },
             lru: Mutex::new(VecDeque::new()),
+            member_ix: None,
         })
     }
 
@@ -322,6 +358,11 @@ impl Store {
         let Some(&c) = self.route.chunks(m).first() else {
             return Vec::new();
         };
+        if let Some(ix) = &self.member_ix {
+            if let Some(&(off, len, fi)) = ix.map.get(m) {
+                return self.lookup_indexed(ix, off, len, fi as usize, m, side, contigs).unwrap_or_else(|e| panic!("evidence store lookup: {e}"));
+            }
+        }
         let c = c as usize;
         let rows = {
             let mut lru = self.lru.lock().unwrap();
@@ -337,6 +378,93 @@ impl Store {
             }
         };
         rows.get(m, side).to_vec()
+    }
+
+    /// Index the rows of `wanted` members for `lookup` (absorb_one_sided): one parallel pass
+    /// over all chunks (on the current rayon pool) writes each wanted member's lines -- those
+    /// of the first chunk listing it, exactly what the chunk LRU path would parse -- as one
+    /// compressed blob to `lookup.bin`. A lookup then reads and parses only that member's
+    /// rows instead of a whole chunk (the LRU thrashes: absorb visits members in name order,
+    /// not chunk order). Rows and their order are those of `chunk_rows(c).get(m, side)`.
+    pub fn prefetch_members(&mut self, wanted: &rustc_hash::FxHashSet<Member>, contigs: &Interner) -> Result<(), String> {
+        let headers = self.headers()?.clone();
+        let path = self.dir.join("lookup.bin");
+        let wf = OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .read(true)
+            .write(true)
+            .open(&path)
+            .map_err(|e| format!("cannot create {}: {e}", path.display()))?;
+        let w = Mutex::new((wf, 0u64));
+        let this = &*self;
+        let parts: Vec<Vec<(Member, u64, u32, u32)>> = (0..this.n_chunks)
+            .into_par_iter()
+            .map(|c| -> Result<Vec<(Member, u64, u32, u32)>, String> {
+                let mut per: FxHashMap<Member, (u32, Vec<u8>)> = FxHashMap::default();
+                let mut order: Vec<Member> = Vec::new();
+                this.for_each_chunk_line(c, |fi, line| {
+                    let s = std::str::from_utf8(line).map_err(|e| format!("sidecar row not UTF-8: {e}"))?;
+                    if let Some(r) = EvidenceRow::parse(s, &headers[fi], this.files[fi].file, contigs)? {
+                        let m = (r.file, r.locus);
+                        if wanted.contains(&m) && this.route.chunks(&m).first() == Some(&(c as u32)) {
+                            let e = per.entry(m).or_insert_with(|| {
+                                order.push(m);
+                                (fi as u32, Vec::new())
+                            });
+                            e.1.extend_from_slice(line);
+                            e.1.push(b'\n');
+                        }
+                    }
+                    Ok(())
+                })?;
+                let mut blobs = Vec::with_capacity(order.len());
+                for m in order {
+                    let (fi, raw) = per.remove(&m).unwrap();
+                    let mut enc = DeflateEncoder::new(Vec::new(), Compression::fast());
+                    enc.write_all(&raw).map_err(|e| e.to_string())?;
+                    blobs.push((m, fi, enc.finish().map_err(|e| e.to_string())?));
+                }
+                let mut g = w.lock().unwrap();
+                let mut out = Vec::with_capacity(blobs.len());
+                for (m, fi, b) in blobs {
+                    g.0.write_all(&b).map_err(|e| format!("write {}: {e}", path.display()))?;
+                    out.push((m, g.1, b.len() as u32, fi));
+                    g.1 += b.len() as u64;
+                }
+                Ok(out)
+            })
+            .collect::<Result<_, String>>()?;
+        let (mut fh, _) = w.into_inner().unwrap();
+        fh.flush().map_err(|e| format!("write {}: {e}", path.display()))?;
+        let mut map: FxHashMap<Member, (u64, u32, u32)> = wanted.iter().map(|m| (*m, (0, 0, 0))).collect();
+        for (m, off, len, fi) in parts.into_iter().flatten() {
+            map.insert(m, (off, len, fi));
+        }
+        self.member_ix = Some(MemberIx { fh, map });
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn lookup_indexed(&self, ix: &MemberIx, off: u64, len: u32, fi: usize, m: &Member, side: Side, contigs: &Interner) -> Result<Vec<EvidenceRow>, String> {
+        let mut out = Vec::new();
+        if len == 0 {
+            return Ok(out);
+        }
+        let headers = self.headers()?;
+        let mut comp = vec![0u8; len as usize];
+        ix.fh.read_exact_at(&mut comp, off).map_err(|e| format!("read lookup.bin: {e}"))?;
+        let mut raw = Vec::new();
+        DeflateDecoder::new(&comp[..]).read_to_end(&mut raw).map_err(|e| format!("inflate lookup.bin: {e}"))?;
+        for line in raw.split(|&b| b == b'\n').filter(|l| !l.is_empty()) {
+            let s = std::str::from_utf8(line).map_err(|e| format!("sidecar row not UTF-8: {e}"))?;
+            if let Some(r) = EvidenceRow::parse(s, &headers[fi], self.files[fi].file, contigs)? {
+                if (r.file, r.locus) == *m && r.side == side {
+                    out.push(r);
+                }
+            }
+        }
+        Ok(out)
     }
 
     /// store a record's rendered reads text; thread-safe
@@ -383,6 +511,7 @@ impl Store {
 
     pub fn cleanup(&mut self) {
         self.lru.lock().unwrap().clear();
+        self.member_ix = None;
         self.reads.writer.lock().unwrap().0 = None;
         let _ = std::fs::remove_dir_all(&self.dir);
     }
@@ -546,6 +675,15 @@ mod tests {
     }
 
     #[test]
+    fn bounded_chunking_splits_large_chunks() {
+        let m = |n: usize| vec![(0u32, LocusKey::parse("chr1:1-2", &Interner::new()).unwrap()); n];
+        // 10 insertions, threads 1 -> python chunks [0,3) [3,6) [6,9) [9,10)
+        let members: Vec<Vec<Member>> = vec![m(2), m(2), m(2), m(5), m(1), m(1), m(1), m(1), m(1), m(9)];
+        assert_eq!(chunk_ranges_bounded(&members, 1, 100), chunk_ranges(10, 1));
+        assert_eq!(chunk_ranges_bounded(&members, 1, 4), vec![(0, 2), (2, 3), (3, 4), (4, 6), (6, 9), (9, 10)]);
+    }
+
+    #[test]
     fn canonical_tokens() {
         for ok in [&b"120"[..], b"0", b"oneside_5", b"polyA_77", b"disc_9", b"-4"] {
             assert!(canonical_tok(ok).is_some(), "{}", String::from_utf8_lossy(ok));
@@ -680,7 +818,6 @@ mod tests {
 
     /// chunk_rows / lookup parse rows with P3's `EvidenceRow::parse`.
     #[test]
-    #[ignore = "needs P3 evidence/row.rs (SidecarHeader::parse, EvidenceRow::parse)"]
     fn chunk_rows_and_lookup_group_by_member_side() {
         let d = tmpdir("rows");
         let contigs = Interner::new();

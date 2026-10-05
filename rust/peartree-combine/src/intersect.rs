@@ -90,7 +90,7 @@ fn pos_of(i: &Insertion, side: Side) -> i64 {
 /// Input: every accepted record, files in command-line order, records in file order.
 /// Output: surviving insertions in python `full_insertions.values()` order (SPEC.md §3.3), with
 /// `uid` = output index (0..n).
-pub fn intersect_insertions(records: Vec<Insertion>, cfg: &Config, contigs: &Interner, files: &[InputFile]) -> Vec<Insertion> {
+pub fn intersect_insertions(records: Vec<Insertion>, cfg: &Config, contigs: &Interner, _files: &[InputFile]) -> Vec<Insertion> {
     let keep_polya_one_sided = cfg.keep_polya_one_sided;
     let tol = cfg.merge_tolerance_bp;
     let polya_aware = cfg.polya_aware_clip_agreement;

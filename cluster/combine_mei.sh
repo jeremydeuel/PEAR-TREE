@@ -32,6 +32,8 @@
 #   THREADS   combine cores                      (default: 16)
 #   VENV      python venv (NOT in this run dir)  (default: the sibling PEAR-TREE checkout)
 #   ALLOW_MISSING  tolerate N absent discovery files (default: 1 — PD41048b_lo0015)
+#   COMBINE_IMPL   python (default) | rust (rust/peartree-combine, built by cluster/build.sh)
+#   COMBINE_BIN    rust binary (default: rust/peartree-combine/target/release/peartree-combine)
 set -euo pipefail
 cd "$(dirname "$0")/.."
 PT_ROOT="$PWD"
@@ -44,6 +46,13 @@ THREADS="${THREADS:-16}"
 VENV="${VENV:-/lustre/scratch126/casm/teams/team273/users/jd43/PEAR-TREE/venv}"
 PATIENTS="${PATIENTS:-PD34200 PD37449 PD43947 PD41048 PD43974}"
 ALLOW_MISSING="${ALLOW_MISSING:-1}"
+COMBINE_IMPL="${COMBINE_IMPL:-python}"
+COMBINE_BIN="${COMBINE_BIN:-$PT_ROOT/rust/peartree-combine/target/release/peartree-combine}"
+case "$COMBINE_IMPL" in
+    python) ;;
+    rust) [ -x "$COMBINE_BIN" ] || { echo "COMBINE_IMPL=rust but missing: $COMBINE_BIN (run cluster/build.sh)" >&2; exit 1; } ;;
+    *) echo "COMBINE_IMPL must be python or rust, got '$COMBINE_IMPL'" >&2; exit 1 ;;
+esac
 
 FOFN="$FOFNDIR/all.bams.fofn"
 [ -s "$FOFN" ] || { echo "no pooled fofn: $FOFN (run cluster/build_fofn.sh)" >&2; exit 1; }
@@ -91,8 +100,14 @@ for P in $PATIENTS; do
 done
 
 echo "combining ${#files[@]} colonies into one contract -> $OUTDIR/$STEM"
-"$VENV/bin/python" "$PT_ROOT/src/main.py" --step combine_insertions \
-    --discovery_files "${files[@]}" --out "$OUTDIR/$STEM" --threads "$THREADS"
+if [ "$COMBINE_IMPL" = rust ]; then
+    echo "combine_insertions: rust ($COMBINE_BIN), config $PT_ROOT/src/config.py"
+    PEARTREE_PYTHON="$VENV/bin/python" "$COMBINE_BIN" --step combine_insertions --config "$PT_ROOT/src/config.py" \
+        --discovery_files "${files[@]}" --out "$OUTDIR/$STEM" --threads "$THREADS"
+else
+    "$VENV/bin/python" "$PT_ROOT/src/main.py" --step combine_insertions \
+        --discovery_files "${files[@]}" --out "$OUTDIR/$STEM" --threads "$THREADS"
+fi
 
 [ -s "$CONTRACT" ] || { echo "combine_insertions produced no $CONTRACT" >&2; exit 1; }
 echo "contract: $CONTRACT ($(zcat "$CONTRACT" | grep -c '^>') loci) over ${#files[@]} colonies"

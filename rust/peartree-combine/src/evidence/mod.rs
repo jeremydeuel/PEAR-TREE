@@ -467,80 +467,148 @@ impl EvidenceState {
         // python sorted(key=(-len(files), name)) -- stable
         one.sort_by(|&a, &b| insertions[b].files.len().cmp(&insertions[a].files.len()).then_with(|| names[a].cmp(&names[b])));
         let index = AbsorbIndex::new(&insertions);
-        let mut n_abs = 0usize;
-        for xi in one {
-            if !alive[xi] {
+        // window[k] = every candidate target of one[k] (alive or not -- a static superset of
+        // what `index.target` can return). Everything processing one[k] reads or writes is
+        // one[k] itself, its window, and the shared `records` map.
+        let windows: Vec<Vec<usize>> = one
+            .iter()
+            .map(|&xi| {
+                let x = &insertions[xi];
+                let side = x.open_side_eff().expect("one-sided").other();
+                let (Some(pos), Some(v)) = (x.junction(side), index.by.get(&(x.contig, side))) else { return Vec::new() };
+                let start = v.partition_point(|&(p, _)| p < pos - tol);
+                v[start..].iter().take_while(|&&(p, _)| p <= pos + tol).map(|&(_, i)| i).filter(|&i| i != xi).collect()
+            })
+            .collect();
+        // index the sidecar rows of every member a re-evaluation can look up
+        let mut wanted: FxHashSet<Member> = FxHashSet::default();
+        for (k, &xi) in one.iter().enumerate() {
+            if windows[k].is_empty() {
                 continue;
             }
-            let x = &insertions[xi];
-            let side = x.open_side_eff().expect("one-sided").other();
-            let Some(pos) = x.junction(side) else { continue };
-            let Some(ti) = index.target(xi, x.contig, side, pos, tol, &alive, &one_sided, &names) else { continue };
-            let xc: Option<Box<[u8]>> = x.clipped(side).map(|q| q.seq.clone());
-            let tc: Option<Box<[u8]>> = insertions[ti].clipped(side).map(|q| q.seq.clone());
-            if let (Some(xc), Some(tc)) = (&xc, &tc) {
-                if !crate::seq::clips_agree(&[&tc[..], &xc[..]], 0.6, 8, 6) {
+            wanted.extend(self.members[insertions[xi].uid as usize].iter().copied());
+            for &i in &windows[k] {
+                wanted.extend(self.members[insertions[i].uid as usize].iter().copied());
+            }
+        }
+        let pool = rayon::ThreadPoolBuilder::new().num_threads(ctx.threads.max(1)).build().expect("thread pool");
+        if !wanted.is_empty() {
+            let store = &mut self.store;
+            if let Err(e) = pool.install(|| store.prefetch_members(&wanted, &ctx.contigs)) {
+                panic!("evidence store: {e}");
+            }
+        }
+        drop(wanted);
+        // Sequential semantics, parallel re-evaluation: consecutive one-sided loci (in python
+        // order) whose {x} + window sets are pairwise disjoint touch disjoint state, so a batch
+        // of them is decided in order (target choice, clip agreement, member merge), their
+        // re-evaluations run in parallel, and the results are applied in order -- identical to
+        // the one-at-a-time loop for any thread count.
+        const MAX_BATCH: usize = 1024;
+        let mut n_abs = 0usize;
+        let mut k = 0usize;
+        let mut used: FxHashSet<usize> = FxHashSet::default();
+        while k < one.len() {
+            used.clear();
+            let k0 = k;
+            while k < one.len() && k - k0 < MAX_BATCH {
+                let xi = one[k];
+                if used.contains(&xi) || windows[k].iter().any(|i| used.contains(i)) {
+                    break;
+                }
+                used.insert(xi);
+                used.extend(windows[k].iter().copied());
+                k += 1;
+            }
+            // phase A (in order): decide + merge
+            let mut jobs: Vec<(usize, usize, Side)> = Vec::new();
+            for &xi in &one[k0..k] {
+                if !alive[xi] {
                     continue;
                 }
-            }
-            let x_files = x.files.clone();
-            let xu = x.uid as usize;
-            let tu = insertions[ti].uid as usize;
-            let xm = self.members[xu].clone();
-            // members[t] = dict.fromkeys(members[t] + members[x])
-            let old: FxHashSet<Member> = self.members[tu].iter().copied().collect();
-            let mut seen = old.clone();
-            for m in &xm {
-                if seen.insert(*m) {
-                    self.members[tu].push(*m);
+                let x = &insertions[xi];
+                let side = x.open_side_eff().expect("one-sided").other();
+                let Some(pos) = x.junction(side) else { continue };
+                let Some(ti) = index.target(xi, x.contig, side, pos, tol, &alive, &one_sided, &names) else { continue };
+                let xc: Option<Box<[u8]>> = x.clipped(side).map(|q| q.seq.clone());
+                let tc: Option<Box<[u8]>> = insertions[ti].clipped(side).map(|q| q.seq.clone());
+                if let (Some(xc), Some(tc)) = (&xc, &tc) {
+                    if !crate::seq::clips_agree(&[&tc[..], &xc[..]], 0.6, 8, 6) {
+                        continue;
+                    }
                 }
-            }
-            let t = &mut insertions[ti];
-            // ms = dict(member_sides or {}); ms[m] = (side,) for x's members not previously in t
-            let mut ms: Vec<(Member, SideSet)> = t.member_sides.take().unwrap_or_default();
-            let mut pos_of: FxHashMap<Member, usize> = ms.iter().enumerate().map(|(i, (m, _))| (*m, i)).collect();
-            for m in &xm {
-                if !old.contains(m) {
-                    match pos_of.get(m) {
-                        Some(&i) => ms[i].1 = SideSet::only(side),
-                        None => {
-                            pos_of.insert(*m, ms.len());
-                            ms.push((*m, SideSet::only(side)));
+                let x_files = x.files.clone();
+                let xu = x.uid as usize;
+                let tu = insertions[ti].uid as usize;
+                let xm = self.members[xu].clone();
+                // members[t] = dict.fromkeys(members[t] + members[x])
+                let old: FxHashSet<Member> = self.members[tu].iter().copied().collect();
+                let mut seen = old.clone();
+                for m in &xm {
+                    if seen.insert(*m) {
+                        self.members[tu].push(*m);
+                    }
+                }
+                let t = &mut insertions[ti];
+                // ms = dict(member_sides or {}); ms[m] = (side,) for x's members not previously in t
+                let mut ms: Vec<(Member, SideSet)> = t.member_sides.take().unwrap_or_default();
+                let mut pos_of: FxHashMap<Member, usize> = ms.iter().enumerate().map(|(i, (m, _))| (*m, i)).collect();
+                for m in &xm {
+                    if !old.contains(m) {
+                        match pos_of.get(m) {
+                            Some(&i) => ms[i].1 = SideSet::only(side),
+                            None => {
+                                pos_of.insert(*m, ms.len());
+                                ms.push((*m, SideSet::only(side)));
+                            }
                         }
                     }
                 }
+                t.member_sides = Some(ms);
+                // t.files + [f for f in x.files if f not in t.files] (against the ORIGINAL t.files)
+                let orig: FxHashSet<FileId> = t.files.iter().copied().collect();
+                t.files.extend(x_files.iter().copied().filter(|f| !orig.contains(f)));
+                jobs.push((xi, ti, side));
             }
-            t.member_sides = Some(ms);
-            // t.files + [f for f in x.files if f not in t.files] (against the ORIGINAL t.files)
-            let orig: FxHashSet<FileId> = t.files.iter().copied().collect();
-            t.files.extend(x_files.iter().copied().filter(|f| !orig.contains(f)));
+            // phase B (parallel): re-evaluate each merged target's junction
             let store = &self.store;
-            let new = evaluate(t, &self.members[tu], side, ctx, &mut |m, s, out| out.extend(store.lookup(m, s, &ctx.contigs)));
-            let mut recs = self.recmap[tu].take().unwrap_or_default();
-            // python replaces the record of `side` (one per side) with `new`; `new` itself
-            // still feeds _replace_clips when t had no such record (not reachable: t's `side`
-            // is a real junction)
-            let mut unplaced = None;
-            let slot = recs.iter().position(|r| r.side == side);
-            match slot {
-                Some(i) => recs[i] = new,
-                None => unplaced = Some(new),
+            let members = &self.members;
+            let ins_ref = &insertions;
+            let eval = |&(_, ti, side): &(usize, usize, Side)| {
+                let t = &ins_ref[ti];
+                evaluate(t, &members[t.uid as usize], side, ctx, &mut |m, s, out| out.extend(store.lookup(m, s, &ctx.contigs)))
+            };
+            let news: Vec<JunctionRecord> = if jobs.len() > 1 { pool.install(|| jobs.par_iter().map(eval).collect()) } else { jobs.iter().map(eval).collect() };
+            // phase C (in order): install the records
+            for ((xi, ti, side), new) in jobs.into_iter().zip(news) {
+                let tu = insertions[ti].uid as usize;
+                let t = &mut insertions[ti];
+                let mut recs = self.recmap[tu].take().unwrap_or_default();
+                // python replaces the record of `side` (one per side) with `new`; `new` itself
+                // still feeds _replace_clips when t had no such record (not reachable: t's `side`
+                // is a real junction)
+                let mut unplaced = None;
+                let slot = recs.iter().position(|r| r.side == side);
+                match slot {
+                    Some(i) => recs[i] = new,
+                    None => unplaced = Some(new),
+                }
+                for r in recs.iter_mut() {
+                    r.supported = if (r.n_independent as usize) >= min_ind { Supported::Yes } else { Supported::No };
+                }
+                if cfg.indel_aware_consensus {
+                    let nr = match (slot, &unplaced) {
+                        (Some(i), _) => &recs[i],
+                        (None, Some(u)) => u,
+                        (None, None) => unreachable!(),
+                    };
+                    replace_clips(t, std::slice::from_ref(nr));
+                }
+                self.recmap[tu] = Some(recs);
+                self.records.insert(names[ti].clone(), tu as u32);
+                alive[xi] = false;
+                n_abs += 1;
             }
-            for r in recs.iter_mut() {
-                r.supported = if (r.n_independent as usize) >= min_ind { Supported::Yes } else { Supported::No };
-            }
-            if cfg.indel_aware_consensus {
-                let nr = match (slot, &unplaced) {
-                    (Some(i), _) => &recs[i],
-                    (None, Some(u)) => u,
-                    (None, None) => unreachable!(),
-                };
-                replace_clips(t, std::slice::from_ref(nr));
-            }
-            self.recmap[tu] = Some(recs);
-            self.records.insert(names[ti].clone(), tu as u32);
-            alive[xi] = false;
-            n_abs += 1;
         }
         let alive_names: FxHashSet<&str> = (0..n).filter(|&i| alive[i]).map(|i| names[i].as_str()).collect();
         for i in 0..n {
@@ -813,11 +881,4 @@ mod tests {
         }
         let _ = Tok::pos(0);
     }
-
-    /// apply_evidence / absorb need P3 (row parse, evaluate_junction, render_reads), P4
-    /// (aligned_part, filters) and P1 (Config, Genome). Equivalence across thread counts is
-    /// covered by `THREAD_CHECK=1 tests/equiv.sh` at integration.
-    #[test]
-    #[ignore = "needs P1/P3/P4 implementations; covered by tests/equiv.sh (THREAD_CHECK=1) at integration"]
-    fn apply_evidence_thread_invariance() {}
 }

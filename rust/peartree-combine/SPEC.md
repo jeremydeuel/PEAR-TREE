@@ -489,11 +489,11 @@ Sets used only for membership/cardinality (`have`, groups, colonies, filter name
 
 ## 8. Fidelity risks
 
-1. **mappy 2.31 vs minimap2 2.30** (the `minimap2` crate bundles 2.30; the reference venv has
-   mappy 2.31; 2.31 fixed secondary/supplementary flagging and an inversion-alignment OOB). The
-   matcher takes the max-mlen hit over ALL returned hits, so flag changes should not matter, but
-   hit sets could differ in rare cases → affects slippage `_carries_element` and far-pair verdicts.
-   Check the farm venv's `mappy.__version__`; if hits diverge, vendor minimap2 2.31 C sources.
+1. **mappy 2.31 vs minimap2 2.30** — RESOLVED. The `minimap2` crate bundles 2.30, the reference
+   venv and the farm venv have mappy 2.31 (2.31 fixed secondary/supplementary flagging and an
+   inversion-alignment OOB). The matcher takes the max-mlen hit over all returned hits; a
+   hit-for-hit comparison on the fixture's clips gave 616,541 identical hits, and all four
+   `tests/equiv.sh` variants are byte-identical. Re-check if the crate or mappy is upgraded.
 2. edlib — eliminated (same C library, parity-tested).
 3. Neumaier `sum` (Python ≥ 3.12 only). A pre-3.12 interpreter would produce naive sums; the
    reference venv and the farm are 3.12.
