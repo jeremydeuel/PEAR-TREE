@@ -920,9 +920,18 @@ def _reopen_genome():
 def _run_chunks(n_chunks, threads):
     if threads <= 1 or n_chunks <= 1:
         return [_judge_chunk(c) for c in range(n_chunks)]
+    import gc
     import multiprocessing as mp
-    with mp.get_context("fork").Pool(min(threads, n_chunks), initializer=_reopen_genome) as pool:
-        return list(pool.imap(_judge_chunk, range(n_chunks)))
+    # forked workers share the parent's heap copy-on-write; a cyclic-GC pass in a worker writes
+    # to the header of every tracked object and so copies the whole heap into each worker.
+    # freeze() moves everything allocated so far out of the collector's reach.
+    gc.collect()
+    gc.freeze()
+    try:
+        with mp.get_context("fork").Pool(min(threads, n_chunks), initializer=_reopen_genome) as pool:
+            return list(pool.imap(_judge_chunk, range(n_chunks)))
+    finally:
+        gc.unfreeze()
 
 
 def _judge_chunk(c):
