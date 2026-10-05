@@ -342,12 +342,24 @@ impl Insertion {
     /// `left_clipped.revcomp().lower() + left_aligned`. Panics on LEFT_POLYA / LEFT_DISC like
     /// the Python assert.
     pub fn left_consensus(&self) -> QualSeq {
-        todo!("P1: see SPEC.md §2.1 / combine_insertions_insertion.py:101")
+        assert!(
+            !matches!(self.ty, InsType::LeftPolyA | InsType::LeftDisc),
+            "can not extract consensus from left polyA/disc type"
+        );
+        let lc = self.left_clipped.as_ref().expect("left_consensus: no left_clipped");
+        let la = self.left_aligned.as_ref().expect("left_consensus: no left_aligned");
+        lc.revcomp().lower().concat(la)
     }
 
     /// python `right_consensus` (combine_insertions_insertion.py:106):
     /// `right_aligned.revcomp() + right_clipped.lower()`.
     pub fn right_consensus(&self) -> QualSeq {
-        todo!("P1: see SPEC.md §2.1 / combine_insertions_insertion.py:106")
+        assert!(
+            !matches!(self.ty, InsType::RightPolyA | InsType::RightDisc),
+            "can not extract consensus from right polyA/disc type"
+        );
+        let rc = self.right_clipped.as_ref().expect("right_consensus: no right_clipped");
+        let ra = self.right_aligned.as_ref().expect("right_consensus: no right_aligned");
+        ra.revcomp().concat(&rc.lower())
     }
 }
