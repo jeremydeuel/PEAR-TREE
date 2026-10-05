@@ -28,6 +28,9 @@ def main():
     ap.add_argument("--shard", required=True)
     ap.add_argument("--sidecar", required=True, help="any discovery evidence sidecar (for the column header)")
     ap.add_argument("--n", type=int, default=300)
+    ap.add_argument("--pooled", action="store_true",
+                    help="pool each (locus, side) over all colonies, as combine does for a locus found in many "
+                         "colonies, and profile the --n LARGEST pooled junctions (not the first --n)")
     args = ap.parse_args()
     from config import CONFIG
     import combine_insertions_evidence as ev
@@ -43,12 +46,18 @@ def main():
             if len(p) != len(header):
                 continue
             r = ev.EvidenceRow(ev.sample_name(fb), dict(zip(header, p)))
-            key = (fb, r.locus, r.side)
+            key = ("*" if args.pooled else fb, r.locus, r.side)
             if key not in groups:
-                if len(order) >= args.n:
+                if not args.pooled and len(order) >= args.n:
                     continue
                 order.append(key)
             groups[key].append(r)
+    if args.pooled:
+        sz = sorted(len(v) for v in groups.values())
+        print(f"pooled junctions in shard: {len(sz)}; rows/junction median {statistics.median(sz)}, "
+              f"p90 {sz[int(0.9 * (len(sz) - 1))]}, max {sz[-1]}; rows in the top 10%: "
+              f"{sum(sz[int(0.9 * len(sz)):])} of {sum(sz)}")
+        order = sorted(order, key=lambda k: -len(groups[k]))[:args.n]
     times, sizes = [], []
     prof = cProfile.Profile()
     for key in order:
