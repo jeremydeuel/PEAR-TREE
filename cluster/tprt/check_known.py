@@ -107,6 +107,10 @@ def main():
     with Pool(max(1, args.threads)) as pool:
         for path, loci in pool.imap_unordered(fastq_loci, disc_files):
             per_colony[os.path.basename(path)[:-len('.txt.gz')]] = loci
+    samples_tsv = os.path.join(rd, 'samples.tsv')
+    n_listed = sum(1 for _ in open(samples_tsv)) if os.path.exists(samples_tsv) else len(per_colony)
+    n_missing = len(os.listdir(os.path.join(rd, 'missing'))) if os.path.isdir(os.path.join(rd, 'missing')) else 0
+    n_pending = max(0, n_listed - n_missing - len(per_colony))
     contract_path = os.path.join(rd, 'insertions', f'{P}.genotyping.tprt.txt.gz')
     if not os.path.exists(contract_path):
         contract_path = os.path.join(rd, 'insertions', f'{P}.genotyping.txt.gz')
@@ -165,7 +169,9 @@ def main():
         acls = (f"{a.get('class', '')} / {a.get('tprt_call', '') or '-'} (score {a.get('tprt_score', '') or '-'})"
                 if am else ('absent' if ann_header else 'n/a'))
         lab = labels.get(am[0], '') if am else ''
-        stages = [('discovery', bool(disc_car)), ('combined', cm is not None if combined is not None else None),
+        # discovery is pooled: combine takes a locus found in ANY colony, genotyping then types every
+        # colony, so the known carriers matter for genotyping, not for discovery
+        stages = [('discovery', bool(disc_car or disc_other)), ('combined', cm is not None if combined is not None else None),
                   ('contract', ct is not None if contract is not None else None),
                   ('genotyped', not su.startswith('absent') if unf is not None else None),
                   ('final calls', bool(fname) if fin is not None else None),
@@ -174,12 +180,10 @@ def main():
         if lost is None:
             reached = [s for s, ok in stages if ok]
             lost = 'found' if len(reached) == len(stages) else f'pending (reached {reached[-1] if reached else "-"})'
-        if lost == 'discovery':
-            pending = [c for c in car if c not in per_colony]
-            if pending and len(pending) == len(car):
-                lost = 'pending (no carrier discovery file yet)'
-            elif pending:
-                lost = f'discovery so far ({len(pending)} carrier file(s) pending)'
+        if lost == 'discovery' and n_pending:
+            lost = f'not found so far ({n_pending} colonies still in discovery)'
+        elif lost.startswith('pending') and not disc_car and disc_other:
+            lost += ' via non-carrier colony'
 
         def mark(ok):
             return 'n/a' if ok is None else ('✓' if ok else '✗')
@@ -224,7 +228,8 @@ def main():
     out = [f'# {P}{" arm " + args.label if args.label else ""}: known insertions',
            '', f'known set: {args.known}  (tolerance ±{args.tol} bp)', '',
            f'**{n_found}/{len(n_known)} known insertions reach the annotated calls.** '
-           f'Discovery files: {len(per_colony)} colonies.', '',
+           f'Discovery files: {len(per_colony)} colonies ({n_pending} still running). Discovery is pooled: a '
+           f'locus found in any colony goes on to genotyping, which types every colony.', '',
            md_table(['known locus', 'tier', 'element', 'carriers', 'disc carriers', 'disc non-carriers', 'combined',
                      'contract', 'genotyped (unfiltered)', 'final calls', 'annotation', 'phylo', 'lost at / status'], md_rows),
            '', '## Discovery detail', '',
