@@ -173,7 +173,7 @@ CONFIG = {
         'slippage_min_structured': 10, #clip remainder (after the repeat, before the next long homopolymer) shorter than this = nothing but the tract
         'far_pair_strict': True, #L1DEL/L1DUP pairs (gap < -30 / > 40) need element sequence (sense) on the complex clip, poly-A on the other, same element class beyond the tail, >= 2 independent fragments per junction, same colonies at both breakpoints
         'far_pair_split': True, #a failing far pair keeps its poly-A junction as a one-sided locus (absorbed into another colony's call of that junction when there is one); False = drop
-        'evidence_prefilter_early': True, #pooled >= 2-fragment gate as an upper bound BEFORE intersect (merge + dense-region filter see only loci that can pass)
+        'evidence_prefilter_early': False, #(PD37449: useless once discovery needs 2 fragments per colony -- 90 of 294k dropped) pooled >= 2-fragment gate as an upper bound BEFORE intersect (merge + dense-region filter see only loci that can pass)
     },
     'annotate': { #necessary for annotate_v2.py (step 3, optional element classification)
         # NOTE: annotate works in bowtie2_index2 (hs1) space, NOT GRCh38 — so rmsk and

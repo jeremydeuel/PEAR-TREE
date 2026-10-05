@@ -181,6 +181,10 @@ fn one_sided_ok(c: &DiscoveryConfig, b: &Breakpoint) -> bool {
     if c.one_sided_require_polya && !leading_polyt(&b.clipped.seq, c.one_sided_min_polya) {
         return false;
     }
+    // the tail's OTHER boundary must be covered: >= N fragments read through the whole poly-A
+    if c.one_sided_min_spanning_fragments > 0 && b.n_frags_span_polya < c.one_sided_min_spanning_fragments {
+        return false;
+    }
     if is_slippage_clip(b.side, &b.clipped.seq, &b.unclipped.seq, c.slippage_min_ref_run, c.slippage_min_clip_frac, c.slippage_max_period.max(1)) {
         return false;
     }

@@ -42,6 +42,9 @@ pub struct Breakpoint {
     /// (sidecar indexed fetch); -1 when unset or for a synthesised breakpoint.
     pub mref: i32,
     pub mpos: i64,
+    /// distinct fragments whose clip spans the whole poly-A tail into structured sequence
+    /// (`spans_polya`); computed only when `one_sided_min_spanning_fragments` > 0
+    pub n_frags_span_polya: usize,
 }
 
 impl Breakpoint {
@@ -80,6 +83,7 @@ impl Breakpoint {
             flag: 0,
             mref: -1,
             mpos: -1,
+            n_frags_span_polya: 0,
         }
     }
 }
@@ -162,6 +166,51 @@ fn rescue_polya(mut bp: Breakpoint) -> Rescue {
 /// Fragment id of a per-read breakpoint (qname hash). Mates and primary +
 /// supplementary records of one template share it.
 #[inline]
+/// True when an oriented (junction-outward) clip SPANS a poly-A tail: it starts with a T run of
+/// >= `min_polya` (>= 80 % T, sequencing errors tolerated), the run ENDS inside the read (a
+/// 5-base window with <= 1 T), and >= `beyond` bases follow that are structured sequence (no
+/// homopolymer >= 8, >= 3 distinct bases) -- the element's 3' end beyond the tail. A reference
+/// A-tract slippage clip is poly-A to the end of the read and fails.
+pub fn spans_polya(seq: &[u8], min_polya: usize, beyond: usize) -> bool {
+    let up = |b: u8| b.to_ascii_uppercase();
+    let n = min_polya.max(1);
+    if seq.len() < n + beyond || seq[..n].iter().filter(|&&b| up(b) == b'T').count() * 5 < n * 4 {
+        return false;
+    }
+    // end of the run: first position >= n whose next 5 bases hold <= 1 T
+    let mut end = None;
+    let mut j = n;
+    while j + 5 <= seq.len() {
+        if seq[j..j + 5].iter().filter(|&&b| up(b) == b'T').count() <= 1 {
+            end = Some(j);
+            break;
+        }
+        j += 1;
+    }
+    let Some(e) = end else { return false };
+    let rest = &seq[e..];
+    if rest.len() < beyond {
+        return false;
+    }
+    let pre = &rest[..beyond];
+    let mut seen = [false; 4];
+    let (mut run, mut best, mut last) = (0usize, 0usize, 0u8);
+    for &b in pre {
+        let b = up(b);
+        match b {
+            b'A' => seen[0] = true,
+            b'C' => seen[1] = true,
+            b'G' => seen[2] = true,
+            b'T' => seen[3] = true,
+            _ => {}
+        }
+        run = if b == last { run + 1 } else { 1 };
+        last = b;
+        best = best.max(run);
+    }
+    best < 8 && seen.iter().filter(|&&x| x).count() >= 3
+}
+
 fn bp_frag(bp: &Breakpoint) -> u64 {
     frag_hash(bp.query_name.as_deref().unwrap_or("").as_bytes())
 }
@@ -416,6 +465,20 @@ pub fn join(mut breakpoints: Vec<Breakpoint>, cfg: &DiscoveryConfig, evidence_fl
             .collect();
         count_fragments(&support)
     };
+    if cfg.one_sided_loci && cfg.one_sided_min_spanning_fragments > 0 {
+        // one-sided gate input: fragments whose (oriented, junction-outward) clip runs through
+        // the entire poly-A tail into the element, among the reads supporting the consensus
+        let span: Vec<u64> = breakpoints
+            .iter()
+            .filter(|bp| {
+                bp.bp_precise
+                    && (if cfg.evidence_window > 0 { (bp.breakpoint - best_bp).abs() <= cfg.evidence_window } else { bp.breakpoint == best_bp })
+                    && spans_polya(&bp.clipped.seq, cfg.one_sided_min_polya, cfg.one_sided_span_beyond)
+            })
+            .map(bp_frag)
+            .collect();
+        b.n_frags_span_polya = count_fragments(&span);
+    }
     // legacy n_reads double-counts LEFT reads at delta 0; it only feeds the Feature A
     // rescue (off by default), so the legacy value is kept unless in fragment mode.
     b.n_reads = if frag_mode { n_used } else { clipped.len() };
@@ -511,5 +574,26 @@ mod tests {
         let g = vec![bp(CLIP_LEFT, 500, "a", true, false), bp(CLIP_LEFT, 500, "b", true, false)];
         assert_eq!(join(g.clone(), &cfg(None), 2, &mut st).unwrap().n_reads, 4); // legacy x2
         assert_eq!(join(g, &cfg(Some(2)), 2, &mut st).unwrap().n_reads, 2);
+    }
+}
+
+#[cfg(test)]
+mod span_tests {
+    use super::spans_polya;
+
+    #[test]
+    fn spans_polya_needs_the_tail_end_and_structured_sequence_beyond() {
+        // tail of 15 T, then element 3' end
+        assert!(spans_polya(b"TTTTTTTTTTTTTTTGCATTGACCTAGGC", 10, 10));
+        // a sequencing error inside the tail is tolerated
+        assert!(spans_polya(b"TTTTTTTCTTTTTTTGCATTGACCTAGGC", 10, 10));
+        // slippage: poly-T to the end of the read
+        assert!(!spans_polya(b"TTTTTTTTTTTTTTTTTTTTTTTTTTTTT", 10, 10));
+        // the run ends but too little follows
+        assert!(!spans_polya(b"TTTTTTTTTTTTTTTGCATTG", 10, 10));
+        // what follows is low complexity (a second homopolymer), not an element
+        assert!(!spans_polya(b"TTTTTTTTTTTTTTTGGGGGGGGGGGG", 10, 10));
+        // no poly-T start
+        assert!(!spans_polya(b"GCATTGACCTAGGCTTTTTTTTTTTTT", 10, 10));
     }
 }

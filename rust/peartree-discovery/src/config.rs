@@ -315,6 +315,13 @@ pub struct DiscoveryConfig {
     /// Only poly-A/T-tail junctions (stored clip starts with >= `one_sided_min_polya` T).
     pub one_sided_require_polya: bool,
     pub one_sided_min_polya: usize,
+    /// One-sided loci need >= this many distinct fragments whose clipped read SPANS the whole
+    /// poly-A tail: >= `one_sided_min_polya` T, the end of the run, then >= `one_sided_span_beyond`
+    /// bases of structured (non-poly-A, not low-complexity) sequence -- the element's 3' end, i.e.
+    /// the tail's other boundary (Jeremy 2026-10-05). Reference poly-A slippage clips are poly-A
+    /// to the end of the read and never pass. 0 = off (legacy).
+    pub one_sided_min_spanning_fragments: usize,
+    pub one_sided_span_beyond: usize,
     /// SPEC-8b junction spare: a Bp+Bp pair is never SPEC-8b-rejected when either stored
     /// clip's first k junction-proximal bases are structured (no homopolymer >= 8, >= 3
     /// distinct bases). Rescues short-tag orphan transductions / short inserts whose long
@@ -414,6 +421,8 @@ impl Default for DiscoveryConfig {
             one_sided_min_fragments: 2,
             one_sided_require_polya: true,
             one_sided_min_polya: 10,
+            one_sided_min_spanning_fragments: 0,
+            one_sided_span_beyond: 10,
             clip_slippage_junction_spare: 0,
             short_overhang_evidence: false,
             short_overhang_window: 3,
@@ -554,6 +563,8 @@ impl DiscoveryConfig {
             "one_sided_min_fragments" => self.one_sided_min_fragments = parse_num(val)?,
             "one_sided_require_polya" => self.one_sided_require_polya = parse_bool(val)?,
             "one_sided_min_polya" => self.one_sided_min_polya = parse_num(val)?,
+            "one_sided_min_spanning_fragments" => self.one_sided_min_spanning_fragments = parse_num(val)?,
+            "one_sided_span_beyond" => self.one_sided_span_beyond = parse_num(val)?,
             "clip_slippage_junction_spare" => self.clip_slippage_junction_spare = parse_num(val)?,
             "short_overhang_evidence" => self.short_overhang_evidence = parse_bool(val)?,
             "short_overhang_window" => self.short_overhang_window = parse_num(val)?,
