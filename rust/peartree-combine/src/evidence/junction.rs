@@ -586,10 +586,9 @@ mod tests {
         eprintln!("full fixture: {n} evaluations, {used} SHORT fragments used");
     }
 
-    /// End to end with the real indel-aware consensus. NEEDS P2 (consensus.rs): un-ignore once
-    /// `indel_aware_consensus` is implemented.
+    /// End to end with the real indel-aware consensus (P2); the full fixture too when
+    /// `P3_FULL_DIR` is set.
     #[test]
-    #[ignore]
     fn evaluate_junction_matches_python_end_to_end() {
         check_fixture(&p3_fixture::checked_in(), true);
         if let Some(fx) = p3_fixture::full() {
