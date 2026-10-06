@@ -85,5 +85,9 @@ formats; `test/genotype2/score_joint.py` scores the joint step). 2026-10-06, 10 
 called absent 38 → 19, wild-type-control false carriers 0 → 0. Timing ~5 ms/locus (page-cached;
 the legacy binary on the farm was Lustre-latency bound at ~35 ms/locus with two index queries
 per locus; v2 does one early-stopping query per window through a 4 MiB seek-aware buffer).
+First farm run (PD37590, 17,264 loci, 44 colonies): a fixed 4 MiB fill after every buffer miss
+read 31 GB per colony (loci are MiBs apart in a 100 GB BAM) and took 35-45 ms/locus, the legacy
+speed; fills are now adaptive (`io_fill_bytes` 256 KiB after a miss, doubling while a query keeps
+streaming), with byte-identical calls.
 
 `cargo test` (unit tests in every module) must pass; `cargo build --release`.

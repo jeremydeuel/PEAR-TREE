@@ -63,7 +63,7 @@ pub fn run<W: Write>(
 ) -> io::Result<()> {
     // open the alignment first: a bad input (e.g. CRAM with a .2bit reference) fails before the
     // model build
-    let mut src0 = open_source_buffered(input, Some(reference_path), cfg.io_buffer_bytes)?;
+    let mut src0 = open_source_buffered(input, Some(reference_path), cfg.io_buffer_bytes, cfg.io_fill_bytes)?;
     let header = src0.header().clone();
     let t0 = Instant::now();
     let models = build_models(loci, combined, reference_path, cfg)?;
@@ -71,11 +71,12 @@ pub fn run<W: Write>(
     let order = sort_order(&models, |chr| contig_index(&header, chr));
     let chunks = partition(order.len(), threads);
     eprintln!(
-        "models: {} loci built in {:.1}s; processing in header/coordinate order, {} chunk(s), io buffer {} KiB",
+        "models: {} loci built in {:.1}s; processing in header/coordinate order, {} chunk(s), io buffer {} KiB (first fill {} KiB)",
         models.len(),
         t_models.as_secs_f64(),
         chunks.len(),
-        cfg.io_buffer_bytes >> 10
+        cfg.io_buffer_bytes >> 10,
+        cfg.io_fill_bytes >> 10
     );
 
     writer.write_all(OUTPUT_HEADER.as_bytes())?;
@@ -103,7 +104,7 @@ pub fn run<W: Write>(
                 let models = &models;
                 let tag = format!("[t{t}] ");
                 handles.push(scope.spawn(move || -> io::Result<String> {
-                    let mut src = open_source_buffered(input, Some(reference_path), cfg.io_buffer_bytes)?;
+                    let mut src = open_source_buffered(input, Some(reference_path), cfg.io_buffer_bytes, cfg.io_fill_bytes)?;
                     let header = src.header().clone();
                     let mut out = String::new();
                     process_chunk(src.as_mut(), &header, models, idx, cfg, &tag, &mut |row, _| {
@@ -1213,7 +1214,7 @@ mod tests {
         let models: Vec<LocusModel> = contract_names(&contract).iter().map(|n| model_for(n, cfg.flank)).collect();
         let t0 = Instant::now();
         let io0 = io_counters();
-        let mut src = open_source_buffered(&bam, None, cfg.io_buffer_bytes).unwrap();
+        let mut src = open_source_buffered(&bam, None, cfg.io_buffer_bytes, cfg.io_fill_bytes).unwrap();
         let header = src.header().clone();
         let order = sort_order(&models, |c| contig_index(&header, c));
         let mut lines = Vec::new();

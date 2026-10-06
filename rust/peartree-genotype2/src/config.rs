@@ -12,6 +12,7 @@ pub struct Config {
     pub reads_for_high_coverage: i64,
     pub lenient_dedup: bool,
     pub io_buffer_bytes: usize,
+    pub io_fill_bytes: usize,
     pub heartbeat_every: usize,
     // ---- discordant anchors ----
     pub disc_max_tlen: i64,
@@ -52,6 +53,7 @@ impl Default for Config {
             reads_for_high_coverage: 180,
             lenient_dedup: false,
             io_buffer_bytes: 4 << 20,
+            io_fill_bytes: 256 << 10,
             heartbeat_every: 1000,
             disc_max_tlen: 1000,
             disc_span: 300,
@@ -126,6 +128,7 @@ impl Config {
             "reads_for_high_coverage" => self.reads_for_high_coverage = num(val)?,
             "lenient_dedup" => self.lenient_dedup = boolean(val)?,
             "io_buffer_bytes" => self.io_buffer_bytes = num(val)?,
+            "io_fill_bytes" => self.io_fill_bytes = num(val)?,
             "heartbeat_every" => self.heartbeat_every = num(val)?,
             "disc_max_tlen" => self.disc_max_tlen = num(val)?,
             "disc_span" => self.disc_span = num(val)?,

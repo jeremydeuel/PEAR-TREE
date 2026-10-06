@@ -9,11 +9,17 @@
 //!
 //! I/O (SPEC "Driver / I/O"): the legacy genotyper read the file unbuffered — every BGZF
 //! block cost two `read` syscalls, and on Lustre each of those is a network round trip.
-//! Here the `File` sits behind a [`SeekBufReader`] of `io_buffer_bytes` (4 MiB): one large
-//! read fills the buffer, and — unlike `std::io::BufReader`, whose `seek` always discards
-//! the buffer — a seek that lands inside the buffered range is served from memory. Loci are
-//! processed in coordinate order, so consecutive index queries usually seek a short way
-//! forward, i.e. into data that is already buffered.
+//! Here the `File` sits behind a [`SeekBufReader`] of `io_buffer_bytes` (4 MiB) and — unlike
+//! `std::io::BufReader`, whose `seek` always discards the buffer — a seek that lands inside the
+//! buffered range is served from memory. Loci are processed in coordinate order, so consecutive
+//! index queries usually seek a short way forward, i.e. into data that is already buffered.
+//!
+//! Fill size is adaptive (`io_fill_bytes`, 256 KiB): after a seek that missed the buffer the
+//! first read fetches only `io_fill_bytes`, and every further sequential fill doubles up to the
+//! buffer capacity. A 17k-locus contract over a 100 GB BAM puts consecutive loci several MiB
+//! apart, so with a fixed 4 MiB fill almost every window paid a 4 MiB Lustre read for the
+//! ~50 KB it needed (PD37590: 7.7k reads, 31 GB, 12 min per colony — the legacy speed); the
+//! small first fill makes the sparse case cheap and the doubling keeps dense regions streaming.
 //!
 //! BAM queries go through [`BamQuery`], which stops at the first record starting past the region
 //! instead of draining every index chunk (noodles' `Query` does the latter: ~4x the BGZF blocks
@@ -88,12 +94,34 @@ pub struct SeekBufReader<R> {
     filled: usize,
     /// file offset of `buf[0]`; the inner reader's cursor is at `buf_start + filled`
     buf_start: u64,
+    /// bytes the first fill after a buffer miss asks for (<= capacity)
+    fill_min: usize,
+    /// bytes the next fill asks for: `fill_min` after a miss, doubling per sequential fill
+    next_fill: usize,
 }
 
 impl<R: Read + Seek> SeekBufReader<R> {
-    pub fn with_capacity(capacity: usize, mut inner: R) -> io::Result<Self> {
+    /// Fixed fills: every fill asks for `capacity` bytes.
+    #[allow(dead_code)]
+    pub fn with_capacity(capacity: usize, inner: R) -> io::Result<Self> {
+        Self::with_fill(capacity, capacity, inner)
+    }
+
+    /// Adaptive fills: `fill_min` bytes right after a buffer miss, doubling for each further
+    /// sequential fill, never more than `capacity`.
+    pub fn with_fill(capacity: usize, fill_min: usize, mut inner: R) -> io::Result<Self> {
         let buf_start = inner.stream_position()?;
-        Ok(SeekBufReader { inner, buf: vec![0u8; capacity.max(1)].into_boxed_slice(), pos: 0, filled: 0, buf_start })
+        let capacity = capacity.max(1);
+        let fill_min = fill_min.clamp(1, capacity);
+        Ok(SeekBufReader {
+            inner,
+            buf: vec![0u8; capacity].into_boxed_slice(),
+            pos: 0,
+            filled: 0,
+            buf_start,
+            fill_min,
+            next_fill: fill_min,
+        })
     }
 
     #[inline]
@@ -129,8 +157,9 @@ impl<R: Read> BufRead for SeekBufReader<R> {
             self.buf_start += self.filled as u64;
             self.pos = 0;
             self.filled = 0;
+            let want = self.next_fill.min(self.buf.len());
             self.filled = loop {
-                match self.inner.read(&mut self.buf) {
+                match self.inner.read(&mut self.buf[..want]) {
                     Ok(n) => {
                         count_read(n);
                         break n;
@@ -139,6 +168,8 @@ impl<R: Read> BufRead for SeekBufReader<R> {
                     Err(e) => return Err(e),
                 }
             };
+            // sequential consumption: the next fill may be larger (dense region)
+            self.next_fill = want.saturating_mul(2).min(self.buf.len());
         }
         Ok(&self.buf[self.pos..self.filled])
     }
@@ -173,6 +204,7 @@ impl<R: Read + Seek> Seek for SeekBufReader<R> {
                 self.buf_start = p;
                 self.pos = 0;
                 self.filled = 0;
+                self.next_fill = self.fill_min;
                 Ok(p)
             }
             None => {
@@ -181,6 +213,7 @@ impl<R: Read + Seek> Seek for SeekBufReader<R> {
                 self.buf_start = p;
                 self.pos = 0;
                 self.filled = 0;
+                self.next_fill = self.fill_min;
                 Ok(p)
             }
         }
@@ -334,16 +367,22 @@ pub fn is_cram(path: &str) -> bool {
     path.ends_with(".cram")
 }
 
-/// Open `path` as an indexed source with the default 4 MiB read buffer.
+/// Open `path` as an indexed source with the default 4 MiB read buffer / 256 KiB first fill.
 #[allow(dead_code)]
 pub fn open_source(path: &str, reference: Option<&str>) -> io::Result<Box<dyn RegionSource>> {
-    open_source_buffered(path, reference, 4 << 20)
+    open_source_buffered(path, reference, 4 << 20, 256 << 10)
 }
 
-/// Open `path` as an indexed source whose file reads go through a `buffer_bytes` buffer.
+/// Open `path` as an indexed source whose file reads go through a `buffer_bytes` buffer with
+/// adaptive fills starting at `fill_bytes` after every buffer miss (see the module docs).
 /// CRAM (`.cram`) requires a reference FASTA (`.fai`-indexed; a `.2bit` cannot decode CRAM)
 /// whose @SQ names match the CRAM header. BAM needs no reference.
-pub fn open_source_buffered(path: &str, reference: Option<&str>, buffer_bytes: usize) -> io::Result<Box<dyn RegionSource>> {
+pub fn open_source_buffered(
+    path: &str,
+    reference: Option<&str>,
+    buffer_bytes: usize,
+    fill_bytes: usize,
+) -> io::Result<Box<dyn RegionSource>> {
     if is_cram(path) {
         let ref_path = reference.ok_or_else(|| {
             io::Error::new(io::ErrorKind::InvalidInput, "CRAM input requires a reference FASTA (--reference <ref.fa>)")
@@ -366,7 +405,7 @@ pub fn open_source_buffered(path: &str, reference: Option<&str>, buffer_bytes: u
         let fa = fasta::io::indexed_reader::Builder::default().build_from_path(ref_path)?;
         let repository = fasta::Repository::new(fasta::repository::adapters::IndexedReader::new(fa));
         let index = cram::crai::fs::read(with_ext(path, "crai"))?;
-        let file = SeekBufReader::with_capacity(buffer_bytes, File::open(path)?)?;
+        let file = SeekBufReader::with_fill(buffer_bytes, fill_bytes, File::open(path)?)?;
         let mut reader = cram::io::indexed_reader::Builder::default()
             .set_reference_sequence_repository(repository)
             .set_index(index)
@@ -377,7 +416,7 @@ pub fn open_source_buffered(path: &str, reference: Option<&str>, buffer_bytes: u
         let bai = with_ext(path, "bai");
         if Path::new(&bai).exists() {
             let index = bam::bai::fs::read(&bai)?;
-            let file = SeekBufReader::with_capacity(buffer_bytes, File::open(path)?)?;
+            let file = SeekBufReader::with_fill(buffer_bytes, fill_bytes, File::open(path)?)?;
             let mut reader = bam::io::indexed_reader::Builder::default().set_index(index).build_from_reader(file)?;
             let header = reader.read_header()?;
             Ok(Box::new(BamSource { reader, header }))
@@ -399,7 +438,7 @@ mod tests {
     /// (name, flags, start) of every record noodles' own query and our early-stopping
     /// `BamQuery` return for each region — they must be identical, in order.
     fn assert_query_matches_noodles(path: &str, contig: &str, regions: &[(usize, usize)], buffer: usize) -> usize {
-        let mut ours = open_source_buffered(path, None, buffer).unwrap();
+        let mut ours = open_source_buffered(path, None, buffer, (buffer / 4).max(1)).unwrap();
         let mut theirs = bam::io::indexed_reader::Builder::default().build_from_path(path).unwrap();
         let header = theirs.read_header().unwrap();
         let key = |r: &dyn AlignmentRecord| {
@@ -429,6 +468,9 @@ mod tests {
         for buffer in [64, 4 << 20] {
             assert!(assert_query_matches_noodles(bam, "13", &regions, buffer) > 1000);
         }
+        let mut ours = open_source_buffered(bam, None, 4 << 20, 4 << 20).unwrap();
+        let region = Region::new("13", Position::new(32_992_170).unwrap()..=Position::new(32_992_178).unwrap());
+        assert!(ours.query(&region).unwrap().count() > 0);
     }
 
     /// Same check over a larger BAM: `PEARTREE_SMOKE_BAM=<bam> PEARTREE_SMOKE_CONTIG=chr22`.
@@ -510,5 +552,41 @@ mod tests {
         let mut t = Vec::new();
         r.read_to_end(&mut t).unwrap();
         assert_eq!(&t[..], &data[997..]);
+    }
+
+    #[test]
+    fn seekbuf_adaptive_fill_grows_and_resets() {
+        let data: Vec<u8> = (0..4096u32).map(|i| (i % 253) as u8).collect();
+        let inner = Counting { c: Cursor::new(data.clone()), seeks: 0, reads: 0 };
+        let mut r = SeekBufReader::with_fill(1024, 64, inner).unwrap();
+        // first fill after the (implicit) miss: 64 bytes, then 128, 256, ... up to the capacity
+        let mut b = [0u8; 10];
+        r.read_exact(&mut b).unwrap();
+        assert_eq!(r.filled, 64);
+        r.seek(SeekFrom::Start(64)).unwrap(); // end of the buffer: a hit, next fill is sequential
+        r.read_exact(&mut b).unwrap();
+        assert_eq!((r.buf_start, r.filled), (64, 128));
+        assert_eq!(&b[..], &data[64..74]);
+        r.seek(SeekFrom::Start(192)).unwrap();
+        r.read_exact(&mut b).unwrap();
+        assert_eq!((r.buf_start, r.filled), (192, 256));
+        r.seek(SeekFrom::Start(448)).unwrap();
+        r.read_exact(&mut b).unwrap();
+        assert_eq!((r.buf_start, r.filled), (448, 512));
+        r.seek(SeekFrom::Start(960)).unwrap();
+        r.read_exact(&mut b).unwrap();
+        assert_eq!((r.buf_start, r.filled), (960, 1024)); // capped at the capacity
+        // a miss resets the fill to fill_min, data still correct
+        let seeks = r.inner.seeks;
+        r.seek(SeekFrom::Start(3000)).unwrap();
+        r.read_exact(&mut b).unwrap();
+        assert_eq!(r.inner.seeks, seeks + 1);
+        assert_eq!((r.buf_start, r.filled), (3000, 64));
+        assert_eq!(&b[..], &data[3000..3010]);
+        // fixed-fill constructor keeps the old behaviour: every fill asks for the capacity
+        let inner = Counting { c: Cursor::new(data.clone()), seeks: 0, reads: 0 };
+        let mut r = SeekBufReader::with_capacity(256, inner).unwrap();
+        r.read_exact(&mut b).unwrap();
+        assert_eq!(r.filled, 256);
     }
 }

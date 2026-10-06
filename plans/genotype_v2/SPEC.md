@@ -130,7 +130,9 @@ STRINGS and are NOT fed by this file; the joint step below is the per-patient co
 ## Driver / I/O (`source.rs`, `read.rs`, `driver.rs`, owner D)
 
 * `RegionSource` as legacy, but the `File` is wrapped in a `BufReader` with
-  `io_buffer_bytes` (4 MiB) — Lustre latency, not CPU, bounds the legacy binary.
+  `io_buffer_bytes` (4 MiB) — Lustre latency, not CPU, bounds the legacy binary. Fills are
+  adaptive: `io_fill_bytes` (256 KiB) right after a buffer miss, doubling per sequential fill up
+  to the capacity (a fixed 4 MiB fill read 31 GB per PD37590 colony: loci are MiBs apart).
 * Loci sorted by (contig order in header, min(L,R)); processed in that order; **one** indexed
   query per window: the same record stream feeds the depth count (early exit above
   `reads_for_high_coverage`, counting primary mapped non-dup records) and the evidence. Rows
