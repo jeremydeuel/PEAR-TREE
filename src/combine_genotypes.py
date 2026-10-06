@@ -170,7 +170,24 @@ def unfiltered_path(output_file):
     return output_file + '.unfiltered'
 
 
+def refuse_numeric_genotypes(input_files):
+    """This step reads the LEGACY call-string files only. rust/peartree-genotype2 writes numeric
+    per-colony files (header `locus kind status ...`); those go to the genotype2 joint step
+    (`peartree-genotype2 --step joint`, cluster/pipeline.sh phase 4 with GENOTYPE_IMPL=v2)."""
+    for f in input_files:
+        with (gzip.open(f, 'rt') if str(f).endswith('.gz') else open(f)) as fh:
+            head = fh.readline().rstrip('\n').split('\t')
+        if head[:3] == ['locus', 'kind', 'status']:
+            raise SystemExit(
+                f"combine_genotypes: {f} is a numeric peartree-genotype2 file (header "
+                f"'{chr(9).join(head[:4])} ...'), not legacy genotype calls. combine_genotypes only "
+                f"reads the legacy genotyper's output; combine genotype2 files with the joint step "
+                f"(peartree-genotype2 --step joint --tree <P>.tree --genotypes ... --out <P>.joint.tsv "
+                f"--matrix <P>.genotypes.csv.gz; cluster/pipeline.sh does this when GENOTYPE_IMPL=v2).")
+
+
 def collect_genotype(input_files, output_file, threads):
+    refuse_numeric_genotypes(input_files)
     d = None
     pool = Pool(threads)
     results = []
