@@ -14,6 +14,7 @@ pub enum LocusKind {
 }
 
 impl LocusKind {
+    #[allow(dead_code)] // used by the joint step's output and by tests
     pub fn as_str(self) -> &'static str {
         match self {
             LocusKind::Tsd => "TSD",

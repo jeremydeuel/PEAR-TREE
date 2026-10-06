@@ -164,7 +164,6 @@ fn normalised_prior(cfg: &Config) -> [f64; 3] {
 /// `cfg.disc_weight_nats` each towards alt (0 by default). Never returns `high-coverage` /
 /// `error` (the driver decides those before calling).
 // live once driver.rs (owner D) calls it; remove at integration
-#[allow(dead_code)]
 pub fn call_locus(obs: &[ReadObs], n_disc: i64, cfg: &Config) -> Call {
     let (mut n_alt, mut n_ref, mut n_art, mut n_uninf) = (0i64, 0i64, 0i64, 0i64);
     let (mut score_alt, mut score_ref) = (0i64, 0i64);

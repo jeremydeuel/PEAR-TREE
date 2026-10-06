@@ -15,8 +15,6 @@ use crate::config::Config;
 use crate::types::{Hyp, LocusModel, ReadClass, ReadInput, ReadObs, Segment};
 
 /// Realign one read against every segment of `model` and classify it.
-// allow(dead_code): marks the scorer as a live root until the driver (owner D) calls it.
-#[allow(dead_code)]
 pub fn score_read(model: &LocusModel, read: &ReadInput, cfg: &Config) -> ReadObs {
     let n = read.seq.len();
     if n == 0 || model.segments.is_empty() {

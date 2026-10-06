@@ -7,7 +7,6 @@
 //! ignored because the output is uppercase anyway).
 
 // until the driver is wired in, parts of this module are unused in the binary
-#![allow(dead_code)]
 
 use std::collections::HashMap;
 use std::fs::File;

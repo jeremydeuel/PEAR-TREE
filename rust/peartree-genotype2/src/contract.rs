@@ -24,7 +24,6 @@
 //! `flank_*` (it takes the flanks from the genome), only `ins_*`.
 
 // until the driver is wired in, parts of this module are unused in the binary
-#![allow(dead_code)]
 
 use crate::refseq::norm_base;
 use crate::types::{JunctionConsensus, Locus};

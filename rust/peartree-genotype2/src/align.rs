@@ -41,8 +41,7 @@ pub struct Alignment {
 
 /// Align `seq`/`qual` (phred) against `seg_seq`/`seg_qual`. `diagonal` = expected segment index
 /// of read base 0 (None -> unbanded). Implements the banded DP with full fallback.
-// allow(dead_code): marks the scorer as a live root until the driver (owner D) calls it.
-#[allow(dead_code)]
+#[allow(dead_code)] // single-diagonal convenience API (tests); the scorer uses align_multi_opts
 pub fn align(seq: &[u8], qual: &[u8], seg_seq: &[u8], seg_qual: &[u8], diagonal: Option<i64>, cfg: &Config) -> Alignment {
     match diagonal {
         Some(d) => align_multi(seq, qual, seg_seq, seg_qual, &[d], cfg),
@@ -54,6 +53,7 @@ pub fn align(seq: &[u8], qual: &[u8], seg_seq: &[u8], seg_qual: &[u8], diagonal:
 /// duplication matches two genome anchors of one segment): one banded pass per distinct
 /// diagonal, the best kept, then ONE unbanded fallback if the best is still below
 /// `perfect_ll - fallback_slack_nats`. An empty `diagonals` slice means unbanded.
+#[allow(dead_code)] // kept for the single-segment callers / tests
 pub(crate) fn align_multi(seq: &[u8], qual: &[u8], seg_seq: &[u8], seg_qual: &[u8], diagonals: &[i64], cfg: &Config) -> Alignment {
     align_multi_opts(seq, qual, seg_seq, seg_qual, diagonals, cfg, cfg.realign_fallback_full).0
 }

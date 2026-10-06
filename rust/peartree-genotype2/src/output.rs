@@ -8,7 +8,6 @@ use crate::types::{Call, GT_HIGH_COVERAGE};
 
 /// Format one output row (ends with '\n'). `coverage` and `n_disc` come from the driver.
 // live once driver.rs (owner D) calls it; remove at integration
-#[allow(dead_code)]
 pub fn format_row(name: &str, call: &Call, coverage: i64, n_disc: i64) -> String {
     format!(
         "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{:.3}\t{}\t{}\t{}\t{}\t{}\t{}\n",
@@ -34,7 +33,6 @@ pub fn format_row(name: &str, call: &Call, coverage: i64, n_disc: i64) -> String
 /// As in the legacy genotyper, a `high-coverage` row carries the (capped) coverage as its
 /// `score_genotype`; every other count / score is 0, vaf `0.000`, gq 0, PL `0 0 0`.
 // live once driver.rs (owner D) calls it; remove at integration
-#[allow(dead_code)]
 pub fn format_simple_row(name: &str, genotype: &'static str, coverage: i64) -> String {
     let score_genotype = if genotype == GT_HIGH_COVERAGE { coverage } else { 0 };
     format!("{name}\t{genotype}\t{score_genotype}\t0\t{coverage}\t0\t0\t0\t0.000\t0\t0\t0\t0\t0\t0\n")

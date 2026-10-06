@@ -1,7 +1,6 @@
 //! Per-locus haplotype model construction (SPEC "Per-locus haplotype model"). Owner: A.
 
 // until the driver is wired in, parts of this module are unused in the binary
-#![allow(dead_code)]
 
 use crate::config::Config;
 use crate::contract::ContractSides;
