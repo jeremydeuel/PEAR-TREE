@@ -137,3 +137,16 @@ def test_novel_source_tiers_and_polymorphic_fallback():
     assert "polymorphic_L1:PL1_test" in sc.detail
     Lib.polymorphic_l1 = [("chrX", SRC_END + 900, "PL1_downstream")]     # past the tag start
     assert NovelSourceFinder(Lib(), None, None, loc, REGION).find(tag) is None
+
+
+def test_novel_source_rejects_diverged_placement():
+    """A repeat-family member maps (even uniquely) to its closest copy at low identity: that
+    is no placement and must not make the copy's neighbourhood a source."""
+    tag = REGION.fetch("chrX", SRC_END + 374, SRC_END + 774)
+
+    def locator(seq, real=MappyLocator(REGION_FA)):
+        return [(c, s, e, st, mq, 0.80) for c, s, e, st, mq, _ in real(seq)]
+
+    f = NovelSourceFinder(LIB, None, RMSK, locator, REGION)
+    assert f.find(tag) is None
+    assert _finder().find(tag) is not None        # same tag, exact placement: still a source

@@ -32,7 +32,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from compare_arms import (CARRIER, WILDTYPE, Locus, bucket_label, carrier_class, contract_loci,  # noqa: E402
                           fastq_loci, md_table, read_calls, read_fit, read_tsv, write_tsv)
 
-RTE_CLASSES = ('LINE', 'L1', 'SINE', 'Alu', 'SVA', 'ALU', 'RTE_other', 'pseudogene', 'Pseudogene')
+RTE_CLASSES = ('LINE', 'LINE1', 'L1', 'SINE', 'Alu', 'SVA', 'ALU', 'RTE_other', 'pseudogene', 'Pseudogene',
+               'processed_pseudogene')   # annotate_v2 element_class() emits LINE1 / processed_pseudogene
 
 
 def read_known(path):

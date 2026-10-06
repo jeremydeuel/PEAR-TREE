@@ -48,6 +48,8 @@ DEFAULTS = {
     "polya_absorb_max_gap": 20,  # any piece <= this between two same-base poly-A runs is tail
     "polya_absorb_base_frac": 0.6,  # ... or any non-flank piece this rich in the tail base
     "wide_min_bp": 30,           # UNKNOWN pieces >= this are looked up in the wide site window
+    "element_local_min_identity": 0.95,  # an ELEMENT piece this identical to the site window ...
+    "element_local_margin": 0.03,        # ... and this much better than its consensus is REF
 }
 
 
@@ -239,6 +241,7 @@ class Assembler:
         lay = ReadLayout(name, side, role, frag_key, seq, accepted)
         self._mark_local(lay, ctx)
         self._local_is_element(lay)
+        self._element_is_local(lay, ctx)
         self._smooth_polya(lay)
         self._wide_local(lay, ctx)
         return lay
@@ -377,6 +380,36 @@ class Assembler:
                 s.kind, s.target, s.t_st, s.t_en, s.strand = "ELEMENT", name, ts, te, strand
                 s.identity = 1 - ed / max(1, len(piece))
                 s.matches = len(piece) - ed
+
+    def _element_is_local(self, lay, ctx):
+        """An ELEMENT piece that matches the site window (near-)exactly and better than its
+        consensus is the REFERENCE copy next to the breakpoint, not inserted sequence: a read
+        through a reference homopolymer of different length (poly-T slippage) loses its
+        whole-read REF hit (identity < min_ref_identity), and the reference Alu/L1 behind the
+        run then posed as the inserted element (PD37590 chr11:127257706: 'ALU' = the reference
+        Alu after a T23, 100 % to the window, 80-88 % to ALU_Y). Relabelled REF at a read end
+        (junction flank), LOCAL inside the read."""
+        c = self.cfg
+        ref, off = ctx.local_reference()
+        if not ref or len(ref) < 30:
+            return
+        segs = lay.segments
+        for i, s in enumerate(segs):
+            if s.kind != "ELEMENT" or s.qlen < c["min_segment_len"]:
+                continue
+            piece = lay.seq[s.q_st:s.q_en]
+            r = edlib_best(piece, ref, max_frac=1 - c["element_local_min_identity"])
+            if r is None:
+                continue
+            ed, ts, te, strand = r
+            idn = 1 - ed / max(1, len(piece))
+            if idn < c["element_local_min_identity"] or idn < s.identity + c["element_local_margin"]:
+                continue
+            at_end = (i == 0 and s.q_st <= 3) or (i == len(segs) - 1 and s.q_en >= len(lay.seq) - 3)
+            s.kind = "REF" if at_end else "LOCAL"
+            s.target = "site"
+            s.t_st, s.t_en = (ts, te) if off is not None else (-1, -1)
+            s.strand, s.identity, s.matches = strand, idn, len(piece) - ed
 
     @staticmethod
     def _merge_ref_runs(lay, max_gap=20):
@@ -560,13 +593,26 @@ class AssemblyResult:
                     per_class[lib.cons_class.get(s.target, "OTHER")] += s.qlen
         res.class_bp = dict(per_class)
         res.element_bp = sum(per_class.values())
+        term_strand, term = cls._terminal_3p(raw_layouts, lib, asm.cfg)
         if per_cons and res.element_bp >= asm.cfg["min_element_bp"]:
             best_class = max(per_class, key=per_class.get)
             res.consensus = max((n for n in per_cons if lib.cons_class.get(n) == best_class),
                                 key=per_cons.get)
             res.element_class = best_class
-        # --- strand
-        if strand_hint:
+        elif term_strand:
+            # too few element bp overall, but a piece ending AT the consensus 3' terminus next
+            # to the poly-A tail at a breakpoint: that is the element's 3' end (a reference
+            # A-run / slippage has no element terminus), so it establishes the class
+            best = Counter()
+            for sg in term:
+                best[sg.target] += sg.matches
+            res.consensus = max(best, key=best.get)
+            res.element_class = lib.cons_class.get(res.consensus, "")
+        # --- strand: element 3' terminus + tail at a breakpoint > junction-string poly-A >
+        # poly-A in the reads > element pieces next to REF (which can be the inverted 5' part)
+        if term_strand and (not strand_hint or strand_hint[0] != term_strand):
+            res.strand, res.strand_source = term_strand, "element_3p_end"
+        elif strand_hint:
             res.strand, res.strand_source = strand_hint
         else:
             res.strand, res.strand_source = cls._strand_from_segments(raw_layouts, res.consensus, lib)
@@ -578,9 +624,80 @@ class AssemblyResult:
         return res
 
     @staticmethod
+    def _terminal_3p(layouts, lib, cfg):
+        """Element 3' ends at a breakpoint (reference-forward layouts):
+            + element:  ELEMENT(+, ends at the consensus 3' terminus) | A-run | REF
+            - element:  REF | T-run | ELEMENT(-, ends at the consensus 3' terminus)
+        The element piece needs >= terminal_min_bp at >= terminal_min_identity, ending within
+        terminal_tolerance bp of the consensus end; the tail may be impure next to REF (<=
+        terminal_max_ref_gap bp unlabelled). Returns (strand or 0 when absent/contradictory,
+        [element segments of the winning strand])."""
+        tol = cfg.get("terminal_tolerance", 5)
+        mbp = cfg.get("terminal_min_bp", 20)
+        mid = cfg.get("terminal_min_identity", 0.9)
+        rgap = cfg.get("terminal_max_ref_gap", 12)
+        votes = {1: set(), -1: set()}
+        segs_by = {1: [], -1: []}
+
+        def term_ok(e, strand):
+            if e.kind != "ELEMENT" or e.strand != strand or e.qlen < mbp or e.identity < mid:
+                return False
+            cend = lib.cons_end.get(e.target, 0)
+            return cend > 0 and e.t_en >= cend - tol
+
+        for lay in layouts:
+            sg = lay.segments
+            for i in range(len(sg) - 2):
+                a, b, c = sg[i], sg[i + 1], sg[i + 2]
+                if (b.kind == "POLYA" and (b.target or "A") == "A" and c.kind == "REF"
+                        and term_ok(a, 1) and b.q_st - a.q_en <= 5 and c.q_st - b.q_en <= rgap):
+                    votes[1].add(lay.frag_key)
+                    segs_by[1].append(a)
+                elif (a.kind == "REF" and b.kind == "POLYA" and b.target == "T"
+                        and term_ok(c, -1) and b.q_st - a.q_en <= rgap and c.q_st - b.q_en <= 5):
+                    votes[-1].add(lay.frag_key)
+                    segs_by[-1].append(c)
+        for st in (1, -1):
+            if votes[st] and not votes[-st]:
+                return st, segs_by[st]
+        return 0, []
+
+    @staticmethod
+    def _strand_from_polya(layouts, min_run=10):
+        """Element strand from a poly-A tail seen in the reads at a breakpoint (reference-
+        forward): A-run | REF = + element (3' end at the LEFT junction), REF | T-run = - element.
+        The junction strings may carry no poly-A (combine trimmed it / the evidence row is
+        missing) while a clip read still shows it. Unanimous votes only (any opposite-strand
+        tail, e.g. slippage on both sides, leaves the strand to the element segments).
+        Returns (strand, [tail length per voting read]) or (0, [])."""
+        votes = {1: set(), -1: set()}
+        lens = {1: [], -1: []}
+        for lay in layouts:
+            segs = lay.segments
+            for i, s in enumerate(segs):
+                if s.kind != "POLYA" or s.qlen < min_run:
+                    continue
+                base = s.target or ("A" if s.strand >= 0 else "T")
+                if base == "A" and i + 1 < len(segs) and segs[i + 1].kind == "REF":
+                    votes[1].add(lay.frag_key)
+                    lens[1].append(s.qlen)
+                elif base == "T" and i > 0 and segs[i - 1].kind == "REF":
+                    votes[-1].add(lay.frag_key)
+                    lens[-1].append(s.qlen)
+        for st in (1, -1):
+            if votes[st] and not votes[-st]:
+                return st, lens[st]
+        return 0, []
+
+    @staticmethod
     def _strand_from_segments(layouts, consensus, lib):
-        """Fallback element strand: majority (bp) strand of element segments adjacent to a
-        junction REF, else of all element segments of the chosen class."""
+        """Fallback element strand: a poly-A tail at a breakpoint in the reads (it marks the 3'
+        end; an element piece next to REF can be the INVERTED 5' part of a twin-primed insert
+        and point the wrong way), else the majority (bp) strand of element segments adjacent to
+        a junction REF, else of all element segments of the chosen class."""
+        pst, _lens = AssemblyResult._strand_from_polya(layouts)
+        if pst:
+            return pst, "polya_reads"
         cls_ = lib.cons_class.get(consensus) if consensus else None
         adj = Counter()
         allc = Counter()

@@ -12,7 +12,10 @@ structure (needs a read/consensus crossing the 5' junction, else 5P_UNRESOLVED):
                        Kazazian 2001). p2 = its consensus end at the flank; p1 = start of the
                        forward part (from a read crossing the inversion point, else the lowest
                        sense coordinate); junction = p1 - p2 (>0 deletion, <0 duplication,
-                       Zumalave 2026 i-del / i-dup)
+                       Zumalave 2026 i-del / i-dup). Only the inverted piece sequenced (no sense
+                       piece at all): p1 unknown, detail inv_junction=unresolved. Minimal form:
+                       3' end = consensus terminus + poly-A and the 5' junction reads REF |
+                       poly-T only (inverted copy of the tail): inv=polyA, p2 = consensus end
   INVERTED_5P_SWITCH   as INVERTED_5P with >= 2 distinct orientation-switch points (twin priming
                        + template switch)
 
@@ -44,12 +47,18 @@ DEFAULTS = {
     "td_min_flank_bp": 30,          # FLANK3P hit length that counts as a source-flank hit
     "td_short_flank_identity": 0.95,  # ... or a shorter (>= 20 bp) hit at >= this identity sitting
                                       # directly before the poly-A (the tail position)
+    "td_max_masked_frac": 0.5,      # FLANK3P hit on >= this soft-masked (repeat) flank: no source
+    "td_short_flank_max_at": 0.5,   # short tail-position hit whose flank piece is this A- (or
+                                    # T-) rich is the source's own poly-A remnant region, not a tag
     "td_min_fragments": 2,          # fragments showing an UNEXPLAINED tag (a flank hit needs 1)
     "templated_min_bp": 20,
     "templated_min_identity": 0.90,
     "templated_min_fragments": 2,   # fragments (junction consensus = 1) showing the template
     "switch_min_seg": 20,           # each side of a sense>anti switch read (L1_INV_SWITCH)
     "pseudogene_full_length_tol": 15,  # 5' insert starts this close to the transcript start
+    "terminal_inv_tolerance": 5,    # 3' end this close to the consensus end = terminus
+    "inverted_tail_min": 10,        # poly-T run at the 5' junction (element sense) = inverted tail
+    "inverted_tail_max_gap": 12,    # ... at most this far from REF
 }
 
 
@@ -193,6 +202,16 @@ def classify(res, lib, ctx=None, cfg=None, novel_finder=None, premrna=None,
             call.detail["j5_feature"] = lm
     elif cls_:
         call.structure = "5P_UNRESOLVED"
+        if (j3 is not None and j3.strand > 0 and call.has_polya_3p
+                and j3.t_en >= cend - c["terminal_inv_tolerance"] and _inverted_tail_5p(five, c)):
+            # minimal twin priming: the 3' end is the consensus terminus + poly-A, and the 5'
+            # junction reads REF | poly-T, i.e. an inverted copy of the tail (and possibly the
+            # terminal end) -- no element piece inside the inversion was sequenced. The
+            # terminal piece is required, so reference A-run slippage (POLYA_ONLY) can't get here
+            call.structure = "INVERTED_5P"
+            call.j5_pos = cend
+            call.detail["inv"] = "polyA"
+            call.detail["inv_junction"] = "unresolved"
     # SVA 5' transduction: transcription started upstream of the SVA, so the SVA itself is
     # complete at its 5' end; a 5' junction reading REF | source 5' flank (sense) is therefore a
     # FULL_LENGTH SVA even when no read joins the (long) flank to the hexamer
@@ -227,11 +246,20 @@ def classify(res, lib, ctx=None, cfg=None, novel_finder=None, premrna=None,
             if s.kind == "FLANK3P" and not _element_after(lay, i, cls_, lib):
                 if s.qlen < 60 and _explained_by_consensus(lay.seq[s.q_st:s.q_en], lib):
                     continue      # an element end that also sits (as a repeat) in some flank
+                if _flank_masked_frac(lib, s) >= c["td_max_masked_frac"]:
+                    continue      # the hit lies in a repeat of the flank (soft-masked): an
+                                  # Alu/L1/SVA/MER copy matches many flanks and loci, it does
+                                  # not identify a source (PD37590: 13/15 spurious sources)
                 sid = lib.source_for_flank(s.target)
+                if not _source_class_ok(lib, sid, cls_):
+                    continue      # an L1 source cannot transduce behind an Alu/SVA (and v.v.)
                 flank3_ok.append(s)
                 nxt = lay.segments[i + 1] if i + 1 < len(lay.segments) else None
                 tail_pos = nxt is not None and nxt.kind == "POLYA" and nxt.q_st - s.q_en <= 3
-                if s.qlen >= c["td_min_flank_bp"] or (tail_pos and s.identity >= c["td_short_flank_identity"]):
+                short_ok = (tail_pos and s.identity >= c["td_short_flank_identity"]
+                            and not _at_rich(lib.flanks3.get(s.target, "")[s.t_st:s.t_en],
+                                             c["td_short_flank_max_at"]))
+                if s.qlen >= c["td_min_flank_bp"] or short_ok:
                     long_sources.add(sid)
                 if lay.side in (side3, "") or j5 is None:
                     side3_sources.add(sid)
@@ -271,10 +299,13 @@ def classify(res, lib, ctx=None, cfg=None, novel_finder=None, premrna=None,
 
     # ---------------------------------------------------------------- SVA 5' transduction
     if cls_ == "SVA":
-        if any(s.strand > 0 for s in flank5) or any(
-                e.kind in ("UNKNOWN", "FLANK5P") and e.qlen >= 30 for e in j5_extras):
+        # a hit in a soft-masked part of an SVA 5' flank (the source's own hexamer / an Alu /
+        # an L1 nearby) is a repeat match, not the source's unique upstream sequence
+        f5 = [s for s in flank5 if s.strand > 0
+              and _flank_masked_frac(lib, s, lib.flanks5) < c["td_max_masked_frac"]]
+        if f5 or any(e.kind == "UNKNOWN" and e.qlen >= 30 for e in j5_extras) or any(
+                e.kind == "FLANK5P" and e.qlen >= 30 and e in f5 for e in j5_extras):
             call.add("TD5P")
-            f5 = [s for s in flank5 if s.strand > 0]
             if f5:
                 best = Counter()
                 for s5 in f5:
@@ -431,6 +462,10 @@ def _inversion(call, res, j5, lib, c):
         d = p1 - p2
         call.detail["inv_junction"] = (f"del{d}" if d > 0 else (f"dup{-d}" if d < 0 else "blunt"))
         call.detail["inv_exact"] = int(inner is not None)
+    else:
+        # only the inverted piece (+ poly-A) was sequenced: the forward part and hence the
+        # inversion point / i-del size are unknown -- say so instead of guessing
+        call.detail["inv_junction"] = "unresolved"
     if inner is not None and abs(inner[0] - inner[1]) <= c["foldback_tolerance"]:
         call.add("FOLDBACK_INVDUP_5P")
 
@@ -573,6 +608,48 @@ def _sense_switch(res, j5, lib, cls_, c):
             if a.t_st >= j5.t_st - 50 and b.t_en > a.t_en + 20:
                 return a.t_en, b.t_en
     return None
+
+
+def _inverted_tail_5p(five_layouts, c):
+    """A 5' junction (element sense) reading REF | poly-T with no element segment after it."""
+    for lay in five_layouts:
+        segs = lay.segments
+        if len(segs) < 2 or segs[0].kind != "REF":
+            continue
+        t = segs[1]
+        if (t.kind == "POLYA" and t.strand < 0 and t.qlen >= c["inverted_tail_min"]
+                and t.q_st - segs[0].q_en <= c["inverted_tail_max_gap"]
+                and not any(x.kind == "ELEMENT" for x in segs[2:])):
+            return True
+    return False
+
+
+def _flank_masked_frac(lib, seg, flanks=None):
+    """Soft-masked (lower-case = RepeatMasker) fraction of a FLANK3P/FLANK5P hit's flank
+    interval."""
+    fs = (lib.flanks3 if flanks is None else flanks).get(seg.target, "")
+    piece = fs[max(0, seg.t_st):max(0, seg.t_en)]
+    if not piece:
+        return 0.0
+    return sum(ch.islower() for ch in piece) / len(piece)
+
+
+def _source_class_ok(lib, sid, cls_):
+    """A transduction source must be of the inserted element's class (L1 flanks behind an L1,
+    SVA flanks behind an SVA; no Alu sources exist). An element-less insert (orphan
+    transduction) takes any source."""
+    if not cls_:
+        return True
+    src = lib.sources.get(sid) if hasattr(lib, "sources") else None
+    sc = ((src.get("element_class") or src.get("class") or "") if isinstance(src, dict) else "")
+    return not sc or sc == cls_
+
+
+def _at_rich(piece, max_frac):
+    piece = piece.upper()
+    if not piece:
+        return False
+    return max(piece.count("A"), piece.count("T")) / len(piece) > max_frac
 
 
 def _td5_at_junction(five_layouts):

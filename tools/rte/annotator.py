@@ -194,6 +194,24 @@ class RteAnnotator:
         hint = (pa.strand, pa.source) if pa.strand else None
         asm = self.assembler.assemble(ctx, junction_seqs, reads, hint)
         strand = asm.strand
+        if pa.strand and strand and pa.strand != strand:
+            # the element 3' terminus + tail sits at the other junction (assembly
+            # element_3p_end): the junction-string tail is the inverted 5' copy, the poly-A
+            # hallmark is the strand-consistent side
+            run = pa.right_run if strand < 0 else pa.left_run
+            pa.strand, pa.source = strand, asm.strand_source
+            pa.length = float(run[1]) if run[0] == ("T" if strand < 0 else "A") else 0.0
+            pa.both_sided = False
+        polya_reads = None
+        if not pa.strand and asm.strand_source == "polya_reads":
+            # the junction strings carry no poly-A but clip reads do (A-run | REF): that tail set
+            # the strand. Reported (median run over the voting reads; a lower bound, a read can
+            # end inside the tail) but NOT scored: the score's poly-A weights are calibrated on
+            # the junction/evidence poly-A, and 178/207 PD37590 loci have none there, so
+            # scoring the read tails would shift most of the patient (artefacts included)
+            _st, lens = asm._strand_from_polya(asm.raw_layouts)
+            if lens and _st == strand:
+                polya_reads = sorted(lens)[len(lens) // 2]
         en_motif(site, strand, self.genome)
         slippage_context(site, strand, self.genome)
         # pseudogene proof
@@ -269,6 +287,8 @@ class RteAnnotator:
         rec.beyond_polya, rec.beyond_polya_support = bseq, bsup
         if site.slippage:
             rec.detail["slippage"] = site.slippage_detail
+        if polya_reads is not None:
+            rec.detail["polya_reads"] = polya_reads
         if fb:
             rec.detail["foldback_bp"] = fb
         n_short = sum(j.n_short_used for j in ev.junctions.values())
