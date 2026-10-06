@@ -69,6 +69,11 @@ GENOTYPE_BIN="${GENOTYPE_BIN:-$PT_ROOT/rust/peartree-genotype/target/release/pea
 DISC_CFG="${DISC_CFG:-$PT_ROOT/cluster/config.discovery.grch38}"
 GENO_CFG="${GENO_CFG:-$PT_ROOT/cluster/config.genotype.grch38}"
 SAMTOOLS_MODULE="${SAMTOOLS_MODULE:-samtools-1.19}"
+# combine_insertions implementation: python (default, src/main.py) or rust (the
+# rust/peartree-combine port, built by cluster/build.sh; byte-identical outputs, reads the same
+# src/config.py through $VENV/bin/python; refuses require_independent_fragments=True).
+COMBINE_IMPL="${COMBINE_IMPL:-python}"
+COMBINE_BIN="${COMBINE_BIN:-$PT_ROOT/rust/peartree-combine/target/release/peartree-combine}"
 
 # --- resources (tuned from the PD44579 run) -----------------------------------
 STAGE_THROTTLE="${STAGE_THROTTLE:-20}"   # concurrent stageBam.pl -> bounds iRODS + Lustre I/O
@@ -154,6 +159,8 @@ GENOTYPE_BIN='$GENOTYPE_BIN'
 DISC_CFG='$DISC_CFG'
 GENO_CFG='$GENO_CFG'
 SAMTOOLS_MODULE='$SAMTOOLS_MODULE'
+COMBINE_IMPL='$COMBINE_IMPL'
+COMBINE_BIN='$COMBINE_BIN'
 STAGE_THROTTLE='$STAGE_THROTTLE'
 SD_MEM_T2='$SD_MEM_T2'
 GT_MEM_T2='$GT_MEM_T2'
@@ -198,6 +205,11 @@ preflight_binaries() {
         [ -e "$f" ] || { echo "missing: $f (run cluster/build.sh?)" >&2; exit 1; }
     done
     [ -x "$VENV/bin/python" ] || { echo "missing venv python: $VENV/bin/python" >&2; exit 1; }
+    case "$COMBINE_IMPL" in
+        python) ;;
+        rust) [ -x "$COMBINE_BIN" ] || { echo "COMBINE_IMPL=rust but missing: $COMBINE_BIN (run cluster/build.sh)" >&2; exit 1; } ;;
+        *) echo "COMBINE_IMPL must be python or rust, got '$COMBINE_IMPL'" >&2; exit 1 ;;
+    esac
 }
 
 finish_submit() {
@@ -519,9 +531,17 @@ cmd_combine() {
         log "WARNING: no staged BAM left to verify the assembly against — proceeding unchecked"
     fi
 
-    # -u: unbuffered, so the job log shows combine's progress while it runs (it can take hours)
-    "$VENV/bin/python" -u "$PT_ROOT/src/main.py" --step combine_insertions \
-        --discovery_files "${files[@]}" --out "insertions/$PATIENT_ID" --threads "$CI_CORES"
+    if [ "${COMBINE_IMPL:-python}" = rust ]; then
+        # same config file python reads (src/config.py), dumped to JSON by $VENV's python
+        log "combine_insertions: rust ($COMBINE_BIN)"
+        PEARTREE_PYTHON="$VENV/bin/python" "$COMBINE_BIN" --step combine_insertions \
+            --config "$PT_ROOT/src/config.py" \
+            --discovery_files "${files[@]}" --out "insertions/$PATIENT_ID" --threads "$CI_CORES"
+    else
+        # -u: unbuffered, so the job log shows combine's progress while it runs (it can take hours)
+        "$VENV/bin/python" -u "$PT_ROOT/src/main.py" --step combine_insertions \
+            --discovery_files "${files[@]}" --out "insertions/$PATIENT_ID" --threads "$CI_CORES"
+    fi
 
     [ -s "$CONTRACT" ] || { echo "combine_insertions produced no $CONTRACT" >&2; exit 1; }
     log "contract: $CONTRACT ($(zcat "$CONTRACT" | grep -c '^>') loci)"
