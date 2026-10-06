@@ -239,6 +239,8 @@ def main():
                     help="combine output dir: adds clip consensus (<P>.combined.txt.gz), per-side evidence "
                          "(<P>.insertions.evidence.tsv.gz) and a reads sheet with every clipped read and mate "
                          "(<P>.insertions.reads.fa.gz)")
+    ap.add_argument("--rte-library", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "resources", "rte_library"),
+                    help="RTE library dir: active.tsv describes the nearest active element (default: the repo's resources/rte_library)")
     ap.add_argument("--min-p", type=float, default=0.9, help="carrier P(carrier) for tiers B/C (0.9 = annotate_v2's)")
     ap.add_argument("--out", required=True, help="output .xlsx")
     a = ap.parse_args()
@@ -251,6 +253,7 @@ def main():
     fitl = {r["locus"]: r for r in read_tsv(a.fit_legacy)}
     ann = {r["locus"]: r for r in read_tsv(a.annotation)}
     known = [k for k in read_tsv(a.known) if k.get("locus")]
+    active = {r["id"]: r for r in read_tsv(os.path.join(a.rte_library, "active.tsv")) if r.get("id")}
 
     # candidate set
     cand = collections.OrderedDict()
@@ -291,6 +294,8 @@ def main():
               "treefit_legacy_class", "treefit_legacy_label", "treefit_legacy_carriers",
               "element_class", "element", "tprt_call", "tprt_score", "tsd_len", "tsd_seq", "polya_len",
               "left_polyA", "right_polyA", "en_motif", "structure", "element_identity", "nearest_active",
+              "active_subfamily", "active_ta_status", "active_tier", "active_hotness", "active_n_daughters",
+              "active_locus_hg38", "covered_5p", "covered_3p", "rte_tags", "rte_detail",
               "site_region", "site_gene", "site_strand", "conclusion",
               "L_n_reads", "L_n_fragments", "L_n_samples", "L_n_mates", "L_polya_len", "L_beyond_polya",
               "R_n_reads", "R_n_fragments", "R_n_samples", "R_n_mates", "R_polya_len", "R_beyond_polya",
@@ -349,12 +354,15 @@ def main():
                      clean(an.get("left_polyA", "")), clean(an.get("right_polyA", "")),
                      clean(an.get("en_motif", "")), clean(an.get("structure", "")),
                      num(clean(an.get("element_identity", ""))), clean(an.get("nearest_active", "")),
+                     *active_cols(active.get(an.get("nearest_active", ""), {})),
+                     num(clean(an.get("covered_5p", ""))), num(clean(an.get("covered_3p", ""))),
+                     clean(an.get("tags", "")), clean(an.get("rte_detail", "")),
                      clean(an.get("site_region", "")), clean(an.get("site_gene", "")), clean(an.get("site_strand", "")),
                      clean(an.get("conclusion", ""))] + side_cols(loc, evid, cons, reads_by))
     rank = {"A": 0, "B": 1, "C": 2, "D": 3}
     rows.sort(key=lambda r: (rank[r[0]], -(r[11] or 0), -(fnum(r[29], 0)), r[1]))
     widths = [5, 28, 7, 11, 11, 18, 10, 7, 30, 10, 16, 6, 40, 9, 9, 9, 50, 9, 9, 9,
-              18, 16, 30, 18, 16, 30, 18, 18, 12, 8, 7, 14, 8, 6, 6, 9, 14, 9, 14, 14, 14, 6, 60,
+              18, 16, 30, 18, 16, 30, 18, 18, 12, 8, 7, 14, 8, 6, 6, 9, 14, 9, 14, 9, 7, 16, 12, 8, 30, 8, 8, 20, 60, 14, 14, 6, 60,
               7, 7, 7, 7, 7, 9, 7, 7, 7, 7, 7, 9, 30, 60, 60, 50, 50]
 
     tier_n = collections.Counter(r[0] for r in rows)
@@ -383,6 +391,13 @@ def main():
               ["element_class ... conclusion", "annotate_v2 on the legacy run (only loci with a legacy het/hom call are annotated; "
                                                "'(not annotated)' otherwise)"],
               ["tprt_call / tprt_score", "TPRT hallmark call (TPRT, LIKELY_TPRT, UNCERTAIN, ...) and score"],
+              ["nearest_active / element_identity", "the active L1 (resources/rte_library/active.tsv) whose sequence best matches the "
+                                                    "INSERTED sequence that was assembled, and the identity over that covered part only -- "
+                                                    "short covered parts (see covered_5p/3p) cannot tell young L1s apart"],
+              ["active_tier / hotness / n_daughters", "hot_source = published source element (hotness strong/hot/active from its "
+                                                      "daughter count); L1HS_Ta_intact / L1HS_preTa_intact = intact young L1HS without "
+                                                      "(candidate / none_reported) or with reported activity"],
+              ["covered_5p / covered_3p", "element consensus coordinates the assembled insert covers (5' truncation point / 3' end)"],
               ["L_/R_ n_reads ... beyond_polya", "combine evidence per insertion end (L = left junction, R = right): reads, "
                                                  "distinct fragments, colonies, mates, median poly-A length, sequence beyond the poly-A"],
               ["L_/R_junction", "combine junction consensus: reference flank in UPPER case, clipped (inserted) sequence in lower case"],
@@ -409,6 +424,16 @@ def main():
         sheets.append(("refbias", [h] + [[num_or(r[c]) for c in h] for r in rb], [10, 22] + [12] * (len(h) - 2), True))
     write_xlsx(a.out, sheets)
     print(f"wrote {a.out}: {len(rows)} loci ({', '.join(f'{t} {tier_n.get(t, 0)}' for t in TIERS)})")
+
+
+def active_cols(r):
+    """active.tsv metadata of the nearest active element: subfamily, Ta status, tier (hot_source = a published
+    source element; L1HS_Ta/preTa_intact = intact young L1HS), hotness, daughters, hg38 position"""
+    if not r:
+        return ["", "", "", "", "", ""]
+    loc = f"{r.get('hg38_chrom', '')}:{r.get('hg38_start', '')}-{r.get('hg38_end', '')}({r.get('strand', '')})"
+    return [r.get("subfamily", ""), r.get("ta_status", ""), r.get("tier", ""), r.get("hotness", ""),
+            num_or(r.get("n_daughters", "")), loc]
 
 
 def side_cols(loc, evid, cons, reads_by):
