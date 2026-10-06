@@ -254,6 +254,9 @@ pub struct Call {
     /// relative to the best genotype (same scale as `pl`; NEGATIVE when φ fits better than any
     /// dosage). The joint step's NOISE hypothesis is built from these columns.
     pub pl_frac: Vec<i32>,
+    /// het likelihood at each reference-bias value of `cfg.ref_bias_grid` (−10·log10 P(reads |
+    /// het, b), same scale as `pl`, may be negative); the joint step's `--ref-bias` plugs a bias in
+    pub pl_het_bias: Vec<i32>,
 }
 
 /// Output header (gzip TSV, one row per locus). Numeric throughout; `status` is `ok`,
@@ -268,13 +271,23 @@ pub fn frac_col_name(f: f64) -> String {
     format!("pl_f{:03}", (f * 1000.0).round() as i64)
 }
 
+/// Column name of the het likelihood at reference bias `b`: `pl_het_b` + per-mille (`pl_het_b600`).
+pub fn bias_col_name(b: f64) -> String {
+    format!("pl_het_b{:03}", (b * 1000.0).round() as i64)
+}
+
 /// `OUTPUT_HEADER` plus one `pl_f<‰>` column per value of the noise fraction grid (none for an
-/// empty grid, which gives the pre-profile format).
-pub fn output_header(noise_frac_grid: &[f64]) -> String {
+/// empty grid, which gives the pre-profile format), then one `pl_het_b<‰>` column per value of
+/// the reference-bias grid (none by default).
+pub fn output_header(noise_frac_grid: &[f64], ref_bias_grid: &[f64]) -> String {
     let mut h = OUTPUT_HEADER.trim_end().to_string();
     for &f in noise_frac_grid {
         h.push('\t');
         h.push_str(&frac_col_name(f));
+    }
+    for &b in ref_bias_grid {
+        h.push('\t');
+        h.push_str(&bias_col_name(b));
     }
     h.push('\n');
     h

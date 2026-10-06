@@ -10,7 +10,7 @@ peartree-genotype2 --step genotype --bam <bam|cram> --insertions <P.genotyping[.
 peartree-genotype2 --step genotype_batch --manifest <input<TAB>output per line> --insertions .. --combined .. --reference ..
 peartree-genotype2 --step joint --tree <patient.tree> --genotypes genotypes/*.txt.gz \
     --out <P.joint.tsv> --matrix <P.genotypes.csv.gz> [--root-prior 0.1] [--branch-prior length|uniform] \
-    [--dropout 0.02] [--false-present 0]
+    [--dropout 0.02] [--false-present 0] [--noise-max-frac 1.0] [--ref-bias off|auto|<b>] [--zygosity colony|locus]
 ```
 
 ## What it does
@@ -34,7 +34,8 @@ whose MAPQ reflects only a short flank are kept when they carry a junction-facin
 (`min_mapq_clipped`), which removes the legacy reference bias.
 
 Genotype likelihoods: dosage 0/1/2 with the alt-haplotype fraction marginalised over a colony
-purity grid; PL (Phred), posterior (flat prior), GQ, and the VAF MLE. Discordant anchors are
+purity grid; PL (Phred), posterior (flat prior), GQ, and the VAF MLE. Optionally corrected for
+reference bias (see "Reference bias" below; off by default). Discordant anchors are
 counted (`n_disc`) and can be weighted (`disc_weight_nats`, default 0).
 
 ### Per-colony output (gzip TSV, numeric, no call strings)
@@ -48,7 +49,9 @@ locus kind status depth n_alt n_ref n_uninf n_art n_disc n_alt_l n_alt_r vaf p_a
 sums of per-read evidence. Then one `pl_f<‰>` column per value of `noise_frac_grid` (default
 `pl_f010 pl_f020 pl_f050 pl_f100 pl_f200`): −10·log10 P(reads | alt fraction φ) on the PL scale
 (negative when φ fits better than every dosage), the per-locus profile the joint step's NOISE
-hypothesis is built from. Rows are in processing (coordinate) order; consumers key by `locus`
+hypothesis is built from. With `ref_bias_grid` set, one `pl_het_b<‰>` column per grid value follows
+(`pl_het_b400` .. `pl_het_b1000`): the het likelihood at reference bias b, same scale (see
+"Reference bias"). Rows are in processing (coordinate) order; consumers key by `locus`
 and by column name (the readers are header-driven).
 
 ### Joint step
@@ -63,11 +66,71 @@ missing data. Genotype-error terms: `P(d_c|present) = (1-ε₁) P1 + ε₁ P0` (
 at a germline locus 1-3 of 44 colonies have 0-1 alt reads (their alt reads realign as
 uninformative / unexplained) and a hard PL 20-50 "absent" per colony handed 1,364 all-carrier loci
 to INDEP; with ε₁ = 0.02 ROOT (or a clade) tolerates ~3 such colonies. ε₀ is off by default so a
-single strongly present colony stays a private event with its full Bayes factor.
+single strongly present colony stays a private event.
+
+**Private events: judge them on P(carrier), not on the BF.** INDEP explains a single carrier up to
+a combinatorial factor, so a private event's `log10_bf_tree` saturates however strong the reads
+are: ~2.2 on PD37590's 44-colony tree, ~1.2 on the 10-colony bench tree (1.60 on the 44-tip test
+tree, identical at 20, 40 or 80 reads; `joint::tests::private_bf_saturates`), and `post_best`
+saturates too (~0.85 on the bench). The carrier's `p_<colony>` / matrix cell is not saturated
+(55 of 57 bench privates ≥ 0.9): use it (the 0.9 carrier threshold of `tools/genotype2_io.py`).
+`test/genotype2/score_joint.py` scores Rust-joint privates that way; no other consumer
+(`genotype2_io.py`, `genotype2_compare.py`, `check_known.py`, `compare_arms.py`, `annotate_v2.py`)
+thresholds on the BF, they only print it.
 NOISE is "absent everywhere" or one alt fraction φ shared by every colony (mean over φ of the
 `pl_f` profile columns): the signature of mismapped paralogous reads or slippage, which tree_fit
 calls `noise` and which three-genotype PLs cannot express. PD37590 first run: 65 of 88 joint
 "clade" calls were such diffuse loci. Files without profile columns fall back to absent-everywhere.
+
+`--zygosity locus` (default `colony`, the original model): `P(d_c|present) = ½(het + hom)` per
+colony costs ln 2 in every carrier whose reads clearly favour one dosage -- 44 ln 2 = 30 nats for a
+ROOT locus on PD37590, which NOISE (one shared fraction) never pays, so a moderately low but
+consistent alt fraction in every colony went to NOISE. In `locus` mode a tree hypothesis takes one
+dosage for all its carriers (½ het everywhere + ½ hom everywhere, ln 2 once); INDEP keeps the
+per-colony mixture. Bench (10 colonies): germline ROOT 17 → 18 of 21, clades 39 → 44 of 55,
+nonclade 23/23 unchanged.
+
+### Reference bias
+
+True somatic hets on PD37590 read at an alt fraction of ~0.18-0.35 at purity ~0.835: purity alone
+predicts ~0.42. The rest is reference bias -- alt reads lost or unassigned (mapping bias of
+insertion-carrying reads, junction reads the realignment cannot place), varying by locus kind
+(tree_fit's germline-het vote odds K: TSD 0.95, BLUNT 0.92, TSD_DELETION 0.79, L1_MED_DELETION 0.59,
+L1_MED_DUPLICATION 0.64). Model: `b` = capture / assignment efficiency of an ALT-haplotype read
+relative to a REF-haplotype read (= tree_fit's K), and the het fraction at purity p is
+`h·b / (h·b + 1 − h)`, h = p/2 (hom: h = p, still floored at `1 − bg`). `b = 1` reproduces the
+uncorrected model exactly.
+
+* Fixed, per colony: `ref_bias = <b>` and/or `ref_bias_kind = TSD:0.95,L1_MED_DELETION:0.6`
+  in the genotype config correct the per-colony calls themselves.
+* Estimated, joint step: genotype with `ref_bias_grid = 0.4,0.5,0.6,0.7,0.8,0.9,1.0`
+  (`cluster/config.genotype2.grch38.refbias` = the GRCh38 config + this key, via `include =`): the
+  per-colony calls are unchanged, the rows gain the `pl_het_b<‰>` profile. `--step joint
+  --ref-bias auto` then estimates b from germline-het loci (tree_fit's candidate rule on
+  `n_alt`/`n_ref`: autosomal, pooled alt fraction 0.2-0.8, ≥ 10 votes, ≥ max(2, C/2) colonies with
+  ≥ 3 votes and every one of them with an alt vote, no colony with ≥ 8 votes and 0 alt):
+  global `b = (Σalt + ½)/(Σref + ½)`; per kind the same, shrunk to the global value with 200
+  pseudo-votes, and the global value for a kind with < 5 candidate loci or whose candidate reads are
+  > 50 % uninformative (far duplications: the reference-junction reads score ln ½ by construction, so
+  their 2-3 votes do not describe the likelihood -- they never get a spurious ~0.6 of their own);
+  per colony a factor `(Σalt + 200)/(Σ b_kind·ref + 200)` over the kind-estimated candidates. Each
+  cell's het likelihood is the profile linearly interpolated at `b_kind × factor` (clamped to the
+  grid); absent, hom and the NOISE profile are untouched. `--ref-bias <b>` plugs one fixed value.
+  The estimates go to stderr and to `<out stem>.refbias.tsv` (`P.joint.tsv` → `P.joint.refbias.tsv`:
+  scope, name, loci, votes, raw, b, source). Without `--ref-bias` the joint output is byte-identical.
+
+Effect (unit tests, 44 colonies, every colony at k/20 alt reads, b = 0.6, `joint::tests::
+sweep_bias_vs_noise`): the correction alone does not rescue a consistent low fraction from NOISE
+under `--zygosity colony` (still NOISE up to 6/20 = 0.30: the per-colony ln 2 dominates the ~2 Phred
+per colony the bias gains); with `--zygosity locus` ROOT from 6/20, and with `--noise-max-frac 0.1`
+as well, ROOT from 4/20. 2/20 and 3/20 everywhere stay NOISE in every mode, and a 5-colony clade at
+5/20 with 39 colonies at 0/20 is the clade in every mode (a shared φ cannot fit the 39 clean
+colonies). Per colony: 5/20 at purity 0.85 and b = 0.6 is het (P > 0.99, higher GQ than
+uncorrected), 0/20 stays absent (P(absent) ≈ 0.995 -- a lower expected het fraction makes each ref
+read weaker absence evidence), 10/20 is het not hom. Bench (simulated, no real bias): the estimate
+is b ≈ 1.05 (TSD 1.03), so the joint calls do not move; even a deliberately wrong fixed
+`ref_bias = 0.6` on every colony gives present-ok 542 → 552 of 616, 0 wild-type-control false
+carriers (absent calls become no-calls instead: truth-absent no-call 72 → 134).
 
 Python consumers read both formats through `tools/genotype2_io.py` (auto-detection, the
 0.9 / 0.8 / 0.1 thresholds in one place): `tools/phylo/tree_fit.py`, `tools/annotate_v2.py`,
@@ -96,7 +159,9 @@ step's hypothesis, legacy `tree_fit` labels against the joint step, and a trace 
 `~/results/tprt_ab/<P>/genotype2_vs_legacy.md`. When the python has pandas/scipy it also runs
 `tools/phylo/tree_fit.py` on the v2 files (`$TPRT_ROOT/<P>/V2/fit/`), whose `summary.md` ends with a
 tree_fit-class × joint-class table: the independent Python check of the Rust joint step. `--dry-run` resolves every input and prints the
-bsubs. `cluster/build.sh` builds this crate together with the other two.
+bsubs. `REFBIAS=1` makes it a reference-bias run: config `cluster/config.genotype2.grch38.refbias`,
+output `$TPRT_ROOT/<P>/V2_refbias` (the existing V2 files lack the profile columns), joint step with
+`--ref-bias auto --zygosity locus` (+ `JOINT_EXTRA`), results copied with a `.refbias` tag. `cluster/build.sh` builds this crate together with the other two.
 
 ## Validation
 

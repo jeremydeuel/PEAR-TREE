@@ -79,7 +79,16 @@ pub fn run<W: Write>(
         cfg.io_fill_bytes >> 10
     );
 
-    writer.write_all(output_header(&cfg.noise_frac_grid).as_bytes())?;
+    if cfg.ref_bias != 1.0 || !cfg.ref_bias_kind.is_empty() || !cfg.ref_bias_grid.is_empty() {
+        let kinds: Vec<String> = cfg.ref_bias_kind.iter().map(|(k, b)| format!("{k}:{b}")).collect();
+        eprintln!(
+            "reference bias: het alt fraction corrected with b = {} (per kind: {}); pl_het_b profile at b in {:?}",
+            cfg.ref_bias,
+            if kinds.is_empty() { "none".to_string() } else { kinds.join(",") },
+            cfg.ref_bias_grid
+        );
+    }
+    writer.write_all(output_header(&cfg.noise_frac_grid, &cfg.ref_bias_grid).as_bytes())?;
     let t_geno = Instant::now();
     let io0 = io_counters();
 
@@ -310,8 +319,9 @@ fn process_chunk(
 /// the scorer / model become an `error` row (with the coverage when it is already known).
 fn genotype_locus(src: &mut dyn RegionSource, header: &Header, m: &LocusModel, cfg: &Config) -> (String, LocusStats) {
     let name = m.locus.name.as_str();
+    let n_prof = cfg.noise_frac_grid.len() + cfg.ref_bias_grid.len();
     if m.error.is_some() {
-        return (output::format_simple_row(name, m.kind, Status::Error, 0, cfg.noise_frac_grid.len()), LocusStats::default());
+        return (output::format_simple_row(name, m.kind, Status::Error, 0, n_prof), LocusStats::default());
     }
     let collected = catch_unwind(AssertUnwindSafe(|| -> io::Result<Outcome> {
         let contig = contig_index(header, &m.locus.chr).ok_or_else(|| {
@@ -322,30 +332,30 @@ fn genotype_locus(src: &mut dyn RegionSource, header: &Header, m: &LocusModel, c
     }));
     let (coverage, obs, n_disc, stats) = match collected {
         Ok(Ok(Outcome::HighCoverage)) => {
-            let row = output::format_simple_row(name, m.kind, Status::HighCoverage, cfg.reads_for_high_coverage + 1, cfg.noise_frac_grid.len());
+            let row = output::format_simple_row(name, m.kind, Status::HighCoverage, cfg.reads_for_high_coverage + 1, n_prof);
             return (row, LocusStats::default());
         }
         Ok(Ok(Outcome::Collected { coverage, obs, n_disc, stats })) => (coverage, obs, n_disc, stats),
         Ok(Err(e)) => {
             eprintln!("genotyping failed for {name}: {e}");
-            return (output::format_simple_row(name, m.kind, Status::Error, 0, cfg.noise_frac_grid.len()), LocusStats::default());
+            return (output::format_simple_row(name, m.kind, Status::Error, 0, n_prof), LocusStats::default());
         }
         Err(_) => {
             eprintln!("genotyping failed for {name}: panic while collecting / scoring reads");
-            return (output::format_simple_row(name, m.kind, Status::Error, 0, cfg.noise_frac_grid.len()), LocusStats::default());
+            return (output::format_simple_row(name, m.kind, Status::Error, 0, n_prof), LocusStats::default());
         }
     };
     let row = match catch_unwind(AssertUnwindSafe(|| {
         if obs.is_empty() && n_disc == 0 {
-            return output::format_simple_row(name, m.kind, Status::NoReads, coverage, cfg.noise_frac_grid.len());
+            return output::format_simple_row(name, m.kind, Status::NoReads, coverage, n_prof);
         }
-        let call = model::call_locus(&obs, n_disc, cfg);
+        let call = model::call_locus(&obs, n_disc, cfg, cfg.ref_bias_for(m.kind.as_str()));
         output::format_row(name, m.kind, &call, coverage, n_disc)
     })) {
         Ok(row) => row,
         Err(_) => {
             eprintln!("genotyping failed for {name}: panic in the genotype model");
-            output::format_simple_row(name, m.kind, Status::Error, coverage, cfg.noise_frac_grid.len())
+            output::format_simple_row(name, m.kind, Status::Error, coverage, n_prof)
         }
     };
     (row, stats)

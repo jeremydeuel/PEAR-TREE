@@ -7,10 +7,16 @@ germline = every tip), and how often a nonclade/none locus is NOT called a clean
 
 usage: score_joint.py --truth phylo/truth.tsv --joint P.joint.tsv [--python-fit phylo/fit/phylo_fit.tsv]
                       --tips S1,...,S10 [--bf-threshold 1.0]
+
+A Rust-joint private event (one carrier) counts as a clean tree event when the carrier's
+P(carrier) >= 0.9 (its BF saturates near log10 1.2-2.2, see the crate README); clades and the
+Python fit keep the BF threshold.
 """
 import argparse
 import collections
 import csv
+
+P_CARRIER = 0.9   # tools/genotype2_io.py carrier threshold
 
 
 def read_tsv(path):
@@ -33,6 +39,15 @@ def parse(row, tips, bf_thr):
     if best == "ROOT":
         carr = set(tips)
     tree = best not in ("NOISE", "INDEP") and best != "ROOT" and bf >= bf_thr
+    if "best" in row and len(carr) == 1 and best not in ("NOISE", "INDEP", "ROOT"):
+        # a private event's BF saturates (INDEP explains one carrier up to a combinatorial factor:
+        # log10 BF <= ~1.2 at 10 colonies, ~2.2 at 44) and so does post_best (~0.85): judge it on
+        # the carrier's P(carrier), the number the matrix / annotate_v2 threshold at 0.9
+        (c,) = tuple(carr)
+        try:
+            tree = float(row.get("p_" + c, "") or "nan") >= P_CARRIER
+        except ValueError:
+            tree = False
     return best, tree, carr
 
 

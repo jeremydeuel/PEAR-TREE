@@ -20,6 +20,11 @@
 #   THROTTLE 12  MEM 4000 (MB; the reservation is what keeps LSF from packing the array onto one node)
 #   QUEUE normal  EVAL_MEM 8000  RESULTS_BASE $HOME/results/tprt_ab (NFS copy of the report)
 #   GENO2_THREADS 1  threads per genotype task (bsub -n + --threads)   JOINT_EXTRA ""  extra joint-step flags
+#   REFBIAS 0      1 = reference-bias run: GENO2_CFG defaults to cluster/config.genotype2.grch38.refbias
+#                  (adds the pl_het_b profile columns), V2_ROOT to $TPRT_ROOT/<P>/V2_refbias (the
+#                  existing V2 files lack the columns and genotype_one.sh would skip them), the joint
+#                  step gets "--ref-bias auto --zygosity locus" before JOINT_EXTRA, and the results
+#                  copied to RESULTS_BASE carry a ".refbias" tag (b estimates: joint/<P>.joint.refbias.tsv)
 #
 # Jobs:  gt2_<P>[1-N]%THROTTLE   genotype_one.sh (GENOTYPE_IMPL=v2; skip-if-exists, atomic)
 #        gt2_<P>_eval            ended(array) -> this script --evaluate: joint step (length + uniform branch
@@ -39,7 +44,7 @@ while [ $# -gt 0 ]; do
     case "$1" in
         --dry-run) MODE="dry" ;;
         --evaluate) MODE="evaluate" ;;
-        -h|--help) sed -n '2,24p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help) sed -n '2,29p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
         -*) die "unknown option $1" ;;
         *) [ -z "$P" ] || die "one patient per call (got $P and $1)"; P="$1" ;;
     esac
@@ -48,16 +53,19 @@ done
 [ -n "$P" ] || die "usage: genotype2_farm_compare.sh <PATIENT_ID> [--dry-run|--evaluate]"
 
 THROTTLE="${THROTTLE:-12}"; MEM="${MEM:-4000}"; QUEUE="${QUEUE:-normal}"; EVAL_MEM="${EVAL_MEM:-8000}"
+REFBIAS="${REFBIAS:-0}"
+if [ "$REFBIAS" = 1 ]; then TAG="refbias"; JOINT_BIAS="--ref-bias auto --zygosity locus"; DEF_CFG="config.genotype2.grch38.refbias"
+else TAG=""; JOINT_BIAS=""; DEF_CFG="config.genotype2.grch38"; fi
 THREADS="${GENO2_THREADS:-1}"   # per-colony realignment is CPU-bound on the farm (~30 ms CPU/locus at 30x): -n THREADS + --threads
 JOINT_EXTRA="${JOINT_EXTRA:-}"   # extra flags for both joint-step runs, e.g. "--noise-max-frac 0.1"
 BIN="${GENOTYPE2_BIN:-$PT_ROOT/rust/peartree-genotype2/target/release/peartree-genotype2}"
-CFG="${GENO2_CFG:-$PT_ROOT/cluster/config.genotype2.grch38}"
+CFG="${GENO2_CFG:-$PT_ROOT/cluster/$DEF_CFG}"
 GENOME_2BIT="${GENOME_2BIT:-$JD/hg38.2bit}"
 LEGACY_RUNDIR="${LEGACY_RUNDIR:-$TPRT_ROOT/$P/C_rust/$P}"
 LEGACY_GT="${LEGACY_GT:-$LEGACY_RUNDIR/genotypes}"
 COMBINED="${COMBINED:-$LEGACY_RUNDIR/insertions/$P.combined.txt.gz}"
 SAMPLES="${SAMPLES:-$TPRT_ROOT/$P/samples.tsv}"
-V2_ROOT="${V2_ROOT:-$TPRT_ROOT/$P/V2}"
+V2_ROOT="${V2_ROOT:-$TPRT_ROOT/$P/V2${TAG:+_$TAG}}"
 FOFN="$V2_ROOT/bams.fofn"; OUTDIR="$V2_ROOT/genotypes"; LOGS="$V2_ROOT/logs"; JOINT="$V2_ROOT/joint"; REPORT="$V2_ROOT/report"
 
 # --- resolve and check every input ----------------------------------------------------------
@@ -101,6 +109,7 @@ note "reference     : $GENOME_2BIT"
 note "samples       : $SAMPLES ($N colonies)"
 note "v2 binary     : $BIN   config $CFG"
 note "v2 output     : $V2_ROOT"
+[ -z "$JOINT_BIAS$JOINT_EXTRA" ] || note "joint flags   : $JOINT_BIAS $JOINT_EXTRA"
 [ -s "$LEGACY_CALLS" ] && note "legacy calls  : $LEGACY_CALLS" || note "legacy calls  : none at $LEGACY_CALLS (report without the combine_genotypes section)"
 [ -s "$LEGACY_FIT" ] && note "legacy fit    : $LEGACY_FIT" || note "legacy fit    : none at $LEGACY_FIT (report without the tree_fit section)"
 [ -s "$KNOWN" ] && note "known loci    : $KNOWN" || note "known loci    : none"
@@ -130,7 +139,7 @@ build_fofn() {
     [ "$n_leg_missing" -eq 0 ] || note "WARNING: $n_leg_missing colonies have no legacy genotype file in $LEGACY_GT (compared on the rest)"
 }
 
-ENV_PASS="LEGACY_RUNDIR='$LEGACY_RUNDIR' LEGACY_GT='$LEGACY_GT' CONTRACT='$CONTRACT' COMBINED='$COMBINED' GENOME_2BIT='$GENOME_2BIT' SAMPLES='$SAMPLES' V2_ROOT='$V2_ROOT' GENOTYPE2_BIN='$BIN' GENO2_CFG='$CFG' JOINT_EXTRA='$JOINT_EXTRA' LEGACY_FIT='$LEGACY_FIT' LEGACY_CALLS='$LEGACY_CALLS' TPRT_ROOT='$TPRT_ROOT' STAGING_ROOT='$STAGING_ROOT' PATIENTS_DIR='$PATIENTS_DIR' RESULTS_BASE='$RESULTS_BASE'"
+ENV_PASS="LEGACY_RUNDIR='$LEGACY_RUNDIR' LEGACY_GT='$LEGACY_GT' CONTRACT='$CONTRACT' COMBINED='$COMBINED' GENOME_2BIT='$GENOME_2BIT' SAMPLES='$SAMPLES' V2_ROOT='$V2_ROOT' GENOTYPE2_BIN='$BIN' GENO2_CFG='$CFG' JOINT_EXTRA='$JOINT_EXTRA' REFBIAS='$REFBIAS' LEGACY_FIT='$LEGACY_FIT' LEGACY_CALLS='$LEGACY_CALLS' TPRT_ROOT='$TPRT_ROOT' STAGING_ROOT='$STAGING_ROOT' PATIENTS_DIR='$PATIENTS_DIR' RESULTS_BASE='$RESULTS_BASE'"
 GT_CMD="FOFN='$FOFN' OUTDIR='$OUTDIR' CONTRACT='$CONTRACT' COMBINED='$COMBINED' GENOME_2BIT='$GENOME_2BIT' GENOTYPE_IMPL=v2 GENOTYPE2_BIN='$BIN' GENO2_CFG='$CFG' GENO2_THREADS='$THREADS' bash '$PT_ROOT/cluster/genotype_one.sh' \$LSB_JOBINDEX"
 EVAL_CMD="$ENV_PASS bash '$SELF' '$P' --evaluate"
 
@@ -157,8 +166,8 @@ if [ "$MODE" = submit ] || [ "$MODE" = dry ]; then
     echo
     echo "watch:   bjobs -A $JID ; tail -f $LOGS/gt.1.err"
     echo "done:    ls $OUTDIR/*.txt.gz | wc -l    # expect $N"
-    echo "report:  $REPORT/report.md   (also $RESULTS_BASE/$P/genotype2_vs_legacy.md)"
-    echo "re-run the evaluation by hand:  bash $SELF $P --evaluate"
+    echo "report:  $REPORT/report.md   (also $RESULTS_BASE/$P/genotype2_vs_legacy${TAG:+.$TAG}.md)"
+    echo "re-run the evaluation by hand:  ${TAG:+REFBIAS=1 }bash $SELF $P --evaluate"
     exit 0
 fi
 
@@ -172,18 +181,19 @@ if [ "$n_out" -lt "$N" ]; then
     done < "$SAMPLES" || true
     fails="$(grep -lE 'TERM_MEMLIMIT|TERM_RUNLIMIT|Exited with exit code' "$LOGS"/gt.*.log 2>/dev/null || true)"
     [ -z "$fails" ] || { note "failed tasks (LSF report):"; echo "$fails" | sed 's/^/  /' >&2; }
-    note "re-submit the missing ones with:  bash $SELF $P   (genotype_one.sh skips finished colonies)"
+    note "re-submit the missing ones with:  ${TAG:+REFBIAS=1 }bash $SELF $P   (genotype_one.sh skips finished colonies)"
 fi
 [ "$n_out" -gt 0 ] || die "nothing to evaluate"
 
 note "joint step (length branch prior)"
 # shellcheck disable=SC2086
-"$BIN" --step joint --tree "$TREE" --genotype-dir "$OUTDIR" $JOINT_EXTRA \
+"$BIN" --step joint --tree "$TREE" --genotype-dir "$OUTDIR" $JOINT_BIAS $JOINT_EXTRA \
     --out "$JOINT/$P.joint.tsv" --matrix "$JOINT/$P.joint_matrix.csv.gz" 2> "$JOINT/joint.log"
 tail -3 "$JOINT/joint.log" >&2 || true
+[ -z "$JOINT_BIAS" ] || grep -E '^joint: reference bias|^  (kind|colony)' "$JOINT/joint.log" >&2 || true
 note "joint step (uniform branch prior)"
 # shellcheck disable=SC2086
-"$BIN" --step joint --tree "$TREE" --genotype-dir "$OUTDIR" --branch-prior uniform $JOINT_EXTRA \
+"$BIN" --step joint --tree "$TREE" --genotype-dir "$OUTDIR" --branch-prior uniform $JOINT_BIAS $JOINT_EXTRA \
     --out "$JOINT/$P.joint.uniform.tsv" --matrix "$JOINT/$P.joint_matrix.uniform.csv.gz" 2> "$JOINT/joint.uniform.log"
 
 # python: the tprt kit's venv if it exists, else the system python3 (the report script is stdlib-only)
@@ -217,10 +227,12 @@ for d in "$LEGACY_RUNDIR"/genotypes.*; do
 done
 
 mkdir -p "$RESULTS_BASE/$P"
-cp -f "$REPORT/report.md" "$RESULTS_BASE/$P/genotype2_vs_legacy.md"
-[ -s "$REPORT/known.tsv" ] && cp -f "$REPORT/known.tsv" "$RESULTS_BASE/$P/genotype2_known.tsv"
-cp -f "$JOINT/$P.joint.tsv" "$RESULTS_BASE/$P/" 2>/dev/null || true
-note "copied to $RESULTS_BASE/$P/genotype2_vs_legacy.md"
+SFX="${TAG:+.$TAG}"
+cp -f "$REPORT/report.md" "$RESULTS_BASE/$P/genotype2_vs_legacy$SFX.md"
+[ -s "$REPORT/known.tsv" ] && cp -f "$REPORT/known.tsv" "$RESULTS_BASE/$P/genotype2_known$SFX.tsv"
+cp -f "$JOINT/$P.joint.tsv" "$RESULTS_BASE/$P/$P.joint$SFX.tsv" 2>/dev/null || true
+[ -s "$JOINT/$P.joint.refbias.tsv" ] && cp -f "$JOINT/$P.joint.refbias.tsv" "$RESULTS_BASE/$P/"
+note "copied to $RESULTS_BASE/$P/genotype2_vs_legacy$SFX.md"
 
 # independent Python cross-check of the Rust joint step: tools/phylo/tree_fit.py (the read-vote model)
 # on the v2 per-colony files + the numeric matrix; it joins <P>.joint.tsv beside the matrix and writes a
@@ -231,7 +243,7 @@ if "$PY" -c 'import pandas, scipy' 2>/dev/null; then
     rm -rf "$FIT"; mkdir -p "$FIT"
     if (cd "$PT_ROOT" && "$PY" tools/phylo/tree_fit.py --genotypes "$JOINT/$P.joint_matrix.csv.gz" \
             --genotype-dir "$OUTDIR" --tree "$TREE" --out "$FIT") > "$V2_ROOT/tree_fit.log" 2>&1; then
-        cp -f "$FIT/summary.md" "$RESULTS_BASE/$P/genotype2_tree_fit_summary.md" 2>/dev/null || true
+        cp -f "$FIT/summary.md" "$RESULTS_BASE/$P/genotype2_tree_fit_summary${TAG:+.$TAG}.md" 2>/dev/null || true
         sed -n '/^## Cross-check/,/^How to read/p' "$FIT/summary.md" >&2 || true
     else
         note "tree_fit FAILED (see $V2_ROOT/tree_fit.log) -- the report above stands without it"

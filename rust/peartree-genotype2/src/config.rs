@@ -1,6 +1,9 @@
 //! Configuration (`key = value` file, `#` comments; same loader format as the other crates).
 //! Unknown keys warn and are ignored (so a legacy `config.genotype.*` file can be passed).
 
+/// Upper bound of a reference-bias value (b > 1 = ALT reads over-captured; allowed, rarely real).
+pub const MAX_REF_BIAS: f64 = 4.0;
+
 #[derive(Clone, Debug)]
 pub struct Config {
     // ---- read gates (driver) ----
@@ -43,6 +46,15 @@ pub struct Config {
     /// shared alt-read fractions φ at which the per-locus log-likelihood profile `pl_f<‰>` is
     /// reported (the joint step's NOISE hypothesis: one φ shared by every colony)
     pub noise_frac_grid: Vec<f64>,
+    /// reference bias `b` (relative capture / assignment efficiency of ALT vs REF reads) applied
+    /// to the het alt fraction: φ(1,p) = h·b / (h·b + 1 − h), h = p/2. 1 = no correction (the
+    /// pre-correction model, byte-identical output)
+    pub ref_bias: f64,
+    /// per-locus-kind overrides of `ref_bias` (`ref_bias_kind = TSD:0.95,L1_MED_DELETION:0.6`)
+    pub ref_bias_kind: Vec<(String, f64)>,
+    /// bias values `b` at which the per-locus het likelihood profile `pl_het_b<‰>` is reported
+    /// (empty = no columns); the joint step's `--ref-bias auto|<b>` plugs an estimated `b` in
+    pub ref_bias_grid: Vec<f64>,
     pub prior: [f64; 3],
 
 }
@@ -80,6 +92,9 @@ impl Default for Config {
             bg_alt_rate: 0.005,
             purity_grid: vec![1.0, 0.9, 0.8, 0.7],
             noise_frac_grid: vec![0.01, 0.02, 0.05, 0.1, 0.2],
+            ref_bias: 1.0,
+            ref_bias_kind: Vec::new(),
+            ref_bias_grid: Vec::new(),
             prior: [1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0],
         }
     }
@@ -97,6 +112,18 @@ fn boolean(v: &str) -> Result<bool, String> {
     }
 }
 
+/// `KIND:value,KIND:value` (empty string = no overrides)
+fn kind_list(v: &str) -> Result<Vec<(String, f64)>, String> {
+    v.split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| {
+            let (k, x) = s.split_once(':').ok_or_else(|| format!("expected KIND:value, got '{s}'"))?;
+            Ok((k.trim().to_string(), num::<f64>(x.trim())?))
+        })
+        .collect()
+}
+
 fn list(v: &str) -> Result<Vec<f64>, String> {
     v.split(',').map(|s| num::<f64>(s.trim())).collect()
 }
@@ -105,23 +132,38 @@ impl Config {
     pub fn load(path: Option<&str>) -> Result<Config, String> {
         let mut cfg = Config::default();
         if let Some(p) = path {
-            let text = std::fs::read_to_string(p).map_err(|e| format!("cannot read config {p}: {e}"))?;
-            for (i, raw) in text.lines().enumerate() {
-                let line = raw.split('#').next().unwrap_or("").trim();
-                if line.is_empty() {
-                    continue;
-                }
-                let (key, val) = line
-                    .split_once('=')
-                    .ok_or_else(|| format!("{p}:{}: expected 'key = value'", i + 1))?;
-                cfg.set(key.trim(), val.trim()).map_err(|e| format!("{p}:{}: {e}", i + 1))?;
-            }
+            cfg.apply_file(p, 0)?;
         }
         if let Ok(v) = std::env::var("PEARTREE_MIN_MAPQ") {
             cfg.min_mapq = v.trim().parse().map_err(|_| format!("PEARTREE_MIN_MAPQ: not a valid u8: '{v}'"))?;
         }
         cfg.validate()?;
         Ok(cfg)
+    }
+
+    /// Apply one config file. `include = <path>` (relative to the including file's directory)
+    /// applies another file at that point, so a variant config can be "the base + a few keys".
+    fn apply_file(&mut self, p: &str, depth: usize) -> Result<(), String> {
+        if depth > 8 {
+            return Err(format!("{p}: config includes nested too deeply"));
+        }
+        let text = std::fs::read_to_string(p).map_err(|e| format!("cannot read config {p}: {e}"))?;
+        for (i, raw) in text.lines().enumerate() {
+            let line = raw.split('#').next().unwrap_or("").trim();
+            if line.is_empty() {
+                continue;
+            }
+            let (key, val) = line.split_once('=').ok_or_else(|| format!("{p}:{}: expected 'key = value'", i + 1))?;
+            let (key, val) = (key.trim(), val.trim());
+            if key == "include" {
+                let base = std::path::Path::new(p).parent().unwrap_or(std::path::Path::new("."));
+                let inc = base.join(val);
+                self.apply_file(&inc.to_string_lossy(), depth + 1).map_err(|e| format!("{p}:{}: {e}", i + 1))?;
+                continue;
+            }
+            self.set(key, val).map_err(|e| format!("{p}:{}: {e}", i + 1))?;
+        }
+        Ok(())
     }
 
     pub fn set(&mut self, key: &str, val: &str) -> Result<(), String> {
@@ -156,6 +198,9 @@ impl Config {
             "bg_alt_rate" => self.bg_alt_rate = num(val)?,
             "purity_grid" => self.purity_grid = list(val)?,
             "noise_frac_grid" => self.noise_frac_grid = list(val)?,
+            "ref_bias" => self.ref_bias = num(val)?,
+            "ref_bias_kind" => self.ref_bias_kind = kind_list(val)?,
+            "ref_bias_grid" => self.ref_bias_grid = if val.trim().is_empty() { Vec::new() } else { list(val)? },
             "prior" => {
                 let l = list(val)?;
                 if l.len() != 3 {
@@ -168,12 +213,28 @@ impl Config {
         Ok(())
     }
 
+    /// The reference bias `b` used for loci of `kind` (`LocusKind::as_str`).
+    pub fn ref_bias_for(&self, kind: &str) -> f64 {
+        self.ref_bias_kind.iter().find(|(k, _)| k == kind).map(|(_, b)| *b).unwrap_or(self.ref_bias)
+    }
+
     fn validate(&self) -> Result<(), String> {
         if self.purity_grid.is_empty() || self.purity_grid.iter().any(|&p| !(p > 0.0 && p <= 1.0)) {
             return Err("purity_grid must be non-empty values in (0, 1]".into());
         }
         if self.noise_frac_grid.iter().any(|&p| !(p > 0.0 && p < 1.0)) {
             return Err("noise_frac_grid values must be in (0, 1)".into());
+        }
+        let ok_bias = |b: f64| b > 0.0 && b <= MAX_REF_BIAS;
+        if !ok_bias(self.ref_bias) || self.ref_bias_kind.iter().any(|(_, b)| !ok_bias(*b)) {
+            return Err(format!("ref_bias / ref_bias_kind values must be in (0, {MAX_REF_BIAS}]"));
+        }
+        if self.ref_bias_grid.iter().any(|&b| !ok_bias(b)) || self.ref_bias_grid.windows(2).any(|w| w[0] >= w[1]) {
+            return Err(format!("ref_bias_grid values must be increasing, in (0, {MAX_REF_BIAS}]"));
+        }
+        const KINDS: [&str; 6] = ["TSD", "BLUNT", "TSD_DELETION", "L1_MED_DELETION", "L1_MED_DUPLICATION", "ONE_SIDED"];
+        if let Some((k, _)) = self.ref_bias_kind.iter().find(|(k, _)| !KINDS.contains(&k.as_str())) {
+            return Err(format!("ref_bias_kind: unknown locus kind '{k}' (one of {})", KINDS.join(", ")));
         }
         if !(self.clip_prob > 0.0 && self.clip_prob < 1.0) {
             return Err("clip_prob must be in (0, 1)".into());
@@ -200,7 +261,35 @@ mod tests {
         assert_eq!(c.purity_grid, vec![1.0, 0.8]);
         assert!((c.prior[1] - 0.015).abs() < 1e-12);
         assert!(c.validate().is_ok());
+        c.set("ref_bias", "0.8").unwrap();
+        c.set("ref_bias_kind", "L1_MED_DELETION:0.6, TSD:0.95").unwrap();
+        c.set("ref_bias_grid", "0.4,0.6,0.8,1.0").unwrap();
+        assert!(c.validate().is_ok());
+        assert_eq!(c.ref_bias_for("TSD"), 0.95);
+        assert_eq!(c.ref_bias_for("L1_MED_DELETION"), 0.6);
+        assert_eq!(c.ref_bias_for("BLUNT"), 0.8);
+        c.set("ref_bias_kind", "TSDX:0.9").unwrap();
+        assert!(c.validate().is_err());
+        c.set("ref_bias_kind", "").unwrap();
+        c.set("ref_bias_grid", "0.8,0.6").unwrap();
+        assert!(c.validate().is_err());
+        c.set("ref_bias_grid", "").unwrap();
+        assert!(c.validate().is_ok());
         c.set("clip_prob", "1.5").unwrap();
         assert!(c.validate().is_err());
+    }
+
+    #[test]
+    fn include_applies_the_base_first() {
+        let dir = std::env::temp_dir().join(format!("peartree_cfg_inc_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("base.cfg"), "min_mapq = 30\nref_bias = 0.9\n").unwrap();
+        std::fs::write(dir.join("variant.cfg"), "include = base.cfg\nref_bias_grid = 0.5,1.0\nref_bias = 0.8\n").unwrap();
+        let c = Config::load(Some(&dir.join("variant.cfg").to_string_lossy())).unwrap();
+        assert_eq!((c.min_mapq, c.ref_bias), (30, 0.8));
+        assert_eq!(c.ref_bias_grid, vec![0.5, 1.0]);
+        std::fs::write(dir.join("loop.cfg"), "include = loop.cfg\n").unwrap();
+        assert!(Config::load(Some(&dir.join("loop.cfg").to_string_lossy())).is_err());
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

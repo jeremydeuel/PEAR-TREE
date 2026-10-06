@@ -5,7 +5,7 @@
 //!   --step genotype_batch  --manifest <input<TAB>output per line> --insertions .. --reference .. [..]
 //!   --step joint           --tree <newick> (--genotype-dir <dir> | --genotypes f1 f2 ..)
 //!                          --out <P.joint.tsv> --matrix <P.joint_matrix.csv.gz>
-//!                          [--root-prior 0.1] [--branch-prior length|uniform] [--dropout 0.02] [--false-present 0] [--noise-max-frac 1.0]
+//!                          [--root-prior 0.1] [--branch-prior length|uniform] [--dropout 0.02] [--false-present 0] [--noise-max-frac 1.0] [--ref-bias off|auto|<b>] [--zygosity colony|locus]
 
 mod align;
 mod config;
@@ -39,7 +39,7 @@ fn usage() -> ! {
          peartree-genotype2 --step genotype_batch --manifest <samples.tsv> --insertions <contract> \
          [--combined ..] --reference <ref> [--threads N] [--config <file>]\n  \
          peartree-genotype2 --step joint --tree <newick> (--genotype-dir <dir> | --genotypes f1 f2 ..) \
-         --out <P.joint.tsv> --matrix <P.joint_matrix.csv.gz> [--root-prior 0.1] [--branch-prior length|uniform] [--dropout 0.02] [--false-present 0] [--noise-max-frac 1.0]"
+         --out <P.joint.tsv> --matrix <P.joint_matrix.csv.gz> [--root-prior 0.1] [--branch-prior length|uniform] [--dropout 0.02] [--false-present 0] [--noise-max-frac 1.0] [--ref-bias off|auto|<b>] [--zygosity colony|locus]"
     );
     std::process::exit(1);
 }
@@ -84,6 +84,8 @@ fn main() -> io::Result<()> {
     let mut dropout: f64 = 0.02;
     let mut false_present: f64 = 0.0;
     let mut noise_max_frac: f64 = 1.0;
+    let mut ref_bias = joint::RefBias::Off;
+    let mut zygosity = joint::Zygosity::Colony;
     let mut branch_prior: String = "length".to_string();
     let mut threads: usize = std::env::var("PEARTREE_THREADS").ok().and_then(|s| s.parse().ok()).unwrap_or(1);
 
@@ -115,6 +117,8 @@ fn main() -> io::Result<()> {
             "--dropout" => { dropout = next(i).parse().unwrap_or_else(|_| usage()); i += 2; }
             "--false-present" => { false_present = next(i).parse().unwrap_or_else(|_| usage()); i += 2; }
             "--noise-max-frac" => { noise_max_frac = next(i).parse().unwrap_or_else(|_| usage()); i += 2; }
+            "--zygosity" => { zygosity = joint::Zygosity::parse(&next(i)).unwrap_or_else(|e| die(e)); i += 2; }
+            "--ref-bias" => { ref_bias = joint::RefBias::parse(&next(i)).unwrap_or_else(|e| die(e)); i += 2; }
             "-h" | "--help" => usage(),
             other => die(format!("unknown argument {other}")),
         }
@@ -138,7 +142,7 @@ fn main() -> io::Result<()> {
             }
             let (Some(out_tsv), Some(out_matrix)) = (out, matrix) else { usage() };
             eprintln!("PEAR-TREE joint phylogenetic genotyping (rust): {} colonies", genotype_files.len());
-            joint::run(&joint::JointArgs { tree, genotype_files, out_tsv, out_matrix, root_prior, branch_prior, dropout, false_present, noise_max_frac })?;
+            joint::run(&joint::JointArgs { tree, genotype_files, out_tsv, out_matrix, root_prior, branch_prior, dropout, false_present, noise_max_frac, ref_bias, zygosity })?;
             eprintln!("done.");
             return Ok(());
         }

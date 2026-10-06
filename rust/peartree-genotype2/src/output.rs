@@ -28,7 +28,7 @@ pub fn format_row(name: &str, kind: LocusKind, call: &Call, depth: i64, n_disc: 
         call.score_alt,
         call.score_ref
     );
-    for v in &call.pl_frac {
+    for v in call.pl_frac.iter().chain(&call.pl_het_bias) {
         row.push('\t');
         row.push_str(&v.to_string());
     }
@@ -38,7 +38,8 @@ pub fn format_row(name: &str, kind: LocusKind, call: &Call, depth: i64, n_disc: 
 
 /// Row for a locus without a model result (`no_reads`, `high_coverage`, `error`): the depth
 /// (capped for `high_coverage`), zeros everywhere else; the posterior columns are empty so a
-/// consumer cannot mistake them for a measurement.
+/// consumer cannot mistake them for a measurement. `n_frac` = number of profile columns
+/// (`pl_f` + `pl_het_b`), written as 0.
 pub fn format_simple_row(name: &str, kind: LocusKind, status: Status, depth: i64, n_frac: usize) -> String {
     debug_assert!(status != Status::Ok);
     let mut row = format!("{name}\t{}\t{}\t{depth}\t0\t0\t0\t0\t0\t0\t0\t0.000\t\t\t\t0\t0\t0\t0\t0\t0", kind.as_str(), status.as_str());
@@ -65,14 +66,14 @@ mod tests {
     }
 
     fn n_cols_with(cfg: &Config) -> usize {
-        crate::types::output_header(&cfg.noise_frac_grid).trim_end().split('\t').count()
+        crate::types::output_header(&cfg.noise_frac_grid, &cfg.ref_bias_grid).trim_end().split('\t').count()
     }
 
     #[test]
     fn ok_row_has_every_column() {
         let reads = [obs(ReadClass::Alt, 10.0), obs(ReadClass::Alt, 15.0), obs(ReadClass::Ref, -20.0), obs(ReadClass::Uninformative, 1.0), obs(ReadClass::Unexplained, 0.0)];
         let cfg = Config::default();
-        let c = call_locus(&reads, 2, &cfg);
+        let c = call_locus(&reads, 2, &cfg, 1.0);
         let row = format_row("chr1:100-112", LocusKind::Tsd, &c, 9, 2);
         let f: Vec<&str> = row.trim_end_matches('\n').split('\t').collect();
         assert_eq!(f.len(), n_cols_with(&cfg), "{row}");

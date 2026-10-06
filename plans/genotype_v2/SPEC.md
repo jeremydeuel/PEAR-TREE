@@ -98,7 +98,10 @@ Scores are natural-log likelihoods:
 
 Dosage `g ∈ {0,1,2}`; purity grid `purity_grid` (weights uniform); alt-haplotype fraction
 `φ(g,p)`: g=0 → `bg_alt_rate`; g=1 → `p/2 + (1-p/2)·bg`... precisely `φ1 = p/2` floored at
-`bg_alt_rate`; g=2 → `max(p, 1-bg_alt_rate)`.
+`bg_alt_rate`; g=2 → `max(p, 1-bg_alt_rate)`. Reference bias (2026-10, default off): with
+`b = ref_bias` (per kind `ref_bias_kind`) the fractions become `h·b/(h·b + 1-h)` (h = p/2 resp. p;
+`b = 1` is literally the expression above); `ref_bias_grid` adds `pl_het_b<‰>` columns (het
+likelihood at each b) that the joint step's `--ref-bias auto|<b>` plugs an estimated b into. See README.
 Per read `ll_r(φ) = logaddexp(ln(1-φ) + ll_ref, ln φ + ll_alt)`; Uninformative reads STAY in
 the likelihood (not counted as votes; at a far duplication every reference-junction read has
 llr = ln 0.5 and together they are the only evidence of absence); Unexplained reads are
@@ -156,7 +159,7 @@ STRINGS and are NOT fed by this file; the joint step below is the per-patient co
 `--step joint --tree P.tree --genotype-dir DIR (or --genotypes f1 f2 …) --out P.joint.tsv
 --matrix P.joint_matrix.csv.gz [--root-prior 0.1] [--branch-prior length|uniform] [--dropout 0.02] [--false-present 0]`
 
-Per-colony genotype-error mixture (added after PD37590): `P(d_c|present) = (1-ε₁)P1 + ε₁P0`, `P(d_c|absent) = (1-ε₀)P0 + ε₀P1`; ε₁ = `--dropout` (default 0.02, colonies whose alt reads the realignment cannot place), ε₀ = `--false-present` (default 0). NOISE = mean over {absent everywhere, each φ in `noise_frac_grid`} of Π_c P(d_c | φ), from the per-colony `pl_f<‰>` profile columns (−10·log10 P(reads | φ) relative to the best dosage; the genotype step writes one column per grid value). See README.
+Per-colony genotype-error mixture (added after PD37590): `P(d_c|present) = (1-ε₁)P1 + ε₁P0`, `P(d_c|absent) = (1-ε₀)P0 + ε₀P1`; ε₁ = `--dropout` (default 0.02, colonies whose alt reads the realignment cannot place), ε₀ = `--false-present` (default 0). NOISE = mean over {absent everywhere, each φ in `noise_frac_grid`} of Π_c P(d_c | φ), from the per-colony `pl_f<‰>` profile columns (−10·log10 P(reads | φ) relative to the best dosage; the genotype step writes one column per grid value). `--zygosity locus` (default `colony`): tree hypotheses take one dosage for all their carriers (½ het-everywhere + ½ hom-everywhere) instead of ½(het+hom) per colony. `--ref-bias auto|<b>` (default off): het likelihood re-read at an estimated reference bias from `pl_het_b<‰>`. See README.
 
 Port of `tools/phylo/tree_fit.py` hypotheses, on the numeric per-colony files ONLY (no legacy
 reader): per colony c, `P(d_c | absent) = 10^(-pl_absent/10)`, `P(d_c | present) =

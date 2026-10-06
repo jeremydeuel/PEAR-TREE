@@ -5,10 +5,20 @@
 //! alt-haplotype fraction of the reads is
 //!
 //! ```text
-//!   φ(0,p) = bg                 φ(1,p) = max(p/2, bg)          φ(2,p) = max(p, 1 - bg)
+//!   φ(0,p) = bg                 φ(1,p) = max(h·b / (h·b + 1 − h), bg), h = p/2
+//!   φ(2,p) = max(p·b / (p·b + 1 − p), 1 − bg)
 //! ```
 //!
-//! (`bg = cfg.bg_alt_rate`). A read with likelihoods `ll_ref`, `ll_alt` contributes
+//! (`bg = cfg.bg_alt_rate`). `b` = reference bias (`cfg.ref_bias`, per kind `cfg.ref_bias_kind`):
+//! the capture / assignment efficiency of a read from the ALT haplotype relative to one from the
+//! REF haplotype (mapping bias of insertion-carrying reads, junction reads the realignment cannot
+//! place). It is the same quantity as tree_fit's vote odds K (germline het: φ = b/(b+1)).
+//! `b = 1` takes the uncorrected expressions literally (`p/2`, `p`), so the default output is
+//! byte-identical to the pre-correction model. (The hom fraction keeps the `max(.., 1 − bg)` of
+//! the original model, which puts every hom at ≈ 1 − bg whatever the purity or bias.)
+//! When `cfg.ref_bias_grid` is set, the het likelihood is also reported at each grid value of
+//! `b` (`pl_het_b<‰>` columns, same scale as `pl_frac`) for the joint step to plug in a bias it
+//! estimates across colonies. A read with likelihoods `ll_ref`, `ll_alt` contributes
 //! `ll_r(φ) = logaddexp(ln(1-φ) + ll_ref, ln φ + ll_alt)`. Everything is computed on the
 //! *difference* `d = ll_alt - ll_ref`: `ll_r(φ) = ll_ref + ln((1-φ) + φ e^d)`, and `Σ ll_ref`
 //! is the same for every φ, so it cancels in PL, the posterior and the VAF argmax. That keeps
@@ -71,13 +81,38 @@ fn sum_ll(d: &[f64], n_pseudo: i64, d_pseudo: f64, phi: f64) -> f64 {
     s
 }
 
-/// Alt-haplotype read fraction for dosage `g` at purity `p`.
-fn phi(g: usize, p: f64, bg: f64) -> f64 {
+/// Alt fraction of reads when a fraction `h` of the haplotypes carries the insertion and an alt
+/// read is captured with relative efficiency `b`: `h·b / (h·b + 1 − h)` (`h` itself at `b = 1`).
+pub fn biased_frac(h: f64, b: f64) -> f64 {
+    if b == 1.0 {
+        h
+    } else {
+        h * b / (h * b + 1.0 - h)
+    }
+}
+
+/// Alt-haplotype read fraction for dosage `g` at purity `p` and reference bias `b`.
+fn phi(g: usize, p: f64, bg: f64, b: f64) -> f64 {
     match g {
         0 => bg,
-        1 => (p / 2.0).max(bg),
-        _ => p.max(1.0 - bg),
+        1 => biased_frac(p / 2.0, b).max(bg),
+        _ => biased_frac(p, b).max(1.0 - bg),
     }
+}
+
+/// `GL_g` = ln mean over the purity grid of the read log-likelihood at dosage `g`, bias `b`.
+fn gl_dosage(d: &[f64], n_disc: i64, d_pseudo: f64, g: usize, b: f64, cfg: &Config) -> f64 {
+    let per_p: Vec<f64> = cfg
+        .purity_grid
+        .iter()
+        .map(|&p| sum_ll(d, n_disc, d_pseudo, phi(g, p, cfg.bg_alt_rate, b)))
+        .collect();
+    logmeanexp(&per_p)
+}
+
+/// Phred value relative to `max_gl` (negative when better), saturating like the PLs.
+fn rel_phred(ll: f64, max_gl: f64) -> i32 {
+    (-PHRED_PER_NAT * (ll - max_gl)).round() as i32
 }
 
 /// The likelihood part of a call: GL per dosage, posterior, PL, GQ, best dosage.
@@ -89,19 +124,15 @@ struct Fit {
     best: usize,
     /// Phred profile over `cfg.noise_frac_grid`, relative to the best dosage (may be negative)
     pl_frac: Vec<i32>,
+    /// het Phred likelihood at each `cfg.ref_bias_grid` value, relative to the best dosage
+    pl_het_bias: Vec<i32>,
 }
 
-fn fit(d: &[f64], n_disc: i64, cfg: &Config) -> Fit {
-    let bg = cfg.bg_alt_rate;
+fn fit(d: &[f64], n_disc: i64, cfg: &Config, bias: f64) -> Fit {
     let d_pseudo = clamp_llr(cfg.disc_weight_nats);
     let mut gl = [0.0f64; 3];
     for (g, slot) in gl.iter_mut().enumerate() {
-        let per_p: Vec<f64> = cfg
-            .purity_grid
-            .iter()
-            .map(|&p| sum_ll(d, n_disc, d_pseudo, phi(g, p, bg)))
-            .collect();
-        *slot = logmeanexp(&per_p);
+        *slot = gl_dosage(d, n_disc, d_pseudo, g, bias, cfg);
     }
     let max_gl = gl.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
     // shared-fraction profile: the reads at alt fraction φ directly (no purity: φ IS the fraction)
@@ -110,6 +141,8 @@ fn fit(d: &[f64], n_disc: i64, cfg: &Config) -> Fit {
         .iter()
         .map(|&f| (-PHRED_PER_NAT * (sum_ll(d, n_disc, d_pseudo, f) - max_gl)).round().clamp(-9999.0, 9999.0) as i32)
         .collect();
+    let pl_het_bias: Vec<i32> =
+        cfg.ref_bias_grid.iter().map(|&b| rel_phred(gl_dosage(d, n_disc, d_pseudo, 1, b, cfg), max_gl)).collect();
     let mut pl = [0i32; 3];
     for g in 0..3 {
         // `as i32` saturates (and maps NaN to 0)
@@ -140,7 +173,7 @@ fn fit(d: &[f64], n_disc: i64, cfg: &Config) -> Fit {
     // 1 - post_best as the sum of the others: no cancellation when post_best -> 1
     let rest: f64 = (0..3).filter(|&g| g != best).map(|g| post[g]).sum();
     let gq = if rest <= 0.0 { 99 } else { (-10.0 * rest.log10()).round().clamp(0.0, 99.0) as i32 };
-    Fit { post, pl, gq, best, pl_frac }
+    Fit { post, pl, gq, best, pl_frac, pl_het_bias }
 }
 
 /// MLE of φ on the 0..1 grid (step 1/VAF_STEPS) over the real reads; 0.0 without reads.
@@ -167,7 +200,8 @@ fn normalised_prior(cfg: &Config) -> [f64; 3] {
     if z > 0.0 { p.map(|x| x / z) } else { [1.0 / 3.0; 3] }
 }
 
-/// Summarise one locus from its read observations. `n_disc` discordant anchors add
+/// Summarise one locus from its read observations at reference bias `bias` (the driver passes
+/// `cfg.ref_bias_for(kind)`; 1 = uncorrected). `n_disc` discordant anchors add
 /// `cfg.disc_weight_nats` each towards alt (0 by default). The driver decides `status`
 /// (`no_reads` when `obs` is empty, `high_coverage`, `error`) and formats the row.
 ///
@@ -176,7 +210,7 @@ fn normalised_prior(cfg: &Config) -> [f64; 3] {
 /// llr = ln(0.5) by construction and together they are the only evidence of absence. They are
 /// not counted as votes. Unexplained reads (chimeras / mismaps) are counted (`n_art`) and
 /// excluded from the likelihood.
-pub fn call_locus(obs: &[ReadObs], n_disc: i64, cfg: &Config) -> Call {
+pub fn call_locus(obs: &[ReadObs], n_disc: i64, cfg: &Config, bias: f64) -> Call {
     let (mut n_alt, mut n_ref, mut n_art, mut n_uninf) = (0i64, 0i64, 0i64, 0i64);
     let (mut n_alt_l, mut n_alt_r) = (0i64, 0i64);
     let (mut score_alt, mut score_ref) = (0i64, 0i64);
@@ -221,9 +255,10 @@ pub fn call_locus(obs: &[ReadObs], n_disc: i64, cfg: &Config) -> Call {
             gq: 0,
             score_alt, score_ref,
             pl_frac: vec![0; cfg.noise_frac_grid.len()],
+            pl_het_bias: vec![0; cfg.ref_bias_grid.len()],
         };
     }
-    let f = fit(&d, n_disc, cfg);
+    let f = fit(&d, n_disc, cfg, bias);
     Call {
         n_alt, n_ref, n_art, n_uninf, n_alt_l, n_alt_r,
         vaf: vaf_mle(&d),
@@ -232,6 +267,7 @@ pub fn call_locus(obs: &[ReadObs], n_disc: i64, cfg: &Config) -> Call {
         gq: f.gq,
         score_alt, score_ref,
         pl_frac: f.pl_frac,
+        pl_het_bias: f.pl_het_bias,
     }
 }
 
@@ -254,7 +290,7 @@ mod tests {
         v
     }
     fn call(obs: &[ReadObs]) -> Call {
-        call_locus(obs, 0, &Config::default())
+        call_locus(obs, 0, &Config::default(), 1.0)
     }
     fn present(c: &Call) -> f64 {
         c.post[1] + c.post[2]
@@ -361,11 +397,11 @@ mod tests {
     fn disc_pseudo_reads_move_the_posterior_only_when_weighted() {
         let cfg = Config::default();
         let one_ref = reads(0, 0.0, 1, -15.0);
-        let a = call_locus(&one_ref, 3, &cfg);
-        let b = call_locus(&one_ref, 0, &cfg);
+        let a = call_locus(&one_ref, 3, &cfg, 1.0);
+        let b = call_locus(&one_ref, 0, &cfg, 1.0);
         assert_eq!(a.post, b.post);
         let w = Config { disc_weight_nats: 10.0, ..Config::default() };
-        let c = call_locus(&one_ref, 3, &w);
+        let c = call_locus(&one_ref, 3, &w, 1.0);
         assert!(c.post[1] > 0.9, "{:?}", c.post);
     }
 
@@ -379,6 +415,55 @@ mod tests {
         b.alt_side = AltSide::Both;
         let c = call(&[l, l, r, b]);
         assert_eq!((c.n_alt, c.n_alt_l, c.n_alt_r), (4, 3, 2));
+    }
+
+    #[test]
+    fn bias_one_is_the_uncorrected_model() {
+        for &p in &[1.0, 0.9, 0.85, 0.8, 0.7, 0.3] {
+            assert_eq!(phi(1, p, 0.005, 1.0).to_bits(), (p / 2.0f64).max(0.005).to_bits());
+            assert_eq!(phi(2, p, 0.005, 1.0).to_bits(), p.max(1.0 - 0.005).to_bits());
+        }
+        // a profile over a bias grid changes nothing else, and its b = 1 value IS pl_het
+        let cfg = Config::default();
+        let grid = Config { ref_bias_grid: vec![0.4, 0.6, 0.8, 1.0], ..Config::default() };
+        for obs in [reads(5, 15.0, 15, -15.0), reads(0, 0.0, 20, -15.0), reads(10, 15.0, 10, -15.0), reads(3, 8.0, 1, -6.0)] {
+            let a = call_locus(&obs, 0, &cfg, 1.0);
+            let mut b = call_locus(&obs, 0, &grid, 1.0);
+            assert_eq!(b.pl_het_bias[3], b.pl[1]);
+            // lower b: a het explains extra ref reads better -> the profile is not flat
+            assert!(b.pl_het_bias[0] != b.pl_het_bias[3] || b.n_alt == 0);
+            b.pl_het_bias.clear();
+            assert_eq!(a, b);
+        }
+    }
+
+    #[test]
+    fn bias_corrected_het() {
+        // purity 0.85, alt reads captured at 0.6x: expected het fraction 0.425·0.6/(0.255+0.575) = 0.307
+        let c085 = Config { purity_grid: vec![0.85], ..Config::default() };
+        let het = reads(5, 15.0, 15, -15.0);
+        let raw = call_locus(&het, 0, &c085, 1.0);
+        let cor = call_locus(&het, 0, &c085, 0.6);
+        assert!(cor.post[1] > 0.99 && cor.post[0] < 1e-6, "{:?}", cor.post);
+        // the uncorrected model also calls it present (5 alt reads), but the corrected het fits
+        // better: higher likelihood relative to absent, higher GQ
+        assert!(cor.pl[0] > raw.pl[0], "{:?} vs {:?}", cor.pl, raw.pl);
+        assert!(cor.gq >= raw.gq, "{} vs {}", cor.gq, raw.gq);
+        // a non-carrier stays absent
+        let wt = call_locus(&reads(0, 0.0, 20, -15.0), 0, &c085, 0.6);
+        assert!(wt.post[0] > 0.999, "{:?}", wt.post);
+        // a balanced 10/20 at b = 0.6 is het (expected 0.31, but hom = 0.995 is far worse), not hom
+        let bal = call_locus(&reads(10, 15.0, 10, -15.0), 0, &c085, 0.6);
+        assert!(bal.post[1] > 0.99 && bal.post[2] < 1e-6, "{:?}", bal.post);
+        // and with the default purity grid
+        let d = Config::default();
+        let c = call_locus(&het, 0, &d, 0.6);
+        assert!(c.post[1] > 0.99, "{:?}", c.post);
+        // (a lower expected het fraction makes each ref read weaker evidence of absence: 20 ref
+        // reads give P(absent) ≈ 0.995 at b = 0.6 vs > 0.9999 uncorrected)
+        let wt = call_locus(&reads(0, 0.0, 20, -15.0), 0, &d, 0.6);
+        assert!(wt.post[0] > 0.99, "{:?}", wt.post);
+        assert!(call_locus(&reads(10, 15.0, 10, -15.0), 0, &d, 0.6).post[2] < 1e-6);
     }
 
     /// Prints P(absent)/GQ for n ref-only and n alt-only reads (threshold review).

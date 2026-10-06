@@ -1,0 +1,10 @@
+# peartree-genotype2 config for GRCh38 colony BAMs WITH the reference-bias profile: the base config
+# plus the per-locus het likelihood at a grid of reference-bias values b (pl_het_b400 .. pl_het_b1000
+# columns). Calls in the per-colony files are unchanged (ref_bias stays 1); the joint step's
+# `--ref-bias auto` estimates b from germline-het loci (global, per locus kind, per colony) and
+# plugs it into each colony's het likelihood. See rust/peartree-genotype2/README.md "Reference bias".
+include = config.genotype2.grch38
+ref_bias_grid = 0.4,0.5,0.6,0.7,0.8,0.9,1.0
+# a FIXED correction of the per-colony calls themselves (b, or per kind) would be e.g.
+#   ref_bias = 0.9
+#   ref_bias_kind = L1_MED_DELETION:0.6
