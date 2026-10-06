@@ -59,7 +59,7 @@ one_sided_require_polya = true
 one_sided_min_polya = 10
 one_sided_min_spanning_fragments = 2   # >= 2 fragments must read through the WHOLE poly-A into structured sequence (the tail's other boundary), else no one-sided locus
 one_sided_span_beyond = 10
-polya_rescue_min_fragments = 2      # every poly-A-rescued insertion end (join() rescue, Bp+polyA mate pool, Feature A) needs >= 2 distinct fragments, else it is not emitted
+polya_rescue_min_fragments = 0      # off in this POOLED arm (floor 1 per colony, pooled >= 2 in combine); the per-colony rule (Jeremy 2026-10-06: >= 2 fragments per end in EACH colony) is .tprt2frag
 clip_slippage_junction_spare = 20  # SPEC-8b never rejects a pair whose clip starts with 20 bp of structure
 short_polya_clip = true            # SENS-8: poly-A clip consensus truncated by SBS jitter may be < 12 bp
 short_overhang_evidence = true     # sidecar SHORT rows (reads crossing a junction by 1..20 bp)
