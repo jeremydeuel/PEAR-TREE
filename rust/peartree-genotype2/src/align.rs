@@ -55,13 +55,20 @@ pub fn align(seq: &[u8], qual: &[u8], seg_seq: &[u8], seg_qual: &[u8], diagonal:
 /// diagonal, the best kept, then ONE unbanded fallback if the best is still below
 /// `perfect_ll - fallback_slack_nats`. An empty `diagonals` slice means unbanded.
 pub(crate) fn align_multi(seq: &[u8], qual: &[u8], seg_seq: &[u8], seg_qual: &[u8], diagonals: &[i64], cfg: &Config) -> Alignment {
+    align_multi_opts(seq, qual, seg_seq, seg_qual, diagonals, cfg, cfg.realign_fallback_full).0
+}
+
+/// [`align_multi`] with the per-call fallback switchable; also returns `perfect_ll` so the
+/// caller can decide on a fallback across SEVERAL segments (readlik.rs: a reference read scored
+/// against an alt segment is legitimately far below perfect, that is not a band miss).
+pub(crate) fn align_multi_opts(seq: &[u8], qual: &[u8], seg_seq: &[u8], seg_qual: &[u8], diagonals: &[i64], cfg: &Config, fallback: bool) -> (Alignment, f64) {
     WS.with(|ws| {
         let ws = &mut *ws.borrow_mut();
         let p = Params::new(cfg);
         ws.ensure_table(cfg);
         let perfect = ws.prepare_read(seq, qual, cfg);
         if diagonals.is_empty() {
-            return ws.run(seg_seq, seg_qual, None, &p);
+            return (ws.run(seg_seq, seg_qual, None, &p), perfect);
         }
         let mut best: Option<Alignment> = None;
         for (i, &d) in diagonals.iter().enumerate() {
@@ -74,13 +81,13 @@ pub(crate) fn align_multi(seq: &[u8], qual: &[u8], seg_seq: &[u8], seg_qual: &[u
             }
         }
         let banded = best.expect("non-empty diagonals");
-        if cfg.realign_fallback_full && banded.ll < perfect - cfg.fallback_slack_nats {
+        if fallback && banded.ll < perfect - cfg.fallback_slack_nats {
             let full = ws.run(seg_seq, seg_qual, None, &p);
             if full.ll >= banded.ll {
-                return full;
+                return (full, perfect);
             }
         }
-        banded
+        (banded, perfect)
     })
 }
 

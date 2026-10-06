@@ -10,7 +10,7 @@
 //! (or Unexplained if the side that exists explains too little of it). A model without any
 //! segment yields Uninformative with `explained_frac = 0`.
 
-use crate::align::{align_multi, Alignment};
+use crate::align::{align_multi_opts, Alignment};
 use crate::config::Config;
 use crate::types::{Hyp, LocusModel, ReadClass, ReadInput, ReadObs, Segment};
 
@@ -32,15 +32,34 @@ pub fn score_read(model: &LocusModel, read: &ReadInput, cfg: &Config) -> ReadObs
     let mut best_ref: Option<(Alignment, &Segment)> = None;
     let mut best_alt: Option<(Alignment, &Segment)> = None;
     let mut diags: Vec<i64> = Vec::with_capacity(4);
+    // Pass 1: banded on every segment (no per-segment fallback: a reference read scored
+    // against an alt segment is legitimately far below perfect, and vice versa).
+    let mut perfect = 0.0f64;
     for seg in &model.segments {
         diagonals(seg, read, lead, trail, &mut diags);
-        let a = align_multi(read.seq, read.qual, &seg.seq, &seg.qual, &diags, cfg);
+        let (a, pf) = align_multi_opts(read.seq, read.qual, &seg.seq, &seg.qual, &diags, cfg, false);
+        perfect = pf;
         let slot = match seg.hyp {
             Hyp::Ref => &mut best_ref,
             Hyp::Alt => &mut best_alt,
         };
         if slot.as_ref().is_none_or(|(b, _)| a.ll > b.ll) {
             *slot = Some((a, seg));
+        }
+    }
+    // Pass 2 (rare): the read fits NO hypothesis well -> either the band missed (wrong
+    // diagonal) or the read is chimeric; redo every segment unbanded and keep the better.
+    let best_overall = best_ref.map_or(f64::NEG_INFINITY, |(a, _)| a.ll).max(best_alt.map_or(f64::NEG_INFINITY, |(a, _)| a.ll));
+    if cfg.realign_fallback_full && best_overall < perfect - cfg.fallback_slack_nats {
+        for seg in &model.segments {
+            let (a, _) = align_multi_opts(read.seq, read.qual, &seg.seq, &seg.qual, &[], cfg, false);
+            let slot = match seg.hyp {
+                Hyp::Ref => &mut best_ref,
+                Hyp::Alt => &mut best_alt,
+            };
+            if slot.as_ref().is_none_or(|(b, _)| a.ll > b.ll) {
+                *slot = Some((a, seg));
+            }
         }
     }
 
