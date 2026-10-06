@@ -7,7 +7,8 @@ read-through transcription stopped, usually a downstream polyadenylation signal)
 
 Novel sources (SPEC "Novel source rule"): a unique inserted segment that matches no library flank
 is a credible novel 3' transduction source when, on the remap genome (hs1):
-  * it maps uniquely (MAPQ >= 20),
+  * it maps uniquely (MAPQ >= 20) at >= `novel_source_min_tag_identity` (0.95) -- a diverged
+    repeat-family member matching its closest genomic copy is not a placement,
   * within `novel_source_max_dist` (15 kb) DOWNSTREAM, strand-aware, of a reference L1 that is
     >= 5.5 kb long and >= 95 % identical to the L1HS consensus (or of an L1 insertion called
     elsewhere in the same cohort),
@@ -74,6 +75,10 @@ DEFAULTS = {
     "novel_source_tier_a": 0.98,
     "novel_source_min_mapq": 20,
     "novel_source_min_seg": 25,
+    # the tag must BE the placed genome segment, not a relative of it: a repeat-family member
+    # (Alu / L1 / hAT copy) maps -- sometimes uniquely -- to the closest copy at well below
+    # 100 % identity, and would make that copy's neighbourhood a fake source
+    "novel_source_min_tag_identity": 0.95,
 }
 
 
@@ -232,6 +237,8 @@ class NovelSourceFinder:
         if len(hits) != 1:
             return None
         contig, s, e, gstrand, mapq, idn = hits[0]
+        if idn < c["novel_source_min_tag_identity"]:
+            return None
         # source flank is downstream of the element in element sense, so the source L1 is on
         # the same genomic strand as the segment's placement and lies upstream of it.
         best = None
