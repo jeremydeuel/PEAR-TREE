@@ -31,6 +31,8 @@ def main():
     ap.add_argument("--new", required=True, help="joint table of the run whose extra privates are listed")
     ap.add_argument("--genotype-dir", required=True, help="per-colony v2 files <colony>.txt.gz")
     ap.add_argument("--fit", help="tree_fit phylo_fit.tsv (adds its class column)")
+    ap.add_argument("--crosstab", action="store_true",
+                    help="also print tree_fit class x joint class for --base and --new (needs --fit), as '#' lines")
     a = ap.parse_args()
 
     base = {r["locus"]: r for r in rows(a.base)}
@@ -58,6 +60,16 @@ def main():
     print(f"# n = {len(extra)}; by tree_fit class: {dict(collections.Counter(tf.get(r['locus'], 'NA') for r in extra))}; "
           f"base class: {dict(collections.Counter(joint_class(base[r['locus']]) for r in extra))}; "
           f"carrier alt reads: {dict(sorted(collections.Counter(gt.get(r['carriers'], {}).get(r['locus'], {}).get('n_alt', 'NA') for r in extra).items()))}")
+    if a.crosstab and tf:
+        jc = ["ROOT", "clade", "private", "INDEP", "NOISE"]
+        tc = ["germline", "informative_shared", "private", "noise", "uninformative_depth"]
+        for label, table in (("base", list(base.values())), ("new", new_rows)):
+            x = collections.Counter((tf.get(r["locus"], "NA"), joint_class(r)) for r in table)
+            print(f"# {label}: {'tree_fit':<20}" + "".join(f"{c:>9}" for c in jc))
+            for t in tc:
+                print(f"# {label}: {t:<20}" + "".join(f"{x[(t, c)]:>9}" for c in jc))
+            tot = collections.Counter(joint_class(r) for r in table)
+            print(f"# {label}: {'TOTAL':<20}" + "".join(f"{tot[c]:>9}" for c in jc))
 
 
 if __name__ == "__main__":

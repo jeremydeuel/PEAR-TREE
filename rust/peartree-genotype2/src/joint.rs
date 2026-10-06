@@ -698,7 +698,7 @@ fn estimate_ref_bias(mode: RefBias, loci: &[String], kinds: &[String], votes: &[
         let (b, source) = if n < BIAS_MIN_KIND_LOCI {
             (g, "global (few loci)")
         } else if uninf_frac > BIAS_MAX_UNINF_FRAC {
-            (g, "global (uninformative-dominated)")
+            (1.0, "none (uninformative-dominated)")
         } else {
             let bv = (a as f64 + sa) / (r as f64 + sr);
             let w = n as f64 / (n as f64 + BIAS_KIND_PSEUDO_LOCI);
@@ -1121,8 +1121,19 @@ pub fn run(args: &JointArgs) -> io::Result<()> {
     for (i, name) in loci.iter().enumerate() {
         let rows: Vec<Option<&Row>> = (0..c).map(|col| tables[col].as_ref().and_then(|t| t.rows.get(name))).collect();
         if let Some(e) = &est {
+            // a locus whose reads are mostly uninformative (far duplications: the reference-junction
+            // reads score ln 1/2 by construction) gets no correction: its 2-3 votes carry no bias
+            // information and a lowered het expectation only turns stray alt reads into hets
+            // (PD37590: 19 L1-mediated duplications with 0 ref / 27-57 uninformative / 3 alt reads
+            // became private calls at the global b)
+            let (mut inf, mut uninf) = (0i64, 0i64);
+            for r in rows.iter().flatten() {
+                inf += r.n_alt + r.n_ref;
+                uninf += r.n_uninf;
+            }
+            let skip = uninf as f64 > BIAS_MAX_UNINF_FRAC * (inf + uninf) as f64;
             for (col, b) in cell_b.iter_mut().enumerate() {
-                *b = e.cell_b(&kinds[i], col, &biases);
+                *b = if skip { 1.0 } else { e.cell_b(&kinds[i], col, &biases) };
             }
         }
         locus_terms(&model, &rows, est.as_ref().map(|_| cell_b.as_slice()), &mut terms, &mut usable[i * c..(i + 1) * c]);
@@ -1622,8 +1633,8 @@ mod tests {
         let blunt = get("BLUNT");
         assert!((blunt.b - 0.9).abs() < 0.04 && blunt.b < blunt.raw + 1e-9 || blunt.b <= 0.9, "{blunt:?}");
         let dup = get("L1_MED_DUPLICATION");
-        assert_eq!(dup.source, "global (uninformative-dominated)");
-        assert!((dup.b - est.global).abs() < 1e-12 && dup.raw < 0.35, "{dup:?}");
+        assert_eq!(dup.source, "none (uninformative-dominated)");
+        assert!(dup.b == 1.0 && dup.raw < 0.35, "{dup:?}");
         assert_eq!(get("L1_MED_DELETION").source, "global (few loci)");
         assert!(est.global > 0.55 && est.global < 0.75, "{}", est.global);
         // identical colonies: factors 1 (to the shrinkage's rounding)

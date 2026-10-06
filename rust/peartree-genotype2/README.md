@@ -112,7 +112,8 @@ uncorrected model exactly.
   global `b = (Σalt + ½)/(Σref + ½)`; per kind the same, shrunk to the global value with 200
   pseudo-votes and then on the log scale with weight `n_loci/(n_loci + 100)` (the bias is a locus
   property: PD37590's 17 L1-mediated deletions carried 25k votes at raw b 0.45, which unshrunk turned
-  3/37-alt background cells into ~75 private calls), and the global value for a kind with < 5 candidate loci or whose candidate reads are
+  3/37-alt background cells into ~75 private calls), and the global value for a kind with < 5 candidate loci; NO correction (b = 1) for a kind whose
+  candidate reads are > 50 % uninformative, and for any locus whose reads pooled over the colonies are
   > 50 % uninformative (far duplications: the reference-junction reads score ln ½ by construction, so
   their 2-3 votes do not describe the likelihood -- they never get a spurious ~0.6 of their own);
   per colony a factor `(Σalt + 200)/(Σ raw_kind·ref + 200)` (against the kind's own vote ratio, so it does not re-absorb the shrinkage) over the kind-estimated candidates. Each
