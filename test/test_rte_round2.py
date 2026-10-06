@@ -285,6 +285,35 @@ def test_insertion_call_counts_as_carrier_only_in_tprt_mode(tmp_path):
                 A_[k] = v
 
 
+def test_numeric_matrix_and_joint_table(tmp_path):
+    """genotype2 joint matrix (P(carrier), empty first header cell, empty = no data): carrier at
+    >= 0.9, wild-type at <= 0.1, nart 0; `<P>.joint.tsv` beside it is attached per locus."""
+    m = _annotate_v2()
+    gt = tmp_path / "P.genotypes.csv.gz"
+    with gzip.open(gt, "wt") as fh:
+        fh.write(";S1;S2;S3\n")
+        fh.write("chr22:100-120;0.9500;;0.0100\n")       # 1 carrier, 1 wt, 1 no data
+        fh.write("chr22:500-520;0.5000;0.0500;0.0000\n")  # no carrier -> dropped
+        fh.write("chr22:900-920;1.0000;0.9000;0.1000\n")  # 2 carriers, 1 wt
+
+    def run():
+        v = object.__new__(m.VariantAnnotationContainer)
+        v.genotyping_file = str(gt)
+        v.insertions = {t: m.Insertion(t, "", "acgt") for t in ("chr22:100-120", "chr22:500-520", "chr22:900-920")}
+        v.read_genotyping()
+        return v
+    v = run()
+    assert {k: (i.nins, i.nwt, i.nart) for k, i in v.insertions.items()} == {
+        "chr22:100-120": (1, 1, 0), "chr22:900-920": (2, 1, 0)}
+    assert not v.joint and v.insertions["chr22:900-920"].joint is None
+    with open(tmp_path / "P.joint.tsv", "w") as fh:
+        fh.write("locus\tbest\tcarriers\tn_carriers\tlog10_bf_tree\n")
+        fh.write("chr22:900-920\tN3\tS1,S2\t2\t2.5\n")
+    v = run()
+    assert v.insertions["chr22:900-920"].joint["best"] == "N3"
+    assert v.insertions["chr22:100-120"].joint is None
+
+
 # ------------------------------------------------------------------------- build_gene_model
 def test_build_gene_model_reads_ucsc_refseq_gtf(tmp_path):
     gtf = tmp_path / "hs1.ncbiRefSeq.gtf"
