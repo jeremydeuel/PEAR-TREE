@@ -11,6 +11,9 @@ layout required), writing the tmp dfam/sam/fasta next to the output.
 Usage:
   run_annotate.py --combined step2.combined.txt.gz --genotypes step2.genotypes.csv.gz \
       --out annotate.txt [--workdir DIR]
+--genotypes is either combine_genotypes' call matrix or the genotype2 joint step's numeric
+P(carrier) matrix (auto-detected by annotate_v2; a `<P>.joint.tsv` beside a numeric matrix adds
+joint_* columns to the table).
 Env (defaults in brackets):
   PT_HMM   [<scriptdir>/peartree_rte.hmm]        HMM library (build_hmm.sh)
   PT_EXON  [<scriptdir>/pseudogene_exons.hs1.bed] pseudogene exon track (build_exon_track.py)

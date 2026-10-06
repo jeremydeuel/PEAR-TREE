@@ -23,14 +23,17 @@ usage: score_genotypes.py --e2e-dir $SP/work/e2e --geno-dir DIR [--samples 3] [-
 """
 import argparse
 import collections
-import gzip
 import os
+import sys
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..')))
+from tools import genotype2_io as GIO  # noqa: E402
 
 PRESENT = {'heterozygous', 'homozygous', 'insertion', 'present'}
 ABSENT = {'wild-type', 'absent'}
 # numeric (peartree-genotype2) files: posterior thresholds that define present / absent
-V2_P_PRESENT = 0.9
-V2_P_ABSENT = 0.8
+V2_P_PRESENT = GIO.P_CARRIER
+V2_P_ABSENT = GIO.P_ABSENT_ROW
 KINDS = ['TSD 2-40', 'target-site deletion', 'blunt 0-1', 'L1DEL (< -30)', 'L1DUP (> 40)',
          'one-sided', 'other']
 
@@ -66,26 +69,13 @@ def read_calls(path):
     `locus\tkind\tstatus`): 'present' if P(het)+P(hom) >= V2_P_PRESENT, 'absent' if
     P(absent) >= V2_P_ABSENT, else the status word or 'p_present=<x>' (a no-call reason)."""
     calls = {}
-    with gzip.open(path, 'rt') as fh:
-        head = fh.readline().rstrip('\n').split('\t')
-        v2 = head[:3] == ['locus', 'kind', 'status']
-        col = {h: i for i, h in enumerate(head)}
-        for line in fh:
-            p = line.rstrip('\n').split('\t')
-            if not v2:
-                calls[p[0]] = p[1]
-                continue
-            if p[col['status']] != 'ok':
-                calls[p[0]] = p[col['status']]
-                continue
-            p_abs = float(p[col['p_absent']])
-            p_pres = float(p[col['p_het']]) + float(p[col['p_hom']])
-            if p_pres >= V2_P_PRESENT:
-                calls[p[0]] = 'present'
-            elif p_abs >= V2_P_ABSENT:
-                calls[p[0]] = 'absent'
-            else:
-                calls[p[0]] = f'p_present={p_pres:.1f}'
+    fmt, rows = GIO.iter_colony_rows(path)
+    for r in rows:
+        if fmt == GIO.FMT_LEGACY:
+            calls[r['locus']] = r['genotype']
+            continue
+        b = GIO.v2_row_bucket(r)          # status word / present / absent / ambiguous
+        calls[r['locus']] = f'p_present={GIO.v2_p_present(r):.1f}' if b == GIO.AMBIGUOUS else b
     return calls
 
 

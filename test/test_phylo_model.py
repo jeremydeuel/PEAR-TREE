@@ -250,6 +250,82 @@ def test_tree_fit_and_discrimination_cli_on_simulated_counts(tmp_path):
     assert feats.loc["tprt_score", "auc"] > 0.6               # real insertions score higher by design
 
 
+def _to_v2_dir(src, dst, drop_every=7):
+    """Rewrite legacy per-colony files as genotype2 numeric files with the same n_alt / n_ref
+    (posteriors are placeholders); every `drop_every`-th row of the first colony gets status
+    no_reads (empty numerics) and is also zeroed in a legacy copy, so both fits see the same data."""
+    import gzip
+    from tools import genotype2_io as GIO
+    os.makedirs(dst / "v2", exist_ok=True)
+    os.makedirs(dst / "legacy", exist_ok=True)
+    for k, f in enumerate(sorted(os.listdir(src))):
+        with gzip.open(src / f, "rt") as fh:
+            head = fh.readline().rstrip("\n").split("\t")
+            rows = [dict(zip(head, line.rstrip("\n").split("\t"))) for line in fh]
+        with gzip.open(dst / "v2" / f, "wt") as v2, gzip.open(dst / "legacy" / f, "wt") as lg:
+            v2.write("\t".join(GIO.V2_HEADER) + "\n")
+            lg.write("\t".join(head) + "\n")
+            for i, r in enumerate(rows):
+                if k == 0 and i % drop_every == 0:
+                    v2.write("\t".join([r["insertion"], "TSD", "no_reads", "0"] + [""] * 17) + "\n")
+                    r = dict(r, n_alt="0", n_ref="0", genotype="no-coverage")
+                else:
+                    a, n = int(r["n_alt"]), int(r["n_ref"])
+                    v2.write("\t".join([r["insertion"], "TSD", "ok", str(a + n + 3), str(a), str(n), "3", "0",
+                                        "0", str(a), str(a), "0.5", "0.3", "0.4", "0.3", "5", "4", "5",
+                                        "4", "10", "10"]) + "\n")
+                lg.write("\t".join(r[h] for h in head) + "\n")
+
+
+def test_tree_fit_reads_genotype2_numeric_dir_and_matrix(tmp_path):
+    """v2 per-colony files feed the same read-vote model (n_alt / n_ref; status != ok = missing):
+    the fit equals a legacy fit of the same counts. A numeric --genotypes matrix adds
+    matrix_n_carriers / matrix_n_wt and, with <P>.joint.tsv beside it, joint_* columns + the
+    cross-tab in summary.md, and never writes passes_combine_genotypes (it is not a gate)."""
+    import gzip
+    import pandas as pd
+    from tools.phylo import simulate_counts
+    sim = tmp_path / "sim"
+    simulate_counts.main(["--tree", "random:6", "--out", str(sim), "--seed", "3", "--n-clade", "60",
+                          "--n-germline", "30", "--n-nonclade", "15", "--n-noise", "10", "--n-chrx", "0"])
+    _to_v2_dir(sim / "genotypes", tmp_path)
+    loci = pd.read_csv(sim / "truth.tsv", sep="\t")["locus"].tolist()
+    cols = sorted(f.split(".")[0] for f in os.listdir(sim / "genotypes"))
+    with gzip.open(tmp_path / "P.genotypes.csv.gz", "wt") as fh:
+        fh.write(";" + ";".join(cols) + "\n")
+        for i, l in enumerate(loci):
+            fh.write(l + ";" + ";".join("" if (j == 0 and i % 5 == 0) else ("0.9500" if (i + j) % 3 else "0.0100")
+                                        for j in range(len(cols))) + "\n")
+    with open(tmp_path / "P.joint.tsv", "w") as fh:
+        fh.write("locus\tlocus_kind\tn_colonies_data\tbest\tcarriers\tn_carriers\tpost_best\tbest_tree\t"
+                 "best_tree_clade\tpost_tree\tlog10_bf_tree\tlog10_L_best_tree\tlog10_L_root\t"
+                 "log10_L_indep\tlog10_L_noise\n")
+        for i, l in enumerate(loci):
+            best, car = (("ROOT", ",".join(cols)) if i % 3 == 0 else (("NOISE", "") if i % 3 == 1 else (cols[0], cols[0])))
+            fh.write(f"{l}\tTSD\t{len(cols)}\t{best}\t{car}\t{len(car.split(',')) if car else 0}\t0.9\t"
+                     f"ROOT\t{','.join(cols)}\t0.9\t1.5\t-1\t-1\t-2\t-3\n")
+    common = ["--tree", str(sim / "tree.nwk"), "--sex", "F", "--bootstrap", "0", "--no-cells"]
+    TF.main(["--genotype-dir", str(tmp_path / "legacy"), "--out", str(tmp_path / "fit_leg")] + common)
+    TF.main(["--genotypes", str(tmp_path / "P.genotypes.csv.gz"), "--genotype-dir", str(tmp_path / "v2"),
+             "--out", str(tmp_path / "fit_v2")] + common)
+    a = pd.read_csv(tmp_path / "fit_leg" / "phylo_fit.tsv", sep="\t").set_index("locus")
+    b = pd.read_csv(tmp_path / "fit_v2" / "phylo_fit.tsv", sep="\t").set_index("locus")
+    for c in ("class", "label", "best_branch", "total_alt", "total_ref", "n_colonies_data", "log10_bf_tree"):
+        assert (a[c] == b.loc[a.index, c]).all(), c
+    assert "passes_combine_genotypes" not in b.columns
+    for c in ("matrix_n_carriers", "matrix_n_wt", "joint_best", "joint_class", "joint_n_carriers",
+              "joint_log10_bf_tree"):
+        assert c in b.columns, c
+    assert set(b["joint_class"]) == {"ROOT", "NOISE", "private"}
+    assert (b["matrix_n_carriers"] + b["matrix_n_wt"]).max() == len(cols)
+    assert "Cross-check: tree_fit class x genotype2 joint step" in (tmp_path / "fit_v2" / "summary.md").read_text()
+    # a directory mixing both formats is refused
+    import shutil
+    shutil.copy(tmp_path / "legacy" / sorted(os.listdir(tmp_path / "legacy"))[0], tmp_path / "v2" / "Zmixed.txt.gz")
+    with pytest.raises(ValueError, match="mixed genotype formats"):
+        G.read_genotype_dir(str(tmp_path / "v2"))
+
+
 def test_simlib_tree_design_nonclade_is_never_a_clade():
     sys.path.insert(0, os.path.join(REPO, "test"))
     from simlib import phylo as PH
