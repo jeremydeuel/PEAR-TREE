@@ -159,3 +159,42 @@ def test_templated_source_in_unmasked_l1_flank_without_rte_record():
     # upstream of the source / beyond 15 kb: no transduction
     assert flank_source_at(lib, "chrX", 11289000) is None
     assert flank_source_at(lib, "chrX", 11295826 + 15500) is None
+
+
+# ------------------------------------------------------------------ ALU vs SVA vs reference
+def test_chr11_127257706_reference_alu_is_not_the_insert():
+    """Legacy unknown; the RTE record said ALU (LIKELY_TPRT) and was suspected SVA. The only
+    'element' pieces (ALU_Y 198-276 at 80-88 %) are 100 % identical to the reference Alu right
+    behind the T23 at the breakpoint (reads through a poly-T of different length lose their
+    whole-read REF hit); the clip after the poly-T is degraded and closer to that local Alu
+    than to any Alu (<= 0.69) or SVA (<= 0.64) consensus, with no hexamer / VNTR / SINE-R. The
+    honest output is no element (not a confident ALU, not SVA) and no class promotion."""
+    row, rec = replay("chr11:127257706-127257729")
+    assert rec.element not in ("ALU", "SVA")
+    assert final("chr11:127257706-127257729")[0] == "unknown"
+
+
+def test_element_piece_identical_to_site_window_is_ref():
+    import random
+    from tools.rte.assembly import Assembler, SiteContext
+    from tools.rte.sequtil import rc
+    lib = rte_sim.library()
+    alu = lib.consensus["ALU_Y"][:lib.cons_end["ALU_Y"]]
+    rng = random.Random(3)
+    old = "".join(ch if rng.random() > 0.12 else rng.choice("ACGT".replace(ch, "")) for ch in alu)
+    left = rte_sim.rnd(400, rng)
+    window = left + "T" * 23 + rc(old) + rte_sim.rnd(400, rng)
+    ctx = SiteContext("chrS:400-423", "chrS", 400, 423, window_start=0, window_seq=window)
+    asm = Assembler(lib)
+    # read through a poly-T expanded from 23 to 35: the (low-quality, 25 % errors) flank before
+    # the run + T35 + the reference Alu -- the whole-read REF hit falls below min_ref_identity
+    noisy = "".join(ch if rng.random() > 0.25 else rng.choice("ACGT".replace(ch, ""))
+                    for ch in left[-40:])
+    read = noisy + "T" * 35 + rc(old)[:76]
+    lay = asm.layout(read, ctx, side="LEFT", role="CLIP")
+    assert not any(s.kind == "ELEMENT" for s in lay.segments)
+    assert lay.segments[-1].kind == "REF"
+    # a young inserted Alu (consensus-identical) next to that old reference copy stays ELEMENT
+    read2 = left[-60:] + alu[150:] + "A" * 20
+    lay2 = asm.layout(read2, ctx, side="RIGHT", role="CLIP")
+    assert any(s.kind == "ELEMENT" for s in lay2.segments)

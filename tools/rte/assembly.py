@@ -48,6 +48,8 @@ DEFAULTS = {
     "polya_absorb_max_gap": 20,  # any piece <= this between two same-base poly-A runs is tail
     "polya_absorb_base_frac": 0.6,  # ... or any non-flank piece this rich in the tail base
     "wide_min_bp": 30,           # UNKNOWN pieces >= this are looked up in the wide site window
+    "element_local_min_identity": 0.95,  # an ELEMENT piece this identical to the site window ...
+    "element_local_margin": 0.03,        # ... and this much better than its consensus is REF
 }
 
 
@@ -239,6 +241,7 @@ class Assembler:
         lay = ReadLayout(name, side, role, frag_key, seq, accepted)
         self._mark_local(lay, ctx)
         self._local_is_element(lay)
+        self._element_is_local(lay, ctx)
         self._smooth_polya(lay)
         self._wide_local(lay, ctx)
         return lay
@@ -377,6 +380,36 @@ class Assembler:
                 s.kind, s.target, s.t_st, s.t_en, s.strand = "ELEMENT", name, ts, te, strand
                 s.identity = 1 - ed / max(1, len(piece))
                 s.matches = len(piece) - ed
+
+    def _element_is_local(self, lay, ctx):
+        """An ELEMENT piece that matches the site window (near-)exactly and better than its
+        consensus is the REFERENCE copy next to the breakpoint, not inserted sequence: a read
+        through a reference homopolymer of different length (poly-T slippage) loses its
+        whole-read REF hit (identity < min_ref_identity), and the reference Alu/L1 behind the
+        run then posed as the inserted element (PD37590 chr11:127257706: 'ALU' = the reference
+        Alu after a T23, 100 % to the window, 80-88 % to ALU_Y). Relabelled REF at a read end
+        (junction flank), LOCAL inside the read."""
+        c = self.cfg
+        ref, off = ctx.local_reference()
+        if not ref or len(ref) < 30:
+            return
+        segs = lay.segments
+        for i, s in enumerate(segs):
+            if s.kind != "ELEMENT" or s.qlen < c["min_segment_len"]:
+                continue
+            piece = lay.seq[s.q_st:s.q_en]
+            r = edlib_best(piece, ref, max_frac=1 - c["element_local_min_identity"])
+            if r is None:
+                continue
+            ed, ts, te, strand = r
+            idn = 1 - ed / max(1, len(piece))
+            if idn < c["element_local_min_identity"] or idn < s.identity + c["element_local_margin"]:
+                continue
+            at_end = (i == 0 and s.q_st <= 3) or (i == len(segs) - 1 and s.q_en >= len(lay.seq) - 3)
+            s.kind = "REF" if at_end else "LOCAL"
+            s.target = "site"
+            s.t_st, s.t_en = (ts, te) if off is not None else (-1, -1)
+            s.strand, s.identity, s.matches = strand, idn, len(piece) - ed
 
     @staticmethod
     def _merge_ref_runs(lay, max_gap=20):
