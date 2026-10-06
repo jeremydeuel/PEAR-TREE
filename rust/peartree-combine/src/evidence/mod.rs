@@ -421,25 +421,35 @@ impl AbsorbIndex {
         AbsorbIndex { by }
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn target(&self, x: usize, contig: ContigId, side: Side, pos: i64, tol: i64, alive: &[bool], one_sided: &[bool], names: &[String]) -> Option<usize> {
-        let v = self.by.get(&(contig, side))?;
+    /// candidates of (contig, side) with junction within `tol` of `pos`, in index order
+    fn window(&self, contig: ContigId, side: Side, pos: i64, tol: i64) -> &[(i64, usize)] {
+        let Some(v) = self.by.get(&(contig, side)) else { return &[] };
         let start = v.partition_point(|&(p, _)| p < pos - tol);
-        let mut best: Option<(bool, i64, &str, usize)> = None;
-        for &(p, i) in &v[start..] {
-            if p > pos + tol {
-                break;
-            }
-            if i == x || !alive[i] {
-                continue;
-            }
-            let key = (one_sided[i], (p - pos).abs(), names[i].as_str(), i);
-            if best.is_none_or(|b| key < b) {
-                best = Some(key);
-            }
-        }
-        best.map(|b| b.3)
+        let end = start + v[start..].partition_point(|&(p, _)| p <= pos + tol);
+        &v[start..end]
     }
+
+    #[allow(clippy::too_many_arguments)]
+    #[cfg(test)]
+    fn target(&self, x: usize, contig: ContigId, side: Side, pos: i64, tol: i64, alive: &[bool], one_sided: &[bool], names: &[String]) -> Option<usize> {
+        best_target(self.window(contig, side, pos, tol), x, pos, |i| alive[i], one_sided, names)
+    }
+}
+
+/// python `_absorb_target` over a window (every candidate within tol): the alive candidate
+/// other than `x` with the smallest `(one-sided, |d|, NAME, index)`.
+fn best_target(win: &[(i64, usize)], x: usize, pos: i64, alive: impl Fn(usize) -> bool, one_sided: &[bool], names: &[String]) -> Option<usize> {
+    let mut best: Option<(bool, i64, &str, usize)> = None;
+    for &(p, i) in win {
+        if i == x || !alive(i) {
+            continue;
+        }
+        let key = (one_sided[i], (p - pos).abs(), names[i].as_str(), i);
+        if best.is_none_or(|b| key < b) {
+            best = Some(key);
+        }
+    }
+    best.map(|b| b.3)
 }
 
 impl EvidenceState {
@@ -462,36 +472,68 @@ impl EvidenceState {
         let n = insertions.len();
         let names: Vec<String> = insertions.iter().map(|i| i.name(&ctx.contigs)).collect();
         let one_sided: Vec<bool> = insertions.iter().map(|i| i.open_side_eff().is_some()).collect();
-        let mut alive = vec![true; n];
         let mut one: Vec<usize> = (0..n).filter(|&i| one_sided[i]).collect();
         // python sorted(key=(-len(files), name)) -- stable
         one.sort_by(|&a, &b| insertions[b].files.len().cmp(&insertions[a].files.len()).then_with(|| names[a].cmp(&names[b])));
         let index = AbsorbIndex::new(&insertions);
-        // window[k] = every candidate target of one[k] (alive or not -- a static superset of
-        // what `index.target` can return). Everything processing one[k] reads or writes is
-        // one[k] itself, its window, and the shared `records` map.
-        let windows: Vec<Vec<usize>> = one
+        // windows[k] = every candidate target of one[k] (alive or not -- a static superset of
+        // what python's `_absorb_target` can return; may include one[k] itself, skipped).
+        let windows: Vec<&[(i64, usize)]> = one
             .iter()
             .map(|&xi| {
                 let x = &insertions[xi];
                 let side = x.open_side_eff().expect("one-sided").other();
-                let (Some(pos), Some(v)) = (x.junction(side), index.by.get(&(x.contig, side))) else { return Vec::new() };
-                let start = v.partition_point(|&(p, _)| p < pos - tol);
-                v[start..].iter().take_while(|&&(p, _)| p <= pos + tol).map(|&(_, i)| i).filter(|&i| i != xi).collect()
+                match x.junction(side) {
+                    Some(pos) => index.window(x.contig, side, pos, tol),
+                    None => &[],
+                }
             })
             .collect();
-        // index the sidecar rows of every member a re-evaluation can look up
-        let mut wanted: FxHashSet<Member> = FxHashSet::default();
+        // Schedule. Processing one[k] reads/writes only one[k], its window (alive flags, clips,
+        // members, member_sides, files, records of the target) and the `records` map (written
+        // only; replayed in python order at the end). level[k] = 1 + the highest level of an
+        // earlier k' sharing an insertion with k, so two loci of one level touch disjoint
+        // insertions and every conflicting earlier locus is in a lower level: running the
+        // levels in turn (each level's decisions and installs in order, its re-evaluations in
+        // parallel) is identical to python's one-at-a-time loop for any thread count.
+        let mut last: Vec<u32> = vec![0; n];
+        let mut levels: Vec<Vec<usize>> = Vec::new();
+        let mut n_nodes = 0usize;
         for (k, &xi) in one.iter().enumerate() {
-            if windows[k].is_empty() {
+            if !windows[k].iter().any(|&(_, i)| i != xi) {
                 continue;
             }
-            wanted.extend(self.members[insertions[xi].uid as usize].iter().copied());
-            for &i in &windows[k] {
-                wanted.extend(self.members[insertions[i].uid as usize].iter().copied());
+            let nodes = || std::iter::once(xi).chain(windows[k].iter().map(|&(_, i)| i));
+            let lv = nodes().map(|i| last[i]).max().unwrap_or(0) + 1;
+            for i in nodes() {
+                last[i] = lv;
+            }
+            n_nodes += windows[k].len() + 1;
+            if levels.len() < lv as usize {
+                levels.push(Vec::new());
+            }
+            levels[lv as usize - 1].push(k);
+        }
+        drop(last);
+        // index the sidecar rows of every member a re-evaluation can look up
+        let mut wanted: FxHashSet<Member> = FxHashSet::default();
+        for lv in &levels {
+            for &k in lv {
+                wanted.extend(self.members[insertions[one[k]].uid as usize].iter().copied());
+                for &(_, i) in windows[k] {
+                    wanted.extend(self.members[insertions[i].uid as usize].iter().copied());
+                }
             }
         }
         let pool = rayon::ThreadPoolBuilder::new().num_threads(ctx.threads.max(1)).build().expect("thread pool");
+        crate::diag::memlog(&format!(
+            "absorb: {} one-sided, {} with candidates in {} level(s) (widest {}; {n_nodes} window entries), {} wanted members",
+            one.len(),
+            levels.iter().map(|l| l.len()).sum::<usize>(),
+            levels.len(),
+            levels.iter().map(|l| l.len()).max().unwrap_or(0),
+            wanted.len()
+        ));
         if !wanted.is_empty() {
             let store = &mut self.store;
             if let Err(e) = pool.install(|| store.prefetch_members(&wanted, &ctx.contigs)) {
@@ -499,41 +541,24 @@ impl EvidenceState {
             }
         }
         drop(wanted);
-        // Sequential semantics, parallel re-evaluation: consecutive one-sided loci (in python
-        // order) whose {x} + window sets are pairwise disjoint touch disjoint state, so a batch
-        // of them is decided in order (target choice, clip agreement, member merge), their
-        // re-evaluations run in parallel, and the results are applied in order -- identical to
-        // the one-at-a-time loop for any thread count.
-        const MAX_BATCH: usize = 1024;
-        let mut n_abs = 0usize;
-        let mut k = 0usize;
-        let mut used: FxHashSet<usize> = FxHashSet::default();
-        while k < one.len() {
-            used.clear();
-            let k0 = k;
-            while k < one.len() && k - k0 < MAX_BATCH {
-                let xi = one[k];
-                if used.contains(&xi) || windows[k].iter().any(|i| used.contains(i)) {
-                    break;
-                }
-                used.insert(xi);
-                used.extend(windows[k].iter().copied());
-                k += 1;
-            }
+        crate::diag::memlog("absorb: prefetch");
+        let mut alive = vec![true; n];
+        // (k, target) per absorption, replayed into `records` in python order
+        let mut events: Vec<(usize, usize)> = Vec::new();
+        for lv in &levels {
             // phase A (in order): decide + merge
             let mut jobs: Vec<(usize, usize, Side)> = Vec::new();
-            for &xi in &one[k0..k] {
+            for &k in lv {
+                let xi = one[k];
                 if !alive[xi] {
                     continue;
                 }
                 let x = &insertions[xi];
                 let side = x.open_side_eff().expect("one-sided").other();
                 let Some(pos) = x.junction(side) else { continue };
-                let Some(ti) = index.target(xi, x.contig, side, pos, tol, &alive, &one_sided, &names) else { continue };
-                let xc: Option<Box<[u8]>> = x.clipped(side).map(|q| q.seq.clone());
-                let tc: Option<Box<[u8]>> = insertions[ti].clipped(side).map(|q| q.seq.clone());
-                if let (Some(xc), Some(tc)) = (&xc, &tc) {
-                    if !crate::seq::clips_agree(&[&tc[..], &xc[..]], 0.6, 8, 6) {
+                let Some(ti) = best_target(windows[k], xi, pos, |i| alive[i], &one_sided, &names) else { continue };
+                if let (Some(xc), Some(tc)) = (x.clipped(side), insertions[ti].clipped(side)) {
+                    if !crate::seq::clips_agree(&[&tc.seq[..], &xc.seq[..]], 0.6, 8, 6) {
                         continue;
                     }
                 }
@@ -568,19 +593,26 @@ impl EvidenceState {
                 // t.files + [f for f in x.files if f not in t.files] (against the ORIGINAL t.files)
                 let orig: FxHashSet<FileId> = t.files.iter().copied().collect();
                 t.files.extend(x_files.iter().copied().filter(|f| !orig.contains(f)));
-                jobs.push((xi, ti, side));
+                jobs.push((k, ti, side));
             }
-            // phase B (parallel): re-evaluate each merged target's junction
+            // phase B (parallel): re-evaluate each merged target's junction; the record's reads
+            // are rendered (with insertion_id = t's name = the name `records` maps to t, i.e.
+            // the output name) and moved to the store at once, so no pooled rows are kept
             let store = &self.store;
             let members = &self.members;
             let ins_ref = &insertions;
             let eval = |&(_, ti, side): &(usize, usize, Side)| {
                 let t = &ins_ref[ti];
-                evaluate(t, &members[t.uid as usize], side, ctx, &mut |m, s, out| out.extend(store.lookup(m, s, &ctx.contigs)))
+                let mut rec = evaluate(t, &members[t.uid as usize], side, ctx, &mut |m, s, out| out.extend(store.lookup(m, s, &ctx.contigs)));
+                let text = rec.render_reads(&rec.insertion_id, &ctx.files);
+                let off = store.put_reads_direct(text.as_bytes()).unwrap_or_else(|e| panic!("evidence store: {e}"));
+                rec.reads_ref = Some(crate::evidence::junction::ReadsRef { chunk: store::DIRECT_CHUNK, offset: off, len: text.len() as u32 });
+                rec.rows = None;
+                rec
             };
             let news: Vec<JunctionRecord> = if jobs.len() > 1 { pool.install(|| jobs.par_iter().map(eval).collect()) } else { jobs.iter().map(eval).collect() };
             // phase C (in order): install the records
-            for ((xi, ti, side), new) in jobs.into_iter().zip(news) {
+            for ((k, ti, side), new) in jobs.into_iter().zip(news) {
                 let tu = insertions[ti].uid as usize;
                 let t = &mut insertions[ti];
                 let mut recs = self.recmap[tu].take().unwrap_or_default();
@@ -605,11 +637,17 @@ impl EvidenceState {
                     replace_clips(t, std::slice::from_ref(nr));
                 }
                 self.recmap[tu] = Some(recs);
-                self.records.insert(names[ti].clone(), tu as u32);
-                alive[xi] = false;
-                n_abs += 1;
+                events.push((k, ti));
+                alive[one[k]] = false;
             }
         }
+        // python `self.records[t.name] = recs`, in python's order
+        events.sort_unstable();
+        let n_abs = events.len();
+        for &(_, ti) in &events {
+            self.records.insert(names[ti].clone(), insertions[ti].uid);
+        }
+        crate::diag::memlog(&format!("absorb: {n_abs} absorbed"));
         let alive_names: FxHashSet<&str> = (0..n).filter(|&i| alive[i]).map(|i| names[i].as_str()).collect();
         for i in 0..n {
             if !alive[i] && !alive_names.contains(names[i].as_str()) {

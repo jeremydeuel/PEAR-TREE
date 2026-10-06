@@ -51,6 +51,8 @@ use std::sync::{Arc, Mutex, OnceLock};
 pub const FLUSH_BYTES: usize = 16 << 20;
 /// python `_rows_cache` size (parent-side lookups).
 const LRU_CHUNKS: usize = 4;
+/// `ReadsRef::chunk` of reads written by `put_reads_direct` (offset = absolute file offset)
+pub const DIRECT_CHUNK: u32 = u32::MAX;
 /// high bit of a `route` value: index into `multi` instead of a chunk id
 const MULTI: u32 = 0x8000_0000;
 
@@ -404,9 +406,12 @@ impl Store {
                 let mut per: FxHashMap<Member, (u32, Vec<u8>)> = FxHashMap::default();
                 let mut order: Vec<Member> = Vec::new();
                 this.for_each_chunk_line(c, |fi, line| {
-                    let s = std::str::from_utf8(line).map_err(|e| format!("sidecar row not UTF-8: {e}"))?;
-                    if let Some(r) = EvidenceRow::parse(s, &headers[fi], this.files[fi].file, contigs)? {
-                        let m = (r.file, r.locus);
+                    // only the locus is parsed here: a superset of the member's rows is
+                    // kept, `lookup_indexed` parses and filters them exactly
+                    let Some(field) = line.split(|&b| b == b'\t').nth(headers[fi].locus) else { return Ok(()) };
+                    let Some(locus) = std::str::from_utf8(field).ok().and_then(|s| LocusKey::parse(s, contigs)) else { return Ok(()) };
+                    {
+                        let m = (this.files[fi].file, locus);
                         if wanted.contains(&m) && this.route.chunks(&m).first() == Some(&(c as u32)) {
                             let e = per.entry(m).or_insert_with(|| {
                                 order.push(m);
@@ -489,9 +494,21 @@ impl Store {
         Ok(())
     }
 
+    /// Append reads text straight to the reads scratch file (absorb_one_sided re-evaluations,
+    /// after every chunk is finished); returns its file offset. Thread-safe.
+    pub fn put_reads_direct(&self, text: &[u8]) -> Result<u64, String> {
+        let mut w = self.reads.writer.lock().unwrap();
+        let base = w.1;
+        let fh = w.0.as_mut().ok_or("evidence store already cleaned up")?;
+        fh.write_all(text).map_err(|e| format!("write {}: {e}", self.reads.path.display()))?;
+        w.1 += text.len() as u64;
+        Ok(base)
+    }
+
     pub fn read_reads(&self, r: ReadsRef) -> String {
         let c = r.chunk as usize;
-        let bytes = match self.reads.base[c].get() {
+        let base = if r.chunk == DIRECT_CHUNK { Some(&0u64) } else { self.reads.base[c].get() };
+        let bytes = match base {
             Some(&base) => {
                 let fh = self.reads.reader.get_or_init(|| {
                     File::open(&self.reads.path).unwrap_or_else(|e| panic!("open {}: {e}", self.reads.path.display()))

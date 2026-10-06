@@ -158,30 +158,9 @@ fn drop_filtered(insertions: &mut Vec<Insertion>, set: &FxHashSet<String>, conti
 /// 12. evidence -> write evidence TSV + reads FASTA (§6.4-6.5), cleanup shard dir;
 /// 13. write `<stem>.genotyping.txt.gz` (§6.3).
 
-/// `PEARTREE_MEMLOG=1`: stage timestamps + peak RSS on stderr (diagnostics only).
-fn memlog(t0: std::time::Instant, stage: &str) {
-    if std::env::var_os("PEARTREE_MEMLOG").is_none() {
-        return;
-    }
-    #[repr(C)]
-    struct RUsage {
-        times: [i64; 4],
-        maxrss: i64,
-        rest: [i64; 13],
-    }
-    extern "C" {
-        fn getrusage(who: i32, usage: *mut RUsage) -> i32;
-    }
-    let mut ru = RUsage { times: [0; 4], maxrss: 0, rest: [0; 13] };
-    // SAFETY: plain libc call with a correctly sized out-struct (struct rusage = 2 timevals + 14 longs)
-    let rc = unsafe { getrusage(0, &mut ru) };
-    // ru_maxrss: bytes on macOS, KiB on Linux
-    let mb = if rc != 0 { -1.0 } else if cfg!(target_os = "macos") { ru.maxrss as f64 / 1048576.0 } else { ru.maxrss as f64 / 1024.0 };
-    eprintln!("[memlog] {:8.2}s  peak {:7.0} MB  {stage}", t0.elapsed().as_secs_f64(), mb);
-}
 
 pub fn run(args: &Args) -> Result<(), String> {
-    let t0 = std::time::Instant::now();
+    crate::diag::start();
     // ---- 1. config, validation, genome
     let cfg = Config::load(&args.config)?;
     let threads = args.threads;
@@ -247,7 +226,7 @@ pub fn run(args: &Args) -> Result<(), String> {
         }
     }
     println!("intersecting insertions from {} files...", ctx.files.len());
-    memlog(t0, "import");
+    crate::diag::memlog("import");
 
     // ---- 3. per-sample discovery breakpoints (before intersect merges records)
     let breakpoints = if cfgc.far_pair_strict { Some(discovery_breakpoints(&all)) } else { None };
@@ -261,13 +240,13 @@ pub fn run(args: &Args) -> Result<(), String> {
         insertions.len()
     );
 
-    memlog(t0, "intersect + dense filter");
+    crate::diag::memlog("intersect + dense filter");
     // ---- 6. evidence
     let shard_dir = PathBuf::from(format!("{stem}.evidence_shards"));
     let (ins2, mut evidence) = apply_evidence(insertions, &accepted, &ctx, breakpoints.as_ref(), &shard_dir)?;
     insertions = ins2;
     drop(breakpoints);
-    memlog(t0, "apply_evidence");
+    crate::diag::memlog("apply_evidence");
 
     // ---- 7. consensus FASTQ + end-to-end remap + clean-remap filter
     println!("writing summarised insertions fasta file {fq}");
@@ -283,7 +262,7 @@ pub fn run(args: &Args) -> Result<(), String> {
     );
     drop_filtered(&mut insertions, &filter_reads, &ctx.contigs);
 
-    memlog(t0, "clean remap");
+    crate::diag::memlog("clean remap");
     // ---- 8. clipped-part local remap (the chain loads while bowtie2 runs) + filter
     println!("now re-mapping in local mode all clipped parts of reads");
     let lo_path = cfgc.bowtie2_index2_lo.clone();
@@ -306,7 +285,7 @@ pub fn run(args: &Args) -> Result<(), String> {
     println!("detected {} insertions where the clipped part maps near the breakpoint. Removing these", filter_reads.len());
     drop_filtered(&mut insertions, &filter_reads, &ctx.contigs);
 
-    memlog(t0, "clipped remap");
+    crate::diag::memlog("clipped remap");
     // ---- 9. fold surviving one-sided loci
     if let Some(state) = evidence.as_mut() {
         let (ins2, n_abs) = state.absorb_one_sided(insertions, &ctx);
@@ -316,7 +295,7 @@ pub fn run(args: &Args) -> Result<(), String> {
         }
     }
 
-    memlog(t0, "absorb_one_sided");
+    crate::diag::memlog("absorb_one_sided");
     // ---- 10. combined.txt.gz
     write_gz(Path::new(&combined), &consensus_fastq(&insertions, &ctx), 9)?;
     let n_written = insertions.iter().filter(|i| !filter_reads.contains(&i.name(&ctx.contigs))).count();
@@ -336,11 +315,11 @@ pub fn run(args: &Args) -> Result<(), String> {
         state.store.cleanup();
     }
 
-    memlog(t0, "evidence outputs");
+    crate::diag::memlog("evidence outputs");
     // ---- 13. genotyping contract
     let text = genotyping_text(&insertions, &filter_reads, &ctx);
     write_gz(Path::new(&genotyping), &text, 9)?;
-    memlog(t0, "genotyping");
+    crate::diag::memlog("genotyping");
     Ok(())
 }
 
