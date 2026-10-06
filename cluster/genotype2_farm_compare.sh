@@ -138,7 +138,7 @@ if [ "$MODE" = submit ] || [ "$MODE" = dry ]; then
     build_fofn
     n_done="$(count_files "$OUTDIR"/*.txt.gz)"
     note "fofn          : $FOFN ($N BAMs; $n_done already genotyped -> skipped by genotype_one.sh)"
-    ARRAY=(bsub -J "gt2_${P}[1-${N}]%${THROTTLE}" -o "$LOGS/gt.%I.log" -e "$LOGS/gt.%I.err" -n 1 -q "$QUEUE"
+    ARRAY=(bsub -J "gt2_${P}[1-${N}]%${THROTTLE}" -o "$LOGS/gt.%I.log" -e "$LOGS/gt.%I.err" -n "$THREADS" -q "$QUEUE"
            -R "select[mem>${MEM}] rusage[mem=${MEM}] span[hosts=1]" -M "$MEM" "$GT_CMD")
     if [ "$MODE" = dry ]; then
         echo; echo "DRY-RUN:"; printf ' %q' "${ARRAY[@]}"; echo
