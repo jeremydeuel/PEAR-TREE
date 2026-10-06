@@ -19,6 +19,12 @@
 #   CONTRACT     pooled contract       (default: insertions_grch38/mei9x10.genotyping.txt.gz)
 #   GENOTYPE_BIN genotype binary       (default: rust/peartree-genotype/target/release/peartree-genotype)
 #   GENO_CFG     rust genotype config  (default: cluster/config.genotype.grch38)
+#   GENOTYPE_IMPL v2|legacy            (default: v2 = peartree-genotype2, realignment genotyper,
+#                                       numeric output; needs COMBINED + GENOME_2BIT)
+#   COMBINED     <cohort>.combined.txt.gz (default: CONTRACT with .genotyping[.tprt].txt.gz -> .combined.txt.gz)
+#   GENOME_2BIT  reference 2bit/fasta  (default: /lustre/scratch126/casm/teams/team273/users/jd43/hg38.2bit)
+#   GENOTYPE2_BIN / GENO2_CFG           (defaults: rust/peartree-genotype2/target/release/peartree-genotype2,
+#                                       cluster/config.genotype2.grch38)
 set -euo pipefail
 
 IDX="${1:?usage: genotype_one.sh <1-based-index-into-fofn>}"
@@ -27,6 +33,11 @@ OUTDIR="${OUTDIR:-genotypes}"
 CONTRACT="${CONTRACT:-insertions_grch38/mei9x10.genotyping.txt.gz}"
 BIN="${GENOTYPE_BIN:-rust/peartree-genotype/target/release/peartree-genotype}"
 CFG="${GENO_CFG:-cluster/config.genotype.grch38}"
+IMPL="${GENOTYPE_IMPL:-v2}"
+BIN2="${GENOTYPE2_BIN:-rust/peartree-genotype2/target/release/peartree-genotype2}"
+CFG2="${GENO2_CFG:-cluster/config.genotype2.grch38}"
+GENOME_2BIT="${GENOME_2BIT:-/lustre/scratch126/casm/teams/team273/users/jd43/hg38.2bit}"
+COMBINED="${COMBINED:-$(echo "$CONTRACT" | sed -E 's/\.genotyping(\.tprt)?\.txt\.gz$/.combined.txt.gz/')}"
 
 [ -s "$CONTRACT" ] || { echo "no contract: $CONTRACT" >&2; exit 1; }
 
@@ -58,7 +69,14 @@ fi
 
 TMP="$OUT.tmp.$$"
 echo "[$IDX] $ID: genotyping $BAM against $CONTRACT"
-"$BIN" --step genotype --bam "$BAM" --insertions "$CONTRACT" \
-    --out "$TMP" --threads 1 --config "$CFG"
+if [ "$IMPL" = v2 ]; then
+    [ -s "$COMBINED" ] || { echo "[$IDX] $ID: combined consensus missing: $COMBINED" >&2; exit 1; }
+    [ -s "$GENOME_2BIT" ] || { echo "[$IDX] $ID: reference missing: $GENOME_2BIT" >&2; exit 1; }
+    "$BIN2" --step genotype --bam "$BAM" --insertions "$CONTRACT" --combined "$COMBINED" \
+        --reference "$GENOME_2BIT" --out "$TMP" --threads 1 --config "$CFG2"
+else
+    "$BIN" --step genotype --bam "$BAM" --insertions "$CONTRACT" \
+        --out "$TMP" --threads 1 --config "$CFG"
+fi
 mv -f "$TMP" "$OUT"
 echo "[$IDX] $ID: done -> $OUT"

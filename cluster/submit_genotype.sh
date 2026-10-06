@@ -32,6 +32,11 @@ THROTTLE="${THROTTLE:-50}"
 MEM="${MEM:-2000}"
 QUEUE="${QUEUE:-normal}"
 BIN="${GENOTYPE_BIN:-rust/peartree-genotype/target/release/peartree-genotype}"
+# GENOTYPE_IMPL=v2 (default) runs peartree-genotype2 (see genotype_one.sh for COMBINED / GENOME_2BIT)
+if [ "${GENOTYPE_IMPL:-v2}" = v2 ]; then
+    BIN="${GENOTYPE2_BIN:-rust/peartree-genotype2/target/release/peartree-genotype2}"
+    GENO_CFG="${GENO2_CFG:-cluster/config.genotype2.grch38}"
+fi
 
 [ -s "$FOFN" ]     || { echo "no such fofn: $FOFN (run cluster/stage_picked.sh --fofn)" >&2; exit 1; }
 [ -s "$GENO_CFG" ] || { echo "no config: $GENO_CFG" >&2; exit 1; }

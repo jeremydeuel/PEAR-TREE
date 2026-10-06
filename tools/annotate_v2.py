@@ -1272,11 +1272,39 @@ class VariantAnnotationContainer:
                 line = line.split(";", maxsplit=len(titles))
                 title = line[0]
                 if title in self.insertions.keys():
-                    self.insertions[title].nins = sum([1 for gt in line if gt in present])
-                    self.insertions[title].nart = sum([1 for gt in line if gt == "artefact"])
-                    self.insertions[title].nwt = sum([1 for gt in line if gt == "wild-type"])
+                    cells = line[1:]
+                    if self._numeric_matrix(cells):
+                        # peartree-genotype2 joint matrix: P(carrier) per colony, empty = no data
+                        p = [float(c) for c in cells if c != ""]
+                        self.insertions[title].nins = sum(1 for x in p if x >= self.P_CARRIER)
+                        self.insertions[title].nart = 0
+                        self.insertions[title].nwt = sum(1 for x in p if x <= 1.0 - self.P_CARRIER)
+                    else:
+                        self.insertions[title].nins = sum([1 for gt in cells if gt in present])
+                        self.insertions[title].nart = sum([1 for gt in cells if gt == "artefact"])
+                        self.insertions[title].nwt = sum([1 for gt in cells if gt == "wild-type"])
         self.insertions = {key: value for key, value in self.insertions.items() if value.nins>0}
         print(f"imported genotypes, found {len(self.insertions)} insertions with one or more tips containing insertions.")
+
+    # peartree-genotype2 joint matrix (`<patient>.genotypes.csv.gz` holds P(carrier) per colony):
+    # a colony is a carrier at P >= P_CARRIER and a wild-type at P <= 1 - P_CARRIER.
+    P_CARRIER = 0.9
+
+    @staticmethod
+    def _numeric_matrix(cells):
+        """True when every non-empty cell parses as a probability (the genotype2 joint matrix)."""
+        seen = False
+        for c in cells:
+            if c == "":
+                continue
+            try:
+                x = float(c)
+            except ValueError:
+                return False
+            if not 0.0 <= x <= 1.0:
+                return False
+            seen = True
+        return seen
 
     @staticmethod
     def present_calls():

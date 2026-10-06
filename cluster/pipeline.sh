@@ -68,6 +68,17 @@ DISCOVER_BIN="${DISCOVER_BIN:-$PT_ROOT/rust/peartree-discovery/target/release/pe
 GENOTYPE_BIN="${GENOTYPE_BIN:-$PT_ROOT/rust/peartree-genotype/target/release/peartree-genotype}"
 DISC_CFG="${DISC_CFG:-$PT_ROOT/cluster/config.discovery.grch38}"
 GENO_CFG="${GENO_CFG:-$PT_ROOT/cluster/config.genotype.grch38}"
+# Genotyping implementation (plans/genotype_v2/SPEC.md): v2 = peartree-genotype2, the
+# realignment genotyper with numeric per-colony output + the phylogenetic joint step in phase 4
+# (needs the patient's SNV tree, see patient_tree()); legacy = peartree-genotype +
+# combine_genotypes.py (string calls). v2 is the default.
+GENOTYPE_IMPL="${GENOTYPE_IMPL:-v2}"
+GENOTYPE2_BIN="${GENOTYPE2_BIN:-$PT_ROOT/rust/peartree-genotype2/target/release/peartree-genotype2}"
+GENO2_CFG="${GENO2_CFG:-$PT_ROOT/cluster/config.genotype2.grch38}"
+# reference of the BAMs' assembly for the haplotype flanks (same file as config.py's genome_2bit)
+GENOME_2BIT="${GENOME_2BIT:-/lustre/scratch126/casm/teams/team273/users/jd43/hg38.2bit}"
+# the patient's SNV tree (Newick, tips = colony ids); default: the one file under patients/*/<id>/
+PATIENT_TREE="${PATIENT_TREE:-}"
 SAMTOOLS_MODULE="${SAMTOOLS_MODULE:-samtools-1.19}"
 
 # --- resources (tuned from the PD44579 run) -----------------------------------
@@ -105,6 +116,12 @@ bam_path() { echo "$STAGING_ROOT/$1/$2/mapped_sample/$2.sample.dupmarked.bam"; }
 
 # fields of a samples.tsv line: 1=sample 2=proj
 samp_field() { sed -n "${1}p" "$SAMPLES" | cut -f"$2"; }
+# the patient's SNV tree: $PATIENT_TREE if set, else the single *.tree under patients/*/<id>/
+patient_tree() {
+    if [ -n "$PATIENT_TREE" ]; then echo "$PATIENT_TREE"; return; fi
+    local t; t=$(ls "$PT_ROOT"/patients/*/"$PATIENT_ID"/*.tree 2>/dev/null | head -1)
+    echo "$t"
+}
 
 # Submit and echo the job id (stderr carries LSF's own message).
 submit_job() {
@@ -151,6 +168,11 @@ VENV='$VENV'
 RESULTS_DIR='$RESULTS_DIR'
 DISCOVER_BIN='$DISCOVER_BIN'
 GENOTYPE_BIN='$GENOTYPE_BIN'
+GENOTYPE_IMPL='$GENOTYPE_IMPL'
+GENOTYPE2_BIN='$GENOTYPE2_BIN'
+GENO2_CFG='$GENO2_CFG'
+GENOME_2BIT='$GENOME_2BIT'
+PATIENT_TREE='$PATIENT_TREE'
 DISC_CFG='$DISC_CFG'
 GENO_CFG='$GENO_CFG'
 SAMTOOLS_MODULE='$SAMTOOLS_MODULE'
@@ -194,7 +216,13 @@ cmd_submit_list() {
 }
 
 preflight_binaries() {
-    for f in "$DISCOVER_BIN" "$GENOTYPE_BIN" "$DISC_CFG" "$GENO_CFG"; do
+    local gt_bin="$GENOTYPE_BIN" gt_cfg="$GENO_CFG"
+    if [ "$GENOTYPE_IMPL" = v2 ]; then
+        gt_bin="$GENOTYPE2_BIN"; gt_cfg="$GENO2_CFG"
+        [ -s "$GENOME_2BIT" ] || { echo "GENOME_2BIT $GENOME_2BIT missing (needed by peartree-genotype2)" >&2; exit 1; }
+        [ -n "$(patient_tree)" ] || { echo "no SNV tree for $PATIENT_ID under $PT_ROOT/patients/*/$PATIENT_ID/ (set PATIENT_TREE)" >&2; exit 1; }
+    fi
+    for f in "$DISCOVER_BIN" "$gt_bin" "$DISC_CFG" "$gt_cfg"; do
         [ -e "$f" ] || { echo "missing: $f (run cluster/build.sh?)" >&2; exit 1; }
     done
     [ -x "$VENV/bin/python" ] || { echo "missing venv python: $VENV/bin/python" >&2; exit 1; }
@@ -555,7 +583,16 @@ cmd_genotype() {
     local CONTRACT; CONTRACT="$(geno_contract)"
     [ -s "$CONTRACT" ] || { log "$SAMPLE: contract $CONTRACT missing (re-run combine)"; exit 1; }
     local TMP="$OUT.tmp.$$"
-    if ! "$GENOTYPE_BIN" --step genotype --bam "$BAM" \
+    if [ "$GENOTYPE_IMPL" = v2 ]; then
+        # realignment genotyper: full junction consensus from combine + reference flanks
+        local COMBINED="$RUNDIR/insertions/$PATIENT_ID.combined.txt.gz"
+        [ -s "$COMBINED" ] || { log "$SAMPLE: $COMBINED missing (re-run combine)"; exit 1; }
+        if ! "$GENOTYPE2_BIN" --step genotype --bam "$BAM" \
+                --insertions "$CONTRACT" --combined "$COMBINED" --reference "$GENOME_2BIT" \
+                --out "$TMP" --threads 1 --config "$GENO2_CFG"; then
+            log "$SAMPLE: GENOTYPING FAILED"; rm -f "$TMP"; exit 1
+        fi
+    elif ! "$GENOTYPE_BIN" --step genotype --bam "$BAM" \
             --insertions "$CONTRACT" \
             --out "$TMP" --threads 1 --config "$GENO_CFG"; then
         log "$SAMPLE: GENOTYPING FAILED"; rm -f "$TMP"; exit 1
@@ -596,10 +633,21 @@ cmd_combine_genotypes() {
     log "combining ${#files[@]} genotype files"
     [ "${#files[@]}" -gt 0 ] || { echo "no genotype files — aborting" >&2; exit 1; }
 
-    "$VENV/bin/python" "$PT_ROOT/src/main.py" --step combine_genotypes \
-        --genotypes "${files[@]}" --out "$CALLS" --threads "$CG_CORES"
+    if [ "$GENOTYPE_IMPL" = v2 ]; then
+        # phylogenetic joint genotyping: every locus is placed on the SNV tree (ROOT / branch /
+        # NOISE / INDEP); $CALLS becomes the NUMERIC P(carrier) matrix (rows loci, cols
+        # colonies; annotate_v2 reads it), $PATIENT_ID.joint.tsv the per-locus table.
+        local TREE; TREE="$(patient_tree)"
+        [ -s "$TREE" ] || { echo "no SNV tree for $PATIENT_ID (set PATIENT_TREE)" >&2; exit 1; }
+        "$GENOTYPE2_BIN" --step joint --tree "$TREE" --genotypes "${files[@]}" \
+            --out "$PATIENT_ID.joint.tsv" --matrix "$CALLS"
+        [ -s "$PATIENT_ID.joint.tsv" ] || { echo "joint step produced no $PATIENT_ID.joint.tsv" >&2; exit 1; }
+    else
+        "$VENV/bin/python" "$PT_ROOT/src/main.py" --step combine_genotypes \
+            --genotypes "${files[@]}" --out "$CALLS" --threads "$CG_CORES"
+    fi
 
-    [ -s "$CALLS" ] || { echo "combine_genotypes produced no $CALLS" >&2; exit 1; }
+    [ -s "$CALLS" ] || { echo "phase 4 produced no $CALLS" >&2; exit 1; }
 
     # per-BAM stats summary (step 5/7): one table for the whole patient
     local STATS_SUM="$PATIENT_ID.bam_stats.tsv"
@@ -607,6 +655,7 @@ cmd_combine_genotypes() {
 
     mkdir -p "$RESULTS_DIR/$PATIENT_ID"
     cp -f "$CALLS" "$STATS_SUM" "insertions/$PATIENT_ID".* "$RESULTS_DIR/$PATIENT_ID/" 2>/dev/null || true
+    [ -s "$PATIENT_ID.joint.tsv" ] && cp -f "$PATIENT_ID.joint.tsv" "$RESULTS_DIR/$PATIENT_ID/" || true
     for x in discover genotype; do
         [ -s "${x}_excluded.tsv" ] && cp -f "${x}_excluded.tsv" "$RESULTS_DIR/$PATIENT_ID/" || true
     done

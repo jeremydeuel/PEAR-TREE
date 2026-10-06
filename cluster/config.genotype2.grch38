@@ -1,0 +1,35 @@
+# peartree-genotype2 config for GRCh38 colony BAMs (realignment genotyper; plans/genotype_v2/SPEC.md).
+# Every key below is the binary's default except min_mapq-related ones, listed so the choice is
+# visible. Unknown keys warn and are ignored.
+
+# Reads: bwa-mem caps MAPQ at 60. A read below min_mapq is still used when it carries a soft clip
+# of >= min_clip_for_lowmapq bases facing a junction and MAPQ >= min_mapq_clipped: its MAPQ
+# reflects only the short aligned flank (the legacy genotyper's reference bias).
+min_mapq = 60
+min_mapq_clipped = 20
+min_clip_for_lowmapq = 20
+reads_for_high_coverage = 180
+
+# Haplotypes: genome flank per segment (>= read length + 100), ALT_FULL merge of the two junction
+# consensuses (short insertions), far-duplication threshold for retained reference junctions.
+flank = 300
+merge_overlap_min = 20
+dup_retained_min_span = 150
+
+# Aligner (natural-log likelihoods): gap costs in phred, cheaper gap opening inside homopolymers
+# (poly-A length jitter), soft-clipped read bases cost ln(clip_prob) each.
+gap_open_phred = 30
+gap_ext_phred = 10
+homopolymer_min_len = 4
+homopolymer_gap_open_phred = 13
+clip_prob = 0.25
+band_halfwidth = 32
+llr_informative = 4.6
+min_explained_frac = 0.8
+
+# Genotype model: background alt-read rate under absence, colony purity grid (uniform weights),
+# flat dosage prior. Discordant anchors are counted (n_disc) but carry no weight by default.
+bg_alt_rate = 0.005
+purity_grid = 1.0,0.9,0.8,0.7
+prior = 0.333333,0.333333,0.333333
+disc_weight_nats = 0
