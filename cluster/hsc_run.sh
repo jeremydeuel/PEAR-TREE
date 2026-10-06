@@ -13,7 +13,7 @@
 #
 # Usage (head node, from anywhere):
 #   bash <checkout>/cluster/hsc_run.sh setup              # build binaries, venv link, src/config.py
-#   bash <checkout>/cluster/hsc_run.sh populate <P>       # fill patients/*/<P>/colonies.tsv (BAM headers, runs on the head node)
+#   bash <checkout>/cluster/hsc_run.sh populate <P>       # fill patients/*/<P>/colonies.tsv (nst_links headers; iRODS fallback)
 #   bash <checkout>/cluster/hsc_run.sh submit <P>         # samples.tsv + the whole pipeline
 #   bash <checkout>/cluster/hsc_run.sh status <P>
 #
@@ -73,13 +73,45 @@ sys.path.insert(0, 'cluster/tprt'); import arm_config; print(arm_config.describe
 cmd_populate() {
     local P="${1:?usage: hsc_run.sh populate <PATIENT_ID>}" d org
     d="$(patient_dir "$P")"; org="$(basename "$(dirname "$d")")"
-    # runs HERE, not under bsub: header reads only (cheap), and compute nodes may not mount
-    # nst_links (PD51635: node-13-14 "nst_links not visible", job exit 1 in 0 s)
     local nst="${NST:-/nfs/cancer_ref01/nst_links/live}"
-    [ -d "$nst" ] || die "nst_links not visible on $(hostname): $nst — run populate on a head node"
-    cd "$PT_ROOT"
-    ONLY="$org" PAR="${PAR:-4}" bash cluster/populate_colonies_tsv.sh
+    if [ -d "$nst" ]; then
+        # header reads on nst_links, run HERE (compute nodes may not mount it: PD51635 node-13-14)
+        cd "$PT_ROOT"
+        ONLY="$org" PAR="${PAR:-4}" bash cluster/populate_colonies_tsv.sh
+    else
+        note "nst_links not visible on $(hostname) ($nst): tip -> project from iRODS (iquest)"
+        populate_irods "$P" "$d"
+    fi
     grep -v '^#' "$d/colonies.tsv" | awk -F'\t' 'NR>1 {n++; a[$6]++} END {printf "%d BAMs:", n; for (k in a) printf " %s=%d", k, a[k]; print ""}'
+}
+
+# iRODS fallback (farm22-head2 lost /nfs/cancer_ref01, 2026-10-06): one iquest for the donor's
+# *.sample.dupmarked.bam objects, matched to the tree tips. Assay and assembly are NOT read here
+# (no header access without nst_links): rows say ds=WGS_unverified / assembly=GRCh38, and
+# `submit` turns on pipeline.sh's per-BAM header gate (PT_HEADER_GATE=GRCh38) after staging.
+# A tip found in more than one project (WGS + targeted twins, Chapman 2024) is left out.
+populate_irods() {
+    local P="$1" d="$2" tips hits
+    module load IRODS >/dev/null 2>&1 || true
+    command -v iquest >/dev/null || die "iquest not on PATH (module load IRODS)"
+    tips="$(mktemp)"; hits="$(mktemp)"
+    grep -oE '[(,][A-Za-z][A-Za-z0-9._-]*' "$d"/*.tree | cut -c2- | sort -u > "$tips"
+    iquest --no-page "%s/%s" "SELECT COLL_NAME, DATA_NAME WHERE DATA_NAME like '${P}%.sample.dupmarked.bam'" \
+        | awk -F/ '$2=="cgp" && $3=="intproj" && $5=="sample" {print $6 "\t" $4}' | sort -u > "$hits"
+    [ -s "$hits" ] || { rm -f "$tips" "$hits"; die "iquest found no ${P}*.sample.dupmarked.bam in iRODS"; }
+    local tmp="$d/colonies.tsv.tmp.$$"
+    {
+        printf 'donor\tproj\tds\treadlen\tmapped\tassembly\tsample\n'
+        printf '# populated %s by cluster/hsc_run.sh populate from iRODS (iquest; nst_links not mounted). ds/assembly NOT read from headers: verified per BAM after staging (PT_HEADER_GATE=GRCh38).\n' "$(date +%F)"
+        awk -F'\t' -v donor="$P" 'NR==FNR {tip[$1]=1; next}
+            ($1 in tip) {n[$1]++; proj[$1]=$2}
+            END {for (s in n) if (n[s]==1) print donor "\t" proj[s] "\tWGS_unverified\tNA\tNA\tGRCh38\t" s}' "$tips" "$hits" | sort -t$'\t' -k7,7
+    } > "$tmp" && mv -f "$tmp" "$d/colonies.tsv"
+    awk -F'\t' 'NR==FNR {tip[$1]=1; next} ($1 in tip) {n[$1]++; p[$1]=p[$1] " " $2}
+        END {for (s in n) if (n[s]>1) print "  left out (in several projects):" , s, p[s]}' "$tips" "$hits" >&2
+    awk -F'\t' 'NR==FNR {seen[$1]=1; next} !($1 in seen) {print "  tree tip with no BAM in iRODS:", $1}' "$hits" "$tips" >&2
+    note "projects: $(awk -F'\t' 'NR==FNR {tip[$1]=1; next} ($1 in tip) {c[$2]++} END {for (k in c) printf "%s=%d ", k, c[k]}' "$tips" "$hits")"
+    rm -f "$tips" "$hits"
 }
 
 cmd_submit() {
@@ -110,6 +142,7 @@ cmd_submit() {
         GT_THROTTLE="${GT_THROTTLE:-20}" GT_MEM_T1="${GT_MEM_T1:-4000}" GT_MEM_T2="${GT_MEM_T2:-16000}" \
         SD_MEM_T1="${SD_MEM_T1:-4000}" CI_MEM="${CI_MEM:-16000}" CI_CORES="${CI_CORES:-8}" \
         AN_MEM="${AN_MEM:-32000}" AN_CORES="${AN_CORES:-4}" \
+        PT_HEADER_GATE=GRCh38 \
         PT_JOB_PREFIX="${P}_hsc" PT_NO_CLEANUP="${KEEP_BAMS:-0}" PT_JOBIDS_FILE="$W/jobids.tsv" \
         bash "$PT_ROOT/cluster/pipeline.sh" submit-list "$P" "$W/samples.tsv"
     note "results will land in $RESULTS_ROOT/$P (final: $P.somatic.xlsx)"

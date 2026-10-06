@@ -94,6 +94,10 @@ GENO_ONE_SIDED="${GENO_ONE_SIDED:-}"
 JOINT_ARGS="${JOINT_ARGS:-}"
 # phase 7 (report): tools/phylo/tree_fit.py + cluster/somatic_table.py after annotate; 0 = skip
 PT_REPORT="${PT_REPORT:-1}"
+# per-BAM header gate after staging (empty = off): GRCh38 = @SQ chr1 must be 248956422 bp and
+# @RG DS must say WGS, else the sample is logged and treated as no-data (missing/ marker). For
+# sample lists not built from BAM headers (hsc_run.sh populate's iRODS fallback).
+PT_HEADER_GATE="${PT_HEADER_GATE:-}"
 
 # --- resources (tuned from the PD44579 run) -----------------------------------
 STAGE_THROTTLE="${STAGE_THROTTLE:-20}"   # concurrent stageBam.pl -> bounds iRODS + Lustre I/O
@@ -194,6 +198,7 @@ COMBINE_IMPL='$COMBINE_IMPL'
 COMBINE_BIN='$COMBINE_BIN'
 GENO_ONE_SIDED='$GENO_ONE_SIDED'
 JOINT_ARGS='$JOINT_ARGS'
+PT_HEADER_GATE='$PT_HEADER_GATE'
 STAGE_THROTTLE='$STAGE_THROTTLE'
 SD_MEM_T2='$SD_MEM_T2'
 GT_MEM_T2='$GT_MEM_T2'
@@ -418,6 +423,17 @@ cmd_stage_discover() {
     if command -v samtools >/dev/null 2>&1 && ! samtools quickcheck "$BAM"; then
         log "$SAMPLE: staged BAM fails samtools quickcheck (truncated?): $BAM -- delete it and rerun"
         exit 1
+    fi
+    if [ "${PT_HEADER_GATE:-}" = GRCh38 ]; then
+        local hdr chr1 ds
+        hdr="$(samtools view -H "$BAM")" || { log "$SAMPLE: cannot read the BAM header"; exit 1; }
+        chr1="$(awk -F'\t' '$1=="@SQ" { n=""; l=""; for (i=2;i<=NF;i++) { if ($i ~ /^SN:/) n=substr($i,4); if ($i ~ /^LN:/) l=substr($i,4) } if (n=="chr1" || n=="1") { print l; exit } }' <<<"$hdr")"
+        ds="$(grep '^@RG' <<<"$hdr" | tr '\t' '\n' | sed -n 's/^DS://p' | sort -u | paste -sd, -)"
+        if [ "$chr1" != 248956422 ] || ! grep -q WGS <<<"$ds"; then
+            log "$SAMPLE: HEADER GATE -- chr1 length '${chr1:-none}' (GRCh38 = 248956422), @RG DS '${ds:-none}' (need WGS) -> skipped as no-data"
+            printf 'header_gate\tchr1=%s\tDS=%s\n' "${chr1:-none}" "${ds:-none}" > "$RUNDIR/missing/$SAMPLE"
+            exit 0
+        fi
     fi
 
     log "$SAMPLE: discovering"
