@@ -32,7 +32,7 @@ from dataclasses import dataclass, field
 
 from .assembly import Assembler, SiteContext
 from .genome import open_genome
-from .hallmarks import (split_junction, polya_info, locate_site, target_site, en_motif,
+from .hallmarks import (split_junction, polya_info, edge_run, PolyAInfo, locate_site, target_site, en_motif,
                         slippage_context, foldback, parse_locus)
 from .inputs import read_evidence_tsv, read_reads_fa, InsertionEvidence
 from .library import RteLibrary
@@ -76,6 +76,16 @@ class InsertionInput:
         except Exception:
             sv = None
         return cls(ins.title, ins.left_seq or "", ins.right_seq or "", genes, legacy_class, sv)
+
+
+def _richer_junction(evidence, combined):
+    """The junction string with the longer clipped (lower-case) part; the evidence consensus on
+    a tie (it is the indel-aware, fragment-weighted one)."""
+    if not evidence:
+        return combined or ""
+    if combined and sum(c.islower() for c in combined) > sum(c.islower() for c in evidence):
+        return combined
+    return evidence
 
 
 def title_gap(title):
@@ -169,10 +179,17 @@ class RteAnnotator:
         rec = RteRecord(inp.title)
         ev = ev or InsertionEvidence(inp.title)
         jl, jr = ev.junctions.get("LEFT"), ev.junctions.get("RIGHT")
-        left_str = jl.clip_consensus if (jl and jl.clip_consensus) else inp.left_seq
-        right_str = jr.clip_consensus if (jr and jr.clip_consensus) else inp.right_seq
+        ev_left = jl.clip_consensus if (jl and jl.clip_consensus) else ""
+        ev_right = jr.clip_consensus if (jr and jr.clip_consensus) else ""
+        # per end, the consensus with the longer clipped part: the evidence consensus keeps only
+        # columns covered by >= min_independent_fragments pooled fragments, so a poly-A tail read
+        # through by one fragment is gone from it (PD37590: no clip at 230/414 ends) while the
+        # combined.txt.gz consensus still has it. Structure / element use the richer string; the
+        # SCORED poly-A below is limited to what >= 2 independent fragments show.
+        left_str = _richer_junction(ev_left, inp.left_seq)
+        right_str = _richer_junction(ev_right, inp.right_seq)
         li, lf, rf, ri = split_junction(left_str, right_str)
-        pa = polya_info(li, ri, jl, jr)
+        pa = polya_info(li, ri, jl, jr)           # orientation hint (any tail, one read suffices)
         site = locate_site(inp.title, lf, rf, self.genome)
         target_site(site, lf, rf, self.genome)
         ctx = SiteContext(inp.title, site.contig, site.L, site.R, left_flank=lf, right_flank=rf)
@@ -194,16 +211,29 @@ class RteAnnotator:
         hint = (pa.strand, pa.source) if pa.strand else None
         asm = self.assembler.assemble(ctx, junction_seqs, reads, hint)
         strand = asm.strand
+        # scored poly-A: the tail length reached by >= rte_polya_min_fragments independent
+        # fragments (the >= 2 fragments per end rule), from the evidence consensus or the reads
+        hint_left = pa.left_run[1] if pa.left_run[0] == "A" else 0
+        hint_right = pa.right_run[1] if pa.right_run[0] == "T" else 0
+        sup_a, sup_t = self._supported_tails(asm, ev_left, ev_right, jl, jr)
+        pa = PolyAInfo(strand=0, left_run=pa.left_run, right_run=pa.right_run)
+        pa.both_sided = sup_a >= 10 and sup_t >= 10
+        if sup_a >= 5 or sup_t >= 5:
+            if sup_a >= sup_t:
+                pa.strand, pa.source, pa.length = 1, "polyA_left", float(sup_a)
+            else:
+                pa.strand, pa.source, pa.length = -1, "polyT_right", float(sup_t)
         if pa.strand and strand and pa.strand != strand:
             # the element 3' terminus + tail sits at the other junction (assembly
             # element_3p_end): the junction-string tail is the inverted 5' copy, the poly-A
             # hallmark is the strand-consistent side
-            run = pa.right_run if strand < 0 else pa.left_run
             pa.strand, pa.source = strand, asm.strand_source
-            pa.length = float(run[1]) if run[0] == ("T" if strand < 0 else "A") else 0.0
+            pa.length = float(sup_t if strand < 0 else sup_a)
             pa.both_sided = False
+        hint_len = hint_right if (strand or pa.strand) < 0 else hint_left
+        polya_unsupported = hint_len if hint_len >= 5 and hint_len > pa.length else None
         polya_reads = None
-        if not pa.strand and asm.strand_source == "polya_reads":
+        if not pa.strand and polya_unsupported is None and asm.strand_source == "polya_reads":
             # the junction strings carry no poly-A but clip reads do (A-run | REF): that tail set
             # the strand. Reported (median run over the voting reads; a lower bound, a read can
             # end inside the tail) but NOT scored: the score's poly-A weights are calibrated on
@@ -289,6 +319,8 @@ class RteAnnotator:
             rec.detail["slippage"] = site.slippage_detail
         if polya_reads is not None:
             rec.detail["polya_reads"] = polya_reads
+        if polya_unsupported is not None:
+            rec.detail["polya_unsupported"] = polya_unsupported
         if fb:
             rec.detail["foldback_bp"] = fb
         n_short = sum(j.n_short_used for j in ev.junctions.values())
@@ -345,6 +377,46 @@ class RteAnnotator:
         sc = self.cfg.get("rte_score") or {}
         rec.tprt_score, rec.tprt_points, rec.tprt_call = score(
             rec.score_input, sc.get("weights"), sc.get("thresholds"))
+
+    def _supported_tails(self, asm, ev_left, ev_right, jl, jr):
+        """(A-run at the LEFT insert's REF edge, T-run at the RIGHT one) as far as
+        >= rte_polya_min_fragments independent fragments reach: the run in the evidence
+        consensus (built at that fragment depth) or the k-th longest per-fragment tail among
+        the reads (A-run | REF, REF | T-run)."""
+        k = max(1, int(self.cfg.get("rte_polya_min_fragments", 2)))
+        eli, _elf, _erf, eri = split_junction(ev_left, ev_right)
+        lr, rr = edge_run(eli, at_end=True), edge_run(eri, at_end=False)
+        sup_a = lr[1] if lr[0] == "A" else 0
+        sup_t = rr[1] if rr[0] == "T" else 0
+        # the pooled median is indel-aware; it proves the tail only with >= k fragments behind it
+        if jl is not None and jl.polya_len_median and lr[0] == "A" and jl.n_independent >= k:
+            sup_a = max(sup_a, jl.polya_len_median)
+        if jr is not None and jr.polya_len_median and rr[0] == "T" and jr.n_independent >= k:
+            sup_t = max(sup_t, jr.polya_len_median)
+        per = {"A": {}, "T": {}}
+        for lay in asm.raw_layouts:
+            if lay.role == "JUNCTION":
+                continue
+            segs = lay.segments
+            for i, sg in enumerate(segs):
+                if sg.kind != "POLYA":
+                    continue
+                base = sg.target or ("A" if sg.strand >= 0 else "T")
+                if base == "A" and i + 1 < len(segs) and segs[i + 1].kind == "REF":
+                    d = per["A"]
+                elif base == "T" and i > 0 and segs[i - 1].kind == "REF":
+                    d = per["T"]
+                else:
+                    continue
+                d[lay.frag_key] = max(d.get(lay.frag_key, 0), sg.qlen)
+        for base, d in per.items():
+            lens = sorted(d.values(), reverse=True)
+            kth = lens[k - 1] if len(lens) >= k else 0
+            if base == "A":
+                sup_a = max(sup_a, kth)
+            else:
+                sup_t = max(sup_t, kth)
+        return float(sup_a), float(sup_t)
 
     @staticmethod
     def _beyond_polya(asm):
