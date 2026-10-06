@@ -13,7 +13,9 @@ structure (needs a read/consensus crossing the 5' junction, else 5P_UNRESOLVED):
                        forward part (from a read crossing the inversion point, else the lowest
                        sense coordinate); junction = p1 - p2 (>0 deletion, <0 duplication,
                        Zumalave 2026 i-del / i-dup). Only the inverted piece sequenced (no sense
-                       piece at all): p1 unknown, detail inv_junction=unresolved
+                       piece at all): p1 unknown, detail inv_junction=unresolved. Minimal form:
+                       3' end = consensus terminus + poly-A and the 5' junction reads REF |
+                       poly-T only (inverted copy of the tail): inv=polyA, p2 = consensus end
   INVERTED_5P_SWITCH   as INVERTED_5P with >= 2 distinct orientation-switch points (twin priming
                        + template switch)
 
@@ -51,6 +53,9 @@ DEFAULTS = {
     "templated_min_fragments": 2,   # fragments (junction consensus = 1) showing the template
     "switch_min_seg": 20,           # each side of a sense>anti switch read (L1_INV_SWITCH)
     "pseudogene_full_length_tol": 15,  # 5' insert starts this close to the transcript start
+    "terminal_inv_tolerance": 5,    # 3' end this close to the consensus end = terminus
+    "inverted_tail_min": 10,        # poly-T run at the 5' junction (element sense) = inverted tail
+    "inverted_tail_max_gap": 12,    # ... at most this far from REF
 }
 
 
@@ -194,6 +199,16 @@ def classify(res, lib, ctx=None, cfg=None, novel_finder=None, premrna=None,
             call.detail["j5_feature"] = lm
     elif cls_:
         call.structure = "5P_UNRESOLVED"
+        if (j3 is not None and j3.strand > 0 and call.has_polya_3p
+                and j3.t_en >= cend - c["terminal_inv_tolerance"] and _inverted_tail_5p(five, c)):
+            # minimal twin priming: the 3' end is the consensus terminus + poly-A, and the 5'
+            # junction reads REF | poly-T, i.e. an inverted copy of the tail (and possibly the
+            # terminal end) -- no element piece inside the inversion was sequenced. The
+            # terminal piece is required, so reference A-run slippage (POLYA_ONLY) can't get here
+            call.structure = "INVERTED_5P"
+            call.j5_pos = cend
+            call.detail["inv"] = "polyA"
+            call.detail["inv_junction"] = "unresolved"
     # SVA 5' transduction: transcription started upstream of the SVA, so the SVA itself is
     # complete at its 5' end; a 5' junction reading REF | source 5' flank (sense) is therefore a
     # FULL_LENGTH SVA even when no read joins the (long) flank to the hexamer
@@ -578,6 +593,20 @@ def _sense_switch(res, j5, lib, cls_, c):
             if a.t_st >= j5.t_st - 50 and b.t_en > a.t_en + 20:
                 return a.t_en, b.t_en
     return None
+
+
+def _inverted_tail_5p(five_layouts, c):
+    """A 5' junction (element sense) reading REF | poly-T with no element segment after it."""
+    for lay in five_layouts:
+        segs = lay.segments
+        if len(segs) < 2 or segs[0].kind != "REF":
+            continue
+        t = segs[1]
+        if (t.kind == "POLYA" and t.strand < 0 and t.qlen >= c["inverted_tail_min"]
+                and t.q_st - segs[0].q_en <= c["inverted_tail_max_gap"]
+                and not any(x.kind == "ELEMENT" for x in segs[2:])):
+            return True
+    return False
 
 
 def _td5_at_junction(five_layouts):

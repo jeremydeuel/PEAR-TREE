@@ -560,13 +560,26 @@ class AssemblyResult:
                     per_class[lib.cons_class.get(s.target, "OTHER")] += s.qlen
         res.class_bp = dict(per_class)
         res.element_bp = sum(per_class.values())
+        term_strand, term = cls._terminal_3p(raw_layouts, lib, asm.cfg)
         if per_cons and res.element_bp >= asm.cfg["min_element_bp"]:
             best_class = max(per_class, key=per_class.get)
             res.consensus = max((n for n in per_cons if lib.cons_class.get(n) == best_class),
                                 key=per_cons.get)
             res.element_class = best_class
-        # --- strand
-        if strand_hint:
+        elif term_strand:
+            # too few element bp overall, but a piece ending AT the consensus 3' terminus next
+            # to the poly-A tail at a breakpoint: that is the element's 3' end (a reference
+            # A-run / slippage has no element terminus), so it establishes the class
+            best = Counter()
+            for sg in term:
+                best[sg.target] += sg.matches
+            res.consensus = max(best, key=best.get)
+            res.element_class = lib.cons_class.get(res.consensus, "")
+        # --- strand: element 3' terminus + tail at a breakpoint > junction-string poly-A >
+        # poly-A in the reads > element pieces next to REF (which can be the inverted 5' part)
+        if term_strand and (not strand_hint or strand_hint[0] != term_strand):
+            res.strand, res.strand_source = term_strand, "element_3p_end"
+        elif strand_hint:
             res.strand, res.strand_source = strand_hint
         else:
             res.strand, res.strand_source = cls._strand_from_segments(raw_layouts, res.consensus, lib)
@@ -576,6 +589,45 @@ class AssemblyResult:
             res._pileup(asm)
             res._nearest(asm)
         return res
+
+    @staticmethod
+    def _terminal_3p(layouts, lib, cfg):
+        """Element 3' ends at a breakpoint (reference-forward layouts):
+            + element:  ELEMENT(+, ends at the consensus 3' terminus) | A-run | REF
+            - element:  REF | T-run | ELEMENT(-, ends at the consensus 3' terminus)
+        The element piece needs >= terminal_min_bp at >= terminal_min_identity, ending within
+        terminal_tolerance bp of the consensus end; the tail may be impure next to REF (<=
+        terminal_max_ref_gap bp unlabelled). Returns (strand or 0 when absent/contradictory,
+        [element segments of the winning strand])."""
+        tol = cfg.get("terminal_tolerance", 5)
+        mbp = cfg.get("terminal_min_bp", 20)
+        mid = cfg.get("terminal_min_identity", 0.9)
+        rgap = cfg.get("terminal_max_ref_gap", 12)
+        votes = {1: set(), -1: set()}
+        segs_by = {1: [], -1: []}
+
+        def term_ok(e, strand):
+            if e.kind != "ELEMENT" or e.strand != strand or e.qlen < mbp or e.identity < mid:
+                return False
+            cend = lib.cons_end.get(e.target, 0)
+            return cend > 0 and e.t_en >= cend - tol
+
+        for lay in layouts:
+            sg = lay.segments
+            for i in range(len(sg) - 2):
+                a, b, c = sg[i], sg[i + 1], sg[i + 2]
+                if (b.kind == "POLYA" and (b.target or "A") == "A" and c.kind == "REF"
+                        and term_ok(a, 1) and b.q_st - a.q_en <= 5 and c.q_st - b.q_en <= rgap):
+                    votes[1].add(lay.frag_key)
+                    segs_by[1].append(a)
+                elif (a.kind == "REF" and b.kind == "POLYA" and b.target == "T"
+                        and term_ok(c, -1) and b.q_st - a.q_en <= rgap and c.q_st - b.q_en <= 5):
+                    votes[-1].add(lay.frag_key)
+                    segs_by[-1].append(c)
+        for st in (1, -1):
+            if votes[st] and not votes[-st]:
+                return st, segs_by[st]
+        return 0, []
 
     @staticmethod
     def _strand_from_polya(layouts, min_run=10):

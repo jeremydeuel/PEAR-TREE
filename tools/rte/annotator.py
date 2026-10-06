@@ -194,6 +194,14 @@ class RteAnnotator:
         hint = (pa.strand, pa.source) if pa.strand else None
         asm = self.assembler.assemble(ctx, junction_seqs, reads, hint)
         strand = asm.strand
+        if pa.strand and strand and pa.strand != strand:
+            # the element 3' terminus + tail sits at the other junction (assembly
+            # element_3p_end): the junction-string tail is the inverted 5' copy, the poly-A
+            # hallmark is the strand-consistent side
+            run = pa.right_run if strand < 0 else pa.left_run
+            pa.strand, pa.source = strand, asm.strand_source
+            pa.length = float(run[1]) if run[0] == ("T" if strand < 0 else "A") else 0.0
+            pa.both_sided = False
         polya_reads = None
         if not pa.strand and asm.strand_source == "polya_reads":
             # the junction strings carry no poly-A but clip reads do (A-run | REF): that tail set

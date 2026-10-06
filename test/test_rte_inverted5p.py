@@ -105,6 +105,34 @@ READS = [
      "CTCTAGACTGAAGGTCTCAGCATGTGAAAGGTACCACCCCTCACAAGGCCTCTTAGTCTTCAGCTTTCAGTAACAGCTCCCTTCCTTTACCCATTATGACCCAGAGGTGGTAATAGTCACTACAGTGCTAGCTTCAGGTTATCAAGCTATC"),]
 
 
+# ---- PD37590 chr2:126577464-126577479 (all reads PD37590b_lo0117): minimal twin priming.
+# RIGHT record: REF | ATTATTAT T10 rc(L1HS 5993-6019) = - element, 3' terminus + tail;
+# LEFT record: A19 | REF = the inverted copy of the tail at the 5' junction. Was POLYA_ONLY:
+# 26 element bp < min_element_bp and the strand came from the bare tails.
+CHR2_TITLE = "chr2:126577464-126577479"
+CHR2_LEFT_JUNCTION = "AAAAATTTCAATGTTTATCCTAAAATGTTAAAATAAATGTTAGATTTAATTTTTAAAAGAATTGGATACTATTTAAAAAAAAAGAAGAAGAGATAATAAGAACAAGTTGTTGGGAAAAGAAGAAAAAGATTG"
+CHR2_RIGHT_JUNCTION = "TCAATGGTTGTCTCCCATTCACCTTGAATCAAACCCTGCCAGAAACAGGGGCAATGATACACAAACAACCTTCCTTGCCAGGAAAAAGACTTATCTACCATCAGGGGACAAAAGAGAACTCAAAAATTTCAATGTTattattattttttttttattatactctaag"
+CHR2_LEFT_CLIP = "aaaaaaaaaaaaaaaaaaaAAAAATTTCAATGTTTATCCTAAAATGTTAAAATAAATGTTAGATTTAATTTTTAAAAGAATTGGATACTATTTAAAAAAAAAGAAGAAGAGATAATAAGAACAAGTTGTTGGGAAAAGAAGAAAAAGATTG"
+CHR2_RIGHT_CLIP = "TCAATGGTTGTCTCCCATTCACCTTGAATCAAACCCTGCCAGAAACAGGGGCAATGATACACAAACAACCTTCCTTGCCAGGAAAAAGACTTATCTACCATCAGGGGACAAAAGAGAACTCAAAAATTTCAATGTTattattattttttttttattatactctaagttttagggtacat"
+CHR2_READS = [
+    ("LEFT", "CLIP", "e7b4601cd8e0d53a", "1",
+     "AAAAAAAAAAAAAAAAAAAAAAAATTTCAATGTTTATCCTAAAATGTTAAAATAAATGTTAGATTTAATTTTTAAAAGAATTGGATACTATTTAAAAAAAAAGAAGAAGAGATAATAAGAACAAGTTGTTGGGAAAAGAAGAAAAAGATTG"),
+    ("LEFT", "MATE", "e7b4601cd8e0d53a", "2",
+     "AGAGAAAGAAAAAAGAAACTCCTTAGAAACTCCTGAGAATCAGACTGATACCATATTTCTCTTTAGCAACACTTATGTAAGACAGAATGGTGCAACAGCACCAAGTTCTAAGGGAAATTATTTCAATCCTAGAGTTGATACCAAGCCAAAA"),
+    ("RIGHT", "CLIP", "e9fccf786a6c6d89", "2",
+     "TCAATGGTTGTCTCCCATTCACCTTGAATCAAACCCTGCCAGAAACAGGGGCAATGATACACAAACAACCTTCCTTGCCAGGAAAAAGACTTATCTACCATCAGGGGACAAAAGAGAACTCAAAAATTTCAATGTTATTATTATTTTTTTT"),
+    ("RIGHT", "CLIP", "13eec6213774460a", "2",
+     "CATTCACCTTGAATCAAACCCTGCCAGAAACAGGGGCAATGATACACAAACAACCTTCCTTGCCAGGAAAAAGACTTATCTACCATCAGGGGACAAAAGAGAACTCAAAAATTTCAATGTTATTATTATTTTTTTTTTATTATACTCTAAG"),
+    ("RIGHT", "CLIP", "2478c262e62b21c4", "2",
+     "TCAAACCCTGCCAGAAACAGGGGCAATGATACACAAACAACCTTCCTTGCCAGGAAAAAGACTTATCTACCATCAGGGGACAAAAGAGAACTCAAAAATTTCAATGTTATTATTATTTTTTTTTTATTATACTCTAAGTTTTAGGGTACAT"),
+    ("RIGHT", "MATE", "13eec6213774460a", "1",
+     "CAGGTAAAAACACACATATGAACAGCAGAAAGGAGCTGAGGCTTCTAGGGTGATTGCTGGAGCCATGGATTATAGCACAGACAACCTTGGCAATGGGGAAGGGGCTGCAGTGGATGAGAGAAGGTGATGAGTCAATGGTTGTCTCCCATTC"),
+    ("RIGHT", "MATE", "e9fccf786a6c6d89", "1",
+     "CAGCAGAAAGGAGCTGAGGCTTCTAGGGTGATTGCTGGAGCCATGGATTATAGCACAGACAACCTTGGCAATGGGGAAGGGGCTGCAGTGGATGAGAGAAGGTGATGAGTCAATGGTTGTCTCCCATTCACCTTGAATCAAACCCTGCCAG"),
+    ("RIGHT", "MATE", "2478c262e62b21c4", "1",
+     "GGCTGCAGTGGATGAGAGAAGGTGATGAGTCAATGGTTGTCTCCCATTCACCTTGAATCAAACCCTGCCAGAAACAGGGGCAATGATACACAAACAACCTTCCTTGCCAGGAAAAAGACTTATCTACCATCAGGGGACAAAAGAGAACTCA"),
+]
+
 def _locus(with_polya_clip):
     reads = [EvidenceRead(side, role, "PD37590b_lo0028", frag, r12, seq)
              for side, role, frag, r12, seq in READS]
@@ -196,3 +224,53 @@ def test_polya_strand_vote_is_unanimous():
     assert AssemblyResult._strand_from_polya([a_ref, ref_t])[0] == 0
     # an A-run AFTER the reference (REF | A) is not a tail of a + element at the LEFT junction
     assert AssemblyResult._strand_from_polya([ref_a])[0] == 0
+
+
+def _replay(title, lj, rj, reads, lclip=None, rclip=None):
+    ev = InsertionEvidence(title, reads=[EvidenceRead(sd, ro, "S", fr, r12, seq)
+                                         for sd, ro, fr, r12, seq in reads])
+    for side, c in (("LEFT", lclip), ("RIGHT", rclip)):
+        if c:
+            ev.junctions[side] = JunctionEvidence(side, clip_consensus=c, supported=1, n_samples=1)
+    return RteAnnotator({"rte_library": rte_sim.FIX}).annotate(InsertionInput(title, lj, rj), ev)
+
+
+@pytest.mark.parametrize("with_clips", [False, True])
+def test_pd37590_chr2_minimal_inversion(with_clips):
+    r = _replay(CHR2_TITLE, CHR2_LEFT_JUNCTION, CHR2_RIGHT_JUNCTION, CHR2_READS,
+                CHR2_LEFT_CLIP if with_clips else None, CHR2_RIGHT_CLIP if with_clips else None)
+    assert r.element == "L1"              # 26 bp at the consensus terminus next to the tail
+    assert r.strand == -1                 # the terminus + tail is at the RIGHT record
+    assert r.structure == "INVERTED_5P"
+    assert r.detail["inv"] == "polyA" and r.detail["inv_junction"] == "unresolved"
+    assert r.detail["j3"] >= CEND - 5
+
+
+@pytest.mark.parametrize("strand", [1, -1])
+def test_minimal_inversion_synthetic(strand):
+    """element sense: REF | T19 (inverted tail) | [300 bp never sequenced] | L1 last 40 bp |
+    A12 | REF -- reads see either the 5' REF | T19 or the 3' terminus + tail, never both."""
+    import random
+    mid = rte_sim.rnd(300, random.Random(7))
+    inp, ev, genome, _ = rte_sim.build("T" * 19 + mid + L1[CEND - 40:CEND] + "A" * 12,
+                                       strand=strand, exclude=range(45, 300, 10), clip_len=30,
+                                       step=10)
+    r = RteAnnotator({"rte_library": rte_sim.FIX}, genome=genome).annotate(inp, ev)
+    assert r.element == "L1" and r.strand == strand
+    assert r.structure == "INVERTED_5P" and r.detail["inv"] == "polyA"
+    assert r.detail["j3"] >= CEND - 5
+
+
+@pytest.mark.parametrize("strand", [1, -1])
+def test_tails_on_both_sides_without_terminus_stay_polya_only(strand):
+    """Slippage-like: poly-T | junk | poly-A with no element terminus -> no element."""
+    r = _sim("T" * 19 + "GCATGCTAGCATCG" + "A" * 20, strand, strip_polya=False)
+    assert r.element in ("POLYA_ONLY", "UNKNOWN")
+    assert r.structure == "5P_UNRESOLVED"
+
+
+def test_non_terminal_piece_is_not_a_minimal_inversion():
+    """26 bp of L1 from the middle of the consensus before the tail is no 3' terminus: the
+    minimal-inversion rule (inv=polyA) must not fire."""
+    r = _sim("T" * 19 + L1[3000:3026] + "A" * 12, 1, strip_polya=False)
+    assert r.detail.get("inv") != "polyA"
