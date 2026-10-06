@@ -127,7 +127,14 @@ as well, ROOT from 4/20. 2/20 and 3/20 everywhere stay NOISE in every mode, and 
 5/20 with 39 colonies at 0/20 is the clade in every mode (a shared φ cannot fit the 39 clean
 colonies). Per colony: 5/20 at purity 0.85 and b = 0.6 is het (P > 0.99, higher GQ than
 uncorrected), 0/20 stays absent (P(absent) ≈ 0.995 -- a lower expected het fraction makes each ref
-read weaker absence evidence), 10/20 is het not hom. Bench (simulated, no real bias): the estimate
+read weaker absence evidence), 10/20 is het not hom. PD37590 joint-only ablation on the real data (2026-10-06, same
+per-colony files, rows = tree_fit class): versus no correction, `--ref-bias auto` moves germline
+ROOT 7048 → 7191 and tree_fit-private privates 76 → 92 (cost: tree_fit-noise → ROOT 938 → 1045, and
+uninformative-depth privates 10 → 84 to be checked); `--zygosity locus` sends 685 germline loci to
+INDEP (12 before: real colonies differ in dosage at germline loci -- LOH, copy number, sampling),
+and `--noise-max-frac 0.1` sends tree_fit-noise loci to ROOT (938 → 1913 colony / 2826 locus). The
+six known loci are identical in every mode. Recommended: `--ref-bias auto`, zygosity `colony`,
+no NOISE cap. Bench (simulated, no real bias): the estimate
 is b ≈ 1.05 (TSD 1.03), so the joint calls do not move; even a deliberately wrong fixed
 `ref_bias = 0.6` on every colony gives present-ok 542 → 552 of 616, 0 wild-type-control false
 carriers (absent calls become no-calls instead: truth-absent no-call 72 → 134).
@@ -161,7 +168,7 @@ step's hypothesis, legacy `tree_fit` labels against the joint step, and a trace 
 tree_fit-class × joint-class table: the independent Python check of the Rust joint step. `--dry-run` resolves every input and prints the
 bsubs. `REFBIAS=1` makes it a reference-bias run: config `cluster/config.genotype2.grch38.refbias`,
 output `$TPRT_ROOT/<P>/V2_refbias` (the existing V2 files lack the profile columns), joint step with
-`--ref-bias auto --zygosity locus` (+ `JOINT_EXTRA`), results copied with a `.refbias` tag. `cluster/build.sh` builds this crate together with the other two.
+`--ref-bias auto` (+ `JOINT_EXTRA`), results copied with a `.refbias` tag. `cluster/build.sh` builds this crate together with the other two.
 
 ## Validation
 

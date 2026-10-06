@@ -23,7 +23,7 @@
 #   REFBIAS 0      1 = reference-bias run: GENO2_CFG defaults to cluster/config.genotype2.grch38.refbias
 #                  (adds the pl_het_b profile columns), V2_ROOT to $TPRT_ROOT/<P>/V2_refbias (the
 #                  existing V2 files lack the columns and genotype_one.sh would skip them), the joint
-#                  step gets "--ref-bias auto --zygosity locus" before JOINT_EXTRA, and the results
+#                  step gets "--ref-bias auto" before JOINT_EXTRA (zygosity colony: see the README PD37590 ablation), and the results
 #                  copied to RESULTS_BASE carry a ".refbias" tag (b estimates: joint/<P>.joint.refbias.tsv)
 #
 # Jobs:  gt2_<P>[1-N]%THROTTLE   genotype_one.sh (GENOTYPE_IMPL=v2; skip-if-exists, atomic)
@@ -54,7 +54,7 @@ done
 
 THROTTLE="${THROTTLE:-12}"; MEM="${MEM:-4000}"; QUEUE="${QUEUE:-normal}"; EVAL_MEM="${EVAL_MEM:-8000}"
 REFBIAS="${REFBIAS:-0}"
-if [ "$REFBIAS" = 1 ]; then TAG="refbias"; JOINT_BIAS="--ref-bias auto --zygosity locus"; DEF_CFG="config.genotype2.grch38.refbias"
+if [ "$REFBIAS" = 1 ]; then TAG="refbias"; JOINT_BIAS="--ref-bias auto"; DEF_CFG="config.genotype2.grch38.refbias"
 else TAG=""; JOINT_BIAS=""; DEF_CFG="config.genotype2.grch38"; fi
 THREADS="${GENO2_THREADS:-1}"   # per-colony realignment is CPU-bound on the farm (~30 ms CPU/locus at 30x): -n THREADS + --threads
 JOINT_EXTRA="${JOINT_EXTRA:-}"   # extra flags for both joint-step runs, e.g. "--noise-max-frac 0.1"
