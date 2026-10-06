@@ -15,6 +15,12 @@ alt-read rate eps ~ Beta(a, b) in every colony = the constant-allele-fraction ar
 
     BF_tree = sum_b prior_b L_b  /  (L_indep + L_noise) / 2         (reported as log10)
 
+Input formats are auto-detected (tools/genotype2_io.py): per-colony files from the legacy
+genotyper or from rust/peartree-genotype2 (numeric; votes = n_alt / n_ref, rows with status != ok
+are missing data), and --genotypes as combine_genotypes' call matrix or the genotype2 joint
+step's numeric P(carrier) matrix (then <P>.joint.tsv beside it is joined as joint_* columns and
+cross-tabulated in summary.md: this script is the independent Python check of that Rust port).
+
 Usage (the farm kit calls exactly this):
   python tools/phylo/tree_fit.py --genotypes P.genotypes.csv.gz --genotype-dir genotypes/ \
       --tree P.tree --annotation P.annotated.tsv --out phylo/ [--sex M|F|auto] \
@@ -38,6 +44,7 @@ from scipy.special import betaln, logsumexp
 
 if __package__ in (None, ""):
     sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
+from tools import genotype2_io as GIO  # noqa: E402
 from tools.phylo import genotype_likelihood as G  # noqa: E402
 from tools.phylo import tree as T  # noqa: E402
 
@@ -366,14 +373,24 @@ def run(args) -> Dict[str, object]:
     wanted = load_samples(args.samples)
     csv_loci = None
     csv = None
+    joint = None
     if args.genotypes and os.path.exists(args.genotypes):
+        # combine_genotypes call strings (gated loci) or the genotype2 numeric P(carrier) matrix
         csv = G.read_genotypes_csv(args.genotypes)
-        csv_loci = set(csv.index.astype(str))
+        if csv.attrs.get("format") == GIO.FMT_CALLS:
+            csv_loci = set(csv.index.astype(str))
+        else:
+            joint = GIO.read_joint_df(GIO.joint_tsv_for(args.genotypes))
+        say(f"--genotypes: {csv.attrs.get('format')} matrix, {len(csv)} loci"
+            + (f"; joint table {GIO.joint_tsv_for(args.genotypes)}" if joint is not None else ""))
     if args.genotype_dir:
         counts = G.read_genotype_dir(args.genotype_dir)
     else:
-        raise SystemExit("tree_fit: --genotype-dir is required: <patient>.genotypes.csv.gz carries "
-                         "genotype calls only (no n_alt/n_ref), and the model needs read counts")
+        raise SystemExit("tree_fit: --genotype-dir is required: <patient>.genotypes.csv.gz (calls or "
+                         "P(carrier)) carries no n_alt/n_ref, and the model needs read counts")
+    say(f"--genotype-dir: {len(counts.colonies)} {counts.fmt} per-colony files"
+        + (" (votes = n_alt / n_ref; n_uninf, n_art, depth unused; status != ok = missing)"
+           if counts.fmt == GIO.FMT_V2 else ""))
     cols = [c for c in counts.colonies if c in set(tips) and (wanted is None or c in set(wanted))]
     dropped_geno = [c for c in counts.colonies if c not in cols]
     dropped_tips = [t for t in tips if t not in cols]
@@ -477,6 +494,21 @@ def run(args) -> Dict[str, object]:
     })
     if csv_loci is not None:
         df["passes_combine_genotypes"] = [x in csv_loci for x in loci]
+    elif csv is not None:
+        # numeric matrix (genotype2 joint step): its per-colony P(carrier) over the fitted colonies,
+        # and the joint step's own verdict when <P>.joint.tsv sits next to it -- the independent
+        # cross-check of the Rust port against this read-vote model
+        m = csv.reindex(index=loci, columns=[c for c in cols if c in csv.columns])
+        df["matrix_n_carriers"] = (m >= GIO.P_CARRIER).sum(axis=1).values
+        df["matrix_n_wt"] = (m <= GIO.P_ABSENT_MATRIX).sum(axis=1).values
+    if joint is not None:
+        j = joint.reindex(loci)
+        best_j = [b if isinstance(b, str) else "" for b in j["best"]]
+        df["joint_best"] = [b or "NA" for b in best_j]
+        df["joint_class"] = [GIO.joint_class({"best": b, "n_carriers": n})
+                             for b, n in zip(best_j, j["n_carriers"].fillna(0))]
+        df["joint_n_carriers"] = j["n_carriers"].values
+        df["joint_log10_bf_tree"] = j["log10_bf_tree"].values
     ann = load_annotation(args.annotation)
     if ann is not None:
         ann = ann.rename(columns={c: (f"ann_{c}" if c in df.columns else c) for c in ann.columns})
@@ -558,6 +590,16 @@ def write_summary(args, df, cp, viol, P, opt, br, log, sex_info):
         for _, r in worst.iterrows():
             lines.append(f"| {r.locus} | {r.carriers} | {r.best_branch} ({r.n_clade}) | {r.log10_bf_tree} | "
                          f"{r.n_missing_leaves} | {r.n_extra_carriers} | {r.p_locus} |")
+    if "joint_class" in df.columns:
+        jt = pd.crosstab(df["class"], df["joint_class"])
+        jc = [c for c in ("ROOT", "clade", "private", "INDEP", "NOISE", "NA") if c in jt.columns]
+        jt = jt.reindex(index=[c for c in CLASSES if c in jt.index], columns=jc).fillna(0).astype(int)
+        lines += ["", "## Cross-check: tree_fit class x genotype2 joint step", "",
+                  "Rows: this read-vote model; columns: the Rust joint step (`<P>.joint.tsv`, PL-based; "
+                  "clade = a branch with >= 2 carriers, private = a tip).", "",
+                  "| class | " + " | ".join(jc) + " |", "|---|" + "---|" * len(jc)]
+        for c in jt.index:
+            lines.append(f"| {c} | " + " | ".join(str(v) for v in jt.loc[c]) + " |")
     lines += ["", "How to read: plans/tprt_hallmarks/PHYLO_EVAL.md.", ""]
     with open(os.path.join(args.out, "summary.md"), "w") as fh:
         fh.write("\n".join(lines))
@@ -565,10 +607,12 @@ def write_summary(args, df, cp, viol, P, opt, br, log, sex_info):
 
 def build_parser():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--genotypes", help="<patient>.genotypes.csv.gz (combine_genotypes output; used to "
-                                        "flag loci passing its gates)")
-    ap.add_argument("--genotype-dir", help="directory of per-colony genotype files <sample>.txt.gz "
-                                           "(n_alt / n_ref columns)")
+    ap.add_argument("--genotypes", help="<patient>.genotypes.csv.gz, auto-detected: combine_genotypes call "
+                                        "strings (flags the loci passing its gates) or the genotype2 "
+                                        "numeric P(carrier) matrix (adds matrix_n_carriers / matrix_n_wt, and "
+                                        "joint_* columns from <patient>.joint.tsv next to it)")
+    ap.add_argument("--genotype-dir", help="directory of per-colony genotype files <sample>.txt.gz, legacy "
+                                           "or genotype2 numeric (auto-detected; n_alt / n_ref columns)")
     ap.add_argument("--tree", required=True, help="Newick SNV tree (tip labels = colony sample names)")
     ap.add_argument("--annotation", help="annotate_v2 table (TSV, `locus` column) joined onto phylo_fit.tsv")
     ap.add_argument("--out", required=True)

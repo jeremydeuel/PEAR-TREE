@@ -39,9 +39,7 @@ subclonal component, which floors them at ~ lam / ((n + 1) f1): conservative by 
 """
 from __future__ import annotations
 
-import gzip
 import os
-import re
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Sequence
 
@@ -49,6 +47,11 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 from scipy.special import betainc, betaln, gammaln
+
+if __package__ in (None, "") or not __package__.startswith("tools"):
+    import sys
+    sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
+from tools import genotype2_io as GIO  # noqa: E402
 
 F_MIN, F_MAX = 1e-6, 1.0 - 1e-6
 ONESIDE_TOKEN = "oneside_"
@@ -90,18 +93,19 @@ def locus_contig(name: str) -> str:
 
 def sample_stem(path: str) -> str:
     """Colony name of a per-colony genotype file (`genotypes/<SAMPLE>.txt.gz`)."""
-    base = os.path.basename(path)
-    return re.sub(r"(\.genotypes?)?(\.(txt|csv|tsv))?(\.gz)?$", "", base)
+    return GIO.colony_stem(path)
 
 
 @dataclass
 class Counts:
-    """n_alt / n_ref per locus x colony (0 where a colony's file lacks the locus)."""
+    """n_alt / n_ref per locus x colony (0 where a colony's file lacks the locus or has no
+    model result). `fmt` = the per-colony format read (tools/genotype2_io FMT_LEGACY / FMT_V2)."""
     loci: List[str]
     colonies: List[str]
     alt: np.ndarray            # L x C int
     ref: np.ndarray            # L x C int
-    calls: Optional[pd.DataFrame] = None   # genotype strings (L x C), informational
+    calls: Optional[pd.DataFrame] = None   # legacy genotype strings (L x C), informational; None for v2
+    fmt: str = GIO.FMT_LEGACY
 
     @property
     def depth(self) -> np.ndarray:
@@ -110,29 +114,36 @@ class Counts:
     def subset_colonies(self, cols: Sequence[str]) -> "Counts":
         ix = [self.colonies.index(c) for c in cols]
         calls = self.calls[list(cols)] if self.calls is not None else None
-        return Counts(self.loci, list(cols), self.alt[:, ix], self.ref[:, ix], calls)
+        return Counts(self.loci, list(cols), self.alt[:, ix], self.ref[:, ix], calls, self.fmt)
 
 
 def read_genotype_file(path: str) -> pd.DataFrame:
-    df = pd.read_csv(path, sep="\t", dtype={"insertion": str}, compression="infer")
+    """One per-colony file, legacy or genotype2 numeric (auto-detected by tools/genotype2_io),
+    indexed by locus; `df.attrs['format']` says which. Both carry n_alt / n_ref."""
+    df = GIO.read_colony_df(path)
     if "n_alt" not in df.columns or "n_ref" not in df.columns:
         raise ValueError(f"{path}: genotype file has no n_alt / n_ref columns (genotyper too old)")
-    return df.drop_duplicates("insertion").set_index("insertion")
+    return df
 
 
 def list_genotype_files(directory: str) -> Dict[str, str]:
-    out = {}
-    for f in sorted(os.listdir(directory)):
-        if ".tmp" in f or f.endswith((".log", ".md", ".json")):
-            continue
-        if not re.search(r"\.(txt|tsv)(\.gz)?$", f):
-            continue
-        out[sample_stem(f)] = os.path.join(directory, f)
-    return out
+    return GIO.list_colony_files(directory)
 
 
 def read_genotype_dir(directory: str, colonies: Optional[Sequence[str]] = None,
                       loci: Optional[Sequence[str]] = None) -> Counts:
+    """Read votes per locus x colony from a directory of per-colony files (one format per
+    directory, auto-detected).
+
+    Legacy files (peartree-genotype): n_alt / n_ref are the junction votes.
+    genotype2 numeric files: n_alt = reads realigned to the ALT haplotype, n_ref = reads
+    realigned to REF (each beyond `llr_informative`), i.e. the same vote semantics. Not used:
+    n_uninf (reads favouring neither haplotype cast no vote; only the PL columns, which the Rust
+    joint step uses, carry them), n_art (unexplained / chimeric reads; legacy n_art was no vote
+    either) and depth (every read in the window, incl. those not crossing a breakpoint). A row
+    with status != ok (no_reads / high_coverage / error) has empty counts -> 0 / 0 = missing
+    data, as in the joint step. The per-kind vote odds K are re-estimated from the germline
+    hets on every run, so the different read counting needs no correction."""
     files = list_genotype_files(directory)
     if colonies is not None:
         missing = [c for c in colonies if c not in files]
@@ -143,6 +154,12 @@ def read_genotype_dir(directory: str, colonies: Optional[Sequence[str]] = None,
     if not files:
         raise ValueError(f"no per-colony genotype files in {directory}")
     tables = {c: read_genotype_file(p) for c, p in files.items()}
+    fmts = {t.attrs.get("format") for t in tables.values()}
+    if len(fmts) > 1:
+        by = {f: [c for c, t in tables.items() if t.attrs.get("format") == f][:5] for f in fmts}
+        raise ValueError(f"{directory}: mixed genotype formats {by} (legacy and genotype2 files "
+                         f"cannot be fitted together)")
+    fmt = fmts.pop()
     if loci is None:
         seen, order = set(), []
         for t in tables.values():
@@ -155,20 +172,22 @@ def read_genotype_dir(directory: str, colonies: Optional[Sequence[str]] = None,
     cols = list(tables)
     alt = np.zeros((len(loci), len(cols)), dtype=np.int64)
     ref = np.zeros_like(alt)
-    calls = pd.DataFrame(index=loci, columns=cols, dtype=object)
+    calls = pd.DataFrame(index=loci, columns=cols, dtype=object) if fmt == GIO.FMT_LEGACY else None
     for j, c in enumerate(cols):
         t = tables[c].reindex(loci)
         alt[:, j] = t["n_alt"].fillna(0).astype(np.int64).values
         ref[:, j] = t["n_ref"].fillna(0).astype(np.int64).values
-        if "genotype" in t.columns:
+        if calls is not None and "genotype" in t.columns:
             calls[c] = t["genotype"].values
-    return Counts(loci, cols, np.maximum(alt, 0), np.maximum(ref, 0), calls)
+    return Counts(loci, cols, np.maximum(alt, 0), np.maximum(ref, 0), calls, fmt)
 
 
 def read_genotypes_csv(path: str) -> pd.DataFrame:
-    """`<patient>.genotypes.csv.gz` (combine_genotypes output: `;`-separated calls, loci that
-    passed its gates). Carries calls only, no read counts."""
-    return pd.read_csv(path, sep=";", index_col=0, compression="infer")
+    """`<patient>.genotypes.csv.gz` of either format (tools/genotype2_io.read_matrix_df):
+    combine_genotypes' call strings (only the loci that passed its gates) or the genotype2 joint
+    step's numeric P(carrier) matrix (every locus). `df.attrs['format']` = 'calls' / 'numeric'.
+    Neither carries read counts."""
+    return GIO.read_matrix_df(path)
 
 
 # ------------------------------------------------------------------ distributions
