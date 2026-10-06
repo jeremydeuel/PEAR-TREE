@@ -85,6 +85,15 @@ SAMTOOLS_MODULE="${SAMTOOLS_MODULE:-samtools-1.19}"
 # src/config.py through $VENV/bin/python; refuses require_independent_fragments=True).
 COMBINE_IMPL="${COMBINE_IMPL:-python}"
 COMBINE_BIN="${COMBINE_BIN:-$PT_ROOT/rust/peartree-combine/target/release/peartree-combine}"
+# Genotyping contract: one-sided loci on/off. Unset = GENO_CFG's `one_sided_loci` (legacy
+# behaviour); 0 = two-sided loci only (PD37590 decision: only insertions with both ends are
+# genotyped), 1 = with the one-sided extension.
+GENO_ONE_SIDED="${GENO_ONE_SIDED:-}"
+# extra arguments of the genotype2 joint step (phase 4), e.g. "--ref-bias auto" with a
+# GENO2_CFG that writes the pl_het_b profile (cluster/config.genotype2.grch38.refbias)
+JOINT_ARGS="${JOINT_ARGS:-}"
+# phase 7 (report): tools/phylo/tree_fit.py + cluster/somatic_table.py after annotate; 0 = skip
+PT_REPORT="${PT_REPORT:-1}"
 
 # --- resources (tuned from the PD44579 run) -----------------------------------
 STAGE_THROTTLE="${STAGE_THROTTLE:-20}"   # concurrent stageBam.pl -> bounds iRODS + Lustre I/O
@@ -183,6 +192,8 @@ GENO_CFG='$GENO_CFG'
 SAMTOOLS_MODULE='$SAMTOOLS_MODULE'
 COMBINE_IMPL='$COMBINE_IMPL'
 COMBINE_BIN='$COMBINE_BIN'
+GENO_ONE_SIDED='$GENO_ONE_SIDED'
+JOINT_ARGS='$JOINT_ARGS'
 STAGE_THROTTLE='$STAGE_THROTTLE'
 SD_MEM_T2='$SD_MEM_T2'
 GT_MEM_T2='$GT_MEM_T2'
@@ -313,6 +324,14 @@ submit_dag() {
         -n "$AN_CORES" -q "$QUEUE" -M "$AN_MEM" -R "select[mem>$AN_MEM] rusage[mem=$AN_MEM] $R" \
         "$W annotate")
     log "phase 6 annotate       : $jid_an"; record_jobid an "$jid_an"
+
+    if [ "$GENOTYPE_IMPL" = v2 ] && [ "$PT_REPORT" = 1 ]; then
+        jid_rp=$(submit_job -J "${JOB_PREFIX}_report" -w "done($jid_an)" \
+            -o "$RUNDIR/logs/report.%J.log" -e "$RUNDIR/logs/report.%J.err" \
+            -n 1 -q "$QUEUE" -M 16000 -R "select[mem>16000] rusage[mem=16000]" \
+            "$W report")
+        log "phase 7 report         : $jid_rp"; record_jobid rp "$jid_rp"
+    fi
 }
 
 # =============================================================================
@@ -504,7 +523,10 @@ cmd_retry() {
 # (cluster/config.genotype.grch38.tprt), the combine task appends them once, to
 # <patient>.genotyping.tprt.txt.gz, and every genotype task reads that file instead. Built
 # ONLY in the single combine task (no two tasks ever write the same file).
-geno_one_sided() { grep -Eq '^[[:space:]]*one_sided_loci[[:space:]]*=[[:space:]]*(true|True|1)' "$GENO_CFG" 2>/dev/null; }
+geno_one_sided() {
+    case "${GENO_ONE_SIDED:-}" in 0) return 1 ;; 1) return 0 ;; esac
+    grep -Eq '^[[:space:]]*one_sided_loci[[:space:]]*=[[:space:]]*(true|True|1)' "$GENO_CFG" 2>/dev/null
+}
 
 geno_contract() {   # the contract the genotype tasks read (path relative to nothing: absolute)
     if geno_one_sided; then
@@ -659,8 +681,9 @@ cmd_combine_genotypes() {
         # colonies; annotate_v2 reads it), $PATIENT_ID.joint.tsv the per-locus table.
         local TREE; TREE="$(patient_tree)"
         [ -s "$TREE" ] || { echo "no SNV tree for $PATIENT_ID (set PATIENT_TREE)" >&2; exit 1; }
+        # shellcheck disable=SC2086  # JOINT_ARGS is a word list
         "$GENOTYPE2_BIN" --step joint --tree "$TREE" --genotypes "${files[@]}" \
-            --out "$PATIENT_ID.joint.tsv" --matrix "$CALLS"
+            --out "$PATIENT_ID.joint.tsv" --matrix "$CALLS" ${JOINT_ARGS:-}
         [ -s "$PATIENT_ID.joint.tsv" ] || { echo "joint step produced no $PATIENT_ID.joint.tsv" >&2; exit 1; }
     else
         "$VENV/bin/python" "$PT_ROOT/src/main.py" --step combine_genotypes \
@@ -676,6 +699,7 @@ cmd_combine_genotypes() {
     mkdir -p "$RESULTS_DIR/$PATIENT_ID"
     cp -f "$CALLS" "$STATS_SUM" "insertions/$PATIENT_ID".* "$RESULTS_DIR/$PATIENT_ID/" 2>/dev/null || true
     [ -s "$PATIENT_ID.joint.tsv" ] && cp -f "$PATIENT_ID.joint.tsv" "$RESULTS_DIR/$PATIENT_ID/" || true
+    [ -s "$PATIENT_ID.joint.refbias.tsv" ] && cp -f "$PATIENT_ID.joint.refbias.tsv" "$RESULTS_DIR/$PATIENT_ID/" || true
     for x in discover genotype; do
         [ -s "${x}_excluded.tsv" ] && cp -f "${x}_excluded.tsv" "$RESULTS_DIR/$PATIENT_ID/" || true
     done
@@ -724,6 +748,35 @@ cmd_annotate() {
 }
 
 # =============================================================================
+# phase 7 — report (genotype2 only): tree_fit cross-check + the annotated somatic table
+# =============================================================================
+cmd_report() {
+    load_env
+    cd "$RUNDIR"
+    local TREE; TREE="$(patient_tree)"
+    [ -s "$TREE" ] || { echo "no SNV tree for $PATIENT_ID (set PATIENT_TREE)" >&2; exit 1; }
+    local CALLS="$PATIENT_ID.genotypes.csv.gz" FIT="$RUNDIR/fit"
+    [ -s "$CALLS" ] || { echo "no $CALLS (phase 4 not done)" >&2; exit 1; }
+    log "tree_fit -> $FIT"
+    rm -rf "$FIT"; mkdir -p "$FIT"
+    (cd "$PT_ROOT" && "$VENV/bin/python" tools/phylo/tree_fit.py --genotypes "$RUNDIR/$CALLS" \
+        --genotype-dir "$RUNDIR/genotypes" --tree "$TREE" --out "$FIT") > "$RUNDIR/logs/tree_fit.log" 2>&1 \
+        || { log "tree_fit FAILED (logs/tree_fit.log); the table is built without it"; tail -5 "$RUNDIR/logs/tree_fit.log" >&2; }
+    local known; known="$(dirname "$TREE")/known_insertions.tsv"
+    local args=(--patient "$PATIENT_ID" --joint "$PATIENT_ID.joint.tsv" --genotype-dir genotypes
+                --insertions-dir insertions --out "$PATIENT_ID.somatic.xlsx")
+    [ -s "$FIT/phylo_fit.tsv" ] && args+=(--fit-v2 "$FIT/phylo_fit.tsv")
+    [ -s "$PATIENT_ID.annotated.csv.gz" ] && args+=(--annotation "$PATIENT_ID.annotated.csv.gz")
+    [ -s "$PATIENT_ID.joint.refbias.tsv" ] && args+=(--refbias "$PATIENT_ID.joint.refbias.tsv")
+    [ -s "$known" ] && args+=(--known "$known")
+    "$VENV/bin/python" "$PT_ROOT/cluster/somatic_table.py" "${args[@]}"
+    mkdir -p "$RESULTS_DIR/$PATIENT_ID"
+    cp -f "$PATIENT_ID.somatic.xlsx" "$RESULTS_DIR/$PATIENT_ID/"
+    [ -s "$FIT/summary.md" ] && cp -f "$FIT/summary.md" "$RESULTS_DIR/$PATIENT_ID/$PATIENT_ID.tree_fit_summary.md" || true
+    log "report -> $RESULTS_DIR/$PATIENT_ID/$PATIENT_ID.somatic.xlsx"
+}
+
+# =============================================================================
 # status
 # =============================================================================
 cmd_status() {
@@ -762,5 +815,6 @@ case "${1:-}" in
     combine-genotypes) shift; cmd_combine_genotypes "$@" ;;
     cleanup)           shift; cmd_cleanup "$@" ;;
     annotate)          shift; cmd_annotate "$@" ;;
+    report)            shift; cmd_report "$@" ;;
     *) sed -n '2,35p' "$SELF"; exit 1 ;;
 esac
