@@ -65,6 +65,8 @@ pub struct JointArgs {
     pub dropout: f64,
     /// ε₀: P(a non-carrier colony looks present) -- contamination / mismapping; 0 = off
     pub false_present: f64,
+    /// use only the `pl_f` profile columns with φ <= this for NOISE (1.0 = all of them)
+    pub noise_max_frac: f64,
 }
 
 const LN10: f64 = std::f64::consts::LN_10;
@@ -636,10 +638,14 @@ pub fn run(args: &JointArgs) -> io::Result<()> {
     }
     let has_file: Vec<bool> = tables.iter().map(|t| t.is_some()).collect();
     // the shared-fraction grid must be the same in every file (empty = old format, no profile)
-    let fracs: Vec<f64> = tables.iter().flatten().next().map(|t| t.fracs.clone()).unwrap_or_default();
+    let fracs_all: Vec<f64> = tables.iter().flatten().next().map(|t| t.fracs.clone()).unwrap_or_default();
+    // NOISE uses the grid values up to --noise-max-frac (a shared fraction above that is a
+    // reference-biased germline het, not a background): `use_k` = indices kept
+    let use_k: Vec<usize> = (0..fracs_all.len()).filter(|&k| fracs_all[k] <= args.noise_max_frac + 1e-9).collect();
+    let fracs: Vec<f64> = use_k.iter().map(|&k| fracs_all[k]).collect();
     for (f, t) in args.genotype_files.iter().zip(tables.iter().filter_map(|t| t.as_ref())) {
-        if t.fracs != fracs {
-            return Err(bad(format!("joint: {f}: pl_f profile columns {:?} differ from the first file's {:?}", t.fracs, fracs)));
+        if t.fracs != fracs_all {
+            return Err(bad(format!("joint: {f}: pl_f profile columns {:?} differ from the first file's {:?}", t.fracs, fracs_all)));
         }
     }
     let (l, c) = (loci.len(), tips.len());
@@ -678,9 +684,9 @@ pub fn run(args: &JointArgs) -> io::Result<()> {
             };
             // profile: the pl_f values are on the pl scale (relative to the best dosage, whose pl is
             // 0, so pl_cell's normalisation is the identity); a row without a profile is 0 under every φ
-            for k in 0..fracs.len() {
-                lf[k][col] = match row {
-                    Some(r) if r.pl.is_some() && r.pl_frac.len() == fracs.len() => s_phred * r.pl_frac[k],
+            for (j, &k) in use_k.iter().enumerate() {
+                lf[j][col] = match row {
+                    Some(r) if r.pl.is_some() && r.pl_frac.len() == fracs_all.len() => s_phred * r.pl_frac[k],
                     _ => 0.0,
                 };
             }
@@ -1037,6 +1043,7 @@ mod tests {
             branch_prior: "length".into(),
             dropout: 0.0,
             false_present: 0.0,
+            noise_max_frac: 1.0,
         };
         run(&args).unwrap();
         let tsv = std::fs::read_to_string(&out_tsv).unwrap();

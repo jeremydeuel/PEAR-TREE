@@ -19,7 +19,7 @@
 #   V2_ROOT        $TPRT_ROOT/<P>/V2             everything this script writes: bams.fofn genotypes/ logs/ joint/ report/
 #   THROTTLE 12  MEM 4000 (MB; the reservation is what keeps LSF from packing the array onto one node)
 #   QUEUE normal  EVAL_MEM 8000  RESULTS_BASE $HOME/results/tprt_ab (NFS copy of the report)
-#   GENO2_THREADS 1  threads per genotype task (bsub -n + --threads)
+#   GENO2_THREADS 1  threads per genotype task (bsub -n + --threads)   JOINT_EXTRA ""  extra joint-step flags
 #
 # Jobs:  gt2_<P>[1-N]%THROTTLE   genotype_one.sh (GENOTYPE_IMPL=v2; skip-if-exists, atomic)
 #        gt2_<P>_eval            ended(array) -> this script --evaluate: joint step (length + uniform branch
@@ -49,6 +49,7 @@ done
 
 THROTTLE="${THROTTLE:-12}"; MEM="${MEM:-4000}"; QUEUE="${QUEUE:-normal}"; EVAL_MEM="${EVAL_MEM:-8000}"
 THREADS="${GENO2_THREADS:-1}"   # per-colony realignment is CPU-bound on the farm (~30 ms CPU/locus at 30x): -n THREADS + --threads
+JOINT_EXTRA="${JOINT_EXTRA:-}"   # extra flags for both joint-step runs, e.g. "--noise-max-frac 0.1"
 BIN="${GENOTYPE2_BIN:-$PT_ROOT/rust/peartree-genotype2/target/release/peartree-genotype2}"
 CFG="${GENO2_CFG:-$PT_ROOT/cluster/config.genotype2.grch38}"
 GENOME_2BIT="${GENOME_2BIT:-$JD/hg38.2bit}"
@@ -129,7 +130,7 @@ build_fofn() {
     [ "$n_leg_missing" -eq 0 ] || note "WARNING: $n_leg_missing colonies have no legacy genotype file in $LEGACY_GT (compared on the rest)"
 }
 
-ENV_PASS="LEGACY_RUNDIR='$LEGACY_RUNDIR' LEGACY_GT='$LEGACY_GT' CONTRACT='$CONTRACT' COMBINED='$COMBINED' GENOME_2BIT='$GENOME_2BIT' SAMPLES='$SAMPLES' V2_ROOT='$V2_ROOT' GENOTYPE2_BIN='$BIN' GENO2_CFG='$CFG' LEGACY_FIT='$LEGACY_FIT' LEGACY_CALLS='$LEGACY_CALLS' TPRT_ROOT='$TPRT_ROOT' STAGING_ROOT='$STAGING_ROOT' PATIENTS_DIR='$PATIENTS_DIR' RESULTS_BASE='$RESULTS_BASE'"
+ENV_PASS="LEGACY_RUNDIR='$LEGACY_RUNDIR' LEGACY_GT='$LEGACY_GT' CONTRACT='$CONTRACT' COMBINED='$COMBINED' GENOME_2BIT='$GENOME_2BIT' SAMPLES='$SAMPLES' V2_ROOT='$V2_ROOT' GENOTYPE2_BIN='$BIN' GENO2_CFG='$CFG' JOINT_EXTRA='$JOINT_EXTRA' LEGACY_FIT='$LEGACY_FIT' LEGACY_CALLS='$LEGACY_CALLS' TPRT_ROOT='$TPRT_ROOT' STAGING_ROOT='$STAGING_ROOT' PATIENTS_DIR='$PATIENTS_DIR' RESULTS_BASE='$RESULTS_BASE'"
 GT_CMD="FOFN='$FOFN' OUTDIR='$OUTDIR' CONTRACT='$CONTRACT' COMBINED='$COMBINED' GENOME_2BIT='$GENOME_2BIT' GENOTYPE_IMPL=v2 GENOTYPE2_BIN='$BIN' GENO2_CFG='$CFG' GENO2_THREADS='$THREADS' bash '$PT_ROOT/cluster/genotype_one.sh' \$LSB_JOBINDEX"
 EVAL_CMD="$ENV_PASS bash '$SELF' '$P' --evaluate"
 
@@ -176,11 +177,13 @@ fi
 [ "$n_out" -gt 0 ] || die "nothing to evaluate"
 
 note "joint step (length branch prior)"
-"$BIN" --step joint --tree "$TREE" --genotype-dir "$OUTDIR" \
+# shellcheck disable=SC2086
+"$BIN" --step joint --tree "$TREE" --genotype-dir "$OUTDIR" $JOINT_EXTRA \
     --out "$JOINT/$P.joint.tsv" --matrix "$JOINT/$P.joint_matrix.csv.gz" 2> "$JOINT/joint.log"
 tail -3 "$JOINT/joint.log" >&2 || true
 note "joint step (uniform branch prior)"
-"$BIN" --step joint --tree "$TREE" --genotype-dir "$OUTDIR" --branch-prior uniform \
+# shellcheck disable=SC2086
+"$BIN" --step joint --tree "$TREE" --genotype-dir "$OUTDIR" --branch-prior uniform $JOINT_EXTRA \
     --out "$JOINT/$P.joint.uniform.tsv" --matrix "$JOINT/$P.joint_matrix.uniform.csv.gz" 2> "$JOINT/joint.uniform.log"
 
 # python: the tprt kit's venv if it exists, else the system python3 (the report script is stdlib-only)
