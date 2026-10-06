@@ -51,11 +51,13 @@ cargo --version
 
 cargo build --release --manifest-path rust/peartree-discovery/Cargo.toml
 cargo build --release --manifest-path rust/peartree-genotype/Cargo.toml
+cargo build --release --manifest-path rust/peartree-genotype2/Cargo.toml
 
 echo
 echo "built:"
 ls -la rust/peartree-discovery/target/release/peartree-discovery
 ls -la rust/peartree-genotype/target/release/peartree-genotype
+ls -la rust/peartree-genotype2/target/release/peartree-genotype2
 
 # Report which OPTIONAL, CONFIG-GATED features this binary actually implements. A stale binary
 # does not announce itself: config.rs tolerates unknown keys by design, so an old build fed a

@@ -63,6 +63,19 @@ patient's tree from `patients/*/<P>/*.tree` (`PATIENT_TREE` to override). `GENOT
 restores the old binaries. Standalone: `cluster/genotype_one.sh` / `submit_genotype.sh` honour
 the same variables (`COMBINED`, `GENOME_2BIT`, `GENOTYPE2_BIN`, `GENO2_CFG`).
 
+**Real-data comparison with the legacy genotyper** (`cluster/genotype2_farm_compare.sh <P>`): for a
+patient whose legacy run exists under the tprt_ab kit (`$TPRT_ROOT/<P>/C_rust/<P>` by default;
+`LEGACY_RUNDIR=` to point elsewhere) it genotypes the same staged BAMs against the same contract
+(picked from `insertions/` by the legacy files' locus count) and combined consensus as an LSF array
+`gt2_<P>`, then a chained `--evaluate` job runs the joint step (length and uniform branch prior)
+and `cluster/genotype2_compare.py` (standard library only): legacy call × v2 bucket cross-tab per
+(locus, colony), hard discordances with read counts, per-locus carrier counts against the joint
+step's hypothesis, legacy `tree_fit` labels against the joint step, and a trace of
+`patients/*/<P>/known_insertions.tsv`. A second report is written for every sibling legacy set
+`genotypes.*` (e.g. `genotypes.het30`). Output `$TPRT_ROOT/<P>/V2/report/report.md`, copied to
+`~/results/tprt_ab/<P>/genotype2_vs_legacy.md`. `--dry-run` resolves every input and prints the
+bsubs. `cluster/build.sh` builds this crate together with the other two.
+
 ## Validation
 
 `test/genotype2/bench.sh` runs legacy and v2 on the simulated truth sets (10-colony phylogeny
