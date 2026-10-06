@@ -254,6 +254,7 @@ def main():
     ann = {r["locus"]: r for r in read_tsv(a.annotation)}
     known = [k for k in read_tsv(a.known) if k.get("locus")]
     active = {r["id"]: r for r in read_tsv(os.path.join(a.rte_library, "active.tsv")) if r.get("id")}
+    td_sources = {r["id"]: r for r in read_tsv(os.path.join(a.rte_library, "transduction_sources.tsv")) if r.get("id")}
 
     # candidate set
     cand = collections.OrderedDict()
@@ -295,7 +296,8 @@ def main():
               "element_class", "element", "tprt_call", "tprt_score", "tsd_len", "tsd_seq", "polya_len",
               "left_polyA", "right_polyA", "en_motif", "structure", "element_identity", "nearest_active",
               "active_subfamily", "active_ta_status", "active_tier", "active_hotness", "active_n_daughters",
-              "active_locus_hg38", "covered_5p", "covered_3p", "rte_tags", "rte_detail",
+              "active_locus_hg38", "td3p_source", "td3p_source_band", "td3p_source_subfamily", "td3p_source_hotness",
+              "td3p_source_n_daughters", "td3p_source_hg38", "td3p_end_in_flank", "covered_5p", "covered_3p", "rte_tags", "rte_detail",
               "site_region", "site_gene", "site_strand", "conclusion",
               "L_n_reads", "L_n_fragments", "L_n_samples", "L_n_mates", "L_polya_len", "L_beyond_polya",
               "R_n_reads", "R_n_fragments", "R_n_samples", "R_n_mates", "R_polya_len", "R_beyond_polya",
@@ -355,6 +357,7 @@ def main():
                      clean(an.get("en_motif", "")), clean(an.get("structure", "")),
                      num(clean(an.get("element_identity", ""))), clean(an.get("nearest_active", "")),
                      *active_cols(active.get(an.get("nearest_active", ""), {})),
+                     *td_cols(an, td_sources),
                      num(clean(an.get("covered_5p", ""))), num(clean(an.get("covered_3p", ""))),
                      clean(an.get("tags", "")), clean(an.get("rte_detail", "")),
                      clean(an.get("site_region", "")), clean(an.get("site_gene", "")), clean(an.get("site_strand", "")),
@@ -362,7 +365,7 @@ def main():
     rank = {"A": 0, "B": 1, "C": 2, "D": 3}
     rows.sort(key=lambda r: (rank[r[0]], -(r[11] or 0), -(fnum(r[29], 0)), r[1]))
     widths = [5, 28, 7, 11, 11, 18, 10, 7, 30, 10, 16, 6, 40, 9, 9, 9, 50, 9, 9, 9,
-              18, 16, 30, 18, 16, 30, 18, 18, 12, 8, 7, 14, 8, 6, 6, 9, 14, 9, 14, 9, 7, 16, 12, 8, 30, 8, 8, 20, 60, 14, 14, 6, 60,
+              18, 16, 30, 18, 16, 30, 18, 18, 12, 8, 7, 14, 8, 6, 6, 9, 14, 9, 14, 9, 7, 16, 12, 8, 30, 20, 18, 18, 10, 8, 30, 9, 8, 8, 20, 60, 14, 14, 6, 60,
               7, 7, 7, 7, 7, 9, 7, 7, 7, 7, 7, 9, 30, 60, 60, 50, 50]
 
     tier_n = collections.Counter(r[0] for r in rows)
@@ -397,6 +400,9 @@ def main():
               ["active_tier / hotness / n_daughters", "hot_source = published source element (hotness strong/hot/active from its "
                                                       "daughter count); L1HS_Ta_intact / L1HS_preTa_intact = intact young L1HS without "
                                                       "(candidate / none_reported) or with reported activity"],
+              ["td3p_source ...", "3' transduction (TD3P / ORPHAN_TD): the source L1 (resources/rte_library/transduction_sources.tsv), "
+                                  "its band, subfamily, hotness and published daughters, hg38 position, and how far into its 3' flank "
+                                  "the transduced sequence reaches (td3p_end_in_flank, bp)"],
               ["covered_5p / covered_3p", "element consensus coordinates the assembled insert covers (5' truncation point / 3' end)"],
               ["L_/R_ n_reads ... beyond_polya", "combine evidence per insertion end (L = left junction, R = right): reads, "
                                                  "distinct fragments, colonies, mates, median poly-A length, sequence beyond the poly-A"],
@@ -434,6 +440,21 @@ def active_cols(r):
     loc = f"{r.get('hg38_chrom', '')}:{r.get('hg38_start', '')}-{r.get('hg38_end', '')}({r.get('strand', '')})"
     return [r.get("subfamily", ""), r.get("ta_status", ""), r.get("tier", ""), r.get("hotness", ""),
             num_or(r.get("n_daughters", "")), loc]
+
+
+def td_cols(an, td_sources):
+    """3' transduction source (tag TD3P_SOURCE=<id>) described from transduction_sources.tsv, and how far
+    into its 3' flank the transduced sequence reaches (rte_detail td_end)"""
+    tags = (an.get("tags") or "").split(",")
+    sid = next((t.split("=", 1)[1] for t in tags if t.startswith("TD3P_SOURCE=")), "")
+    m = re.search(r"(?:^|;)td_end=([^;]+)", an.get("rte_detail") or "")
+    td_end = num_or(m.group(1)) if m else ""
+    r = td_sources.get(sid, {})
+    if not sid:
+        return ["", "", "", "", "", "", td_end]
+    loc = f"{r.get('hg38_chrom', '')}:{r.get('hg38_start', '')}-{r.get('hg38_end', '')}({r.get('strand', '')})" if r else ""
+    return [sid, r.get("band_published") or r.get("band", ""), r.get("subfamily", ""), r.get("hotness", ""),
+            num_or(r.get("n_daughters", "")), loc, td_end]
 
 
 def side_cols(loc, evid, cons, reads_by):
