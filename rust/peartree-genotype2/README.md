@@ -110,10 +110,12 @@ uncorrected model exactly.
   `n_alt`/`n_ref`: autosomal, pooled alt fraction 0.2-0.8, ≥ 10 votes, ≥ max(2, C/2) colonies with
   ≥ 3 votes and every one of them with an alt vote, no colony with ≥ 8 votes and 0 alt):
   global `b = (Σalt + ½)/(Σref + ½)`; per kind the same, shrunk to the global value with 200
-  pseudo-votes, and the global value for a kind with < 5 candidate loci or whose candidate reads are
+  pseudo-votes and then on the log scale with weight `n_loci/(n_loci + 100)` (the bias is a locus
+  property: PD37590's 17 L1-mediated deletions carried 25k votes at raw b 0.45, which unshrunk turned
+  3/37-alt background cells into ~75 private calls), and the global value for a kind with < 5 candidate loci or whose candidate reads are
   > 50 % uninformative (far duplications: the reference-junction reads score ln ½ by construction, so
   their 2-3 votes do not describe the likelihood -- they never get a spurious ~0.6 of their own);
-  per colony a factor `(Σalt + 200)/(Σ b_kind·ref + 200)` over the kind-estimated candidates. Each
+  per colony a factor `(Σalt + 200)/(Σ raw_kind·ref + 200)` (against the kind's own vote ratio, so it does not re-absorb the shrinkage) over the kind-estimated candidates. Each
   cell's het likelihood is the profile linearly interpolated at `b_kind × factor` (clamped to the
   grid); absent, hom and the NOISE profile are untouched. `--ref-bias <b>` plugs one fixed value.
   The estimates go to stderr and to `<out stem>.refbias.tsv` (`P.joint.tsv` → `P.joint.refbias.tsv`:

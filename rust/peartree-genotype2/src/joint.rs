@@ -557,6 +557,11 @@ const BIAS_MIN_CANDIDATES: usize = 5;
 const BIAS_MIN_KIND_LOCI: usize = 5;
 /// Pseudo-votes (split at the global alt fraction) that shrink a kind's estimate to the global one.
 const BIAS_KIND_PSEUDO_VOTES: f64 = 200.0;
+/// Pseudo-LOCI shrinking a kind's estimate to the global one on the log scale:
+/// w = n_loci / (n_loci + this). Votes alone never shrink a deep kind (PD37590: 17 L1-mediated
+/// deletions carry 25k votes, raw b 0.45), yet the bias is a locus property and 17 loci do not
+/// pin it down -- the unshrunk 0.45 turned 3/37-alt background cells into private calls.
+const BIAS_KIND_PSEUDO_LOCI: f64 = 100.0;
 /// A kind whose candidate reads are mostly uninformative (far duplications: the reference-junction
 /// reads score ln ½ by construction) keeps the global bias: its few votes do not describe the
 /// likelihood, which is dominated by reads the vote odds never see.
@@ -695,7 +700,9 @@ fn estimate_ref_bias(mode: RefBias, loci: &[String], kinds: &[String], votes: &[
         } else if uninf_frac > BIAS_MAX_UNINF_FRAC {
             (g, "global (uninformative-dominated)")
         } else {
-            ((a as f64 + sa) / (r as f64 + sr), "kind (shrunk)")
+            let bv = (a as f64 + sa) / (r as f64 + sr);
+            let w = n as f64 / (n as f64 + BIAS_KIND_PSEUDO_LOCI);
+            ((w * bv.ln() + (1.0 - w) * g.ln()).exp(), "kind (shrunk)")
         };
         est.kinds.push(KindBias { kind: k, n_loci: n, alt: a, rf: r, uninf: u, raw, b, source });
     }
@@ -708,7 +715,9 @@ fn estimate_ref_bias(mode: RefBias, loci: &[String], kinds: &[String], votes: &[
         if !est.kinds.iter().any(|k| k.kind == kinds[i] && k.source == "kind (shrunk)") {
             continue;
         }
-        let kb = est.kind_b(&kinds[i]);
+        // against the kind's own vote ratio, not its locus-shrunk b: the colony factor measures how
+        // a colony departs from the kinds' pooled behaviour, it must not re-absorb the shrinkage
+        let kb = est.kinds.iter().find(|k| k.kind == kinds[i]).map(|k| k.raw).unwrap_or(est.global);
         for (c, v) in votes[i].iter().enumerate() {
             if let Some((a, r, _)) = v {
                 num[c] += *a as f64;
@@ -1605,7 +1614,11 @@ mod tests {
         let get = |k: &str| est.kinds.iter().find(|x| x.kind == k).unwrap().clone();
         let tsd = get("TSD");
         assert_eq!((tsd.n_loci, tsd.source), (40, "kind (shrunk)"));
-        assert!((tsd.raw - 0.6).abs() < 0.01 && (tsd.b - 0.6).abs() < 0.02, "{tsd:?}");
+        assert!((tsd.raw - 0.6).abs() < 0.01, "{tsd:?}");
+        // 40 loci: w = 40/140 on the log scale, so b sits between the kind's 0.6 and the global value
+        let w = 40.0 / (40.0 + BIAS_KIND_PSEUDO_LOCI);
+        let want = (w * 0.6f64.ln() + (1.0 - w) * est.global.ln()).exp();
+        assert!((tsd.b - want).abs() < 0.01, "{tsd:?} want {want}");
         let blunt = get("BLUNT");
         assert!((blunt.b - 0.9).abs() < 0.04 && blunt.b < blunt.raw + 1e-9 || blunt.b <= 0.9, "{blunt:?}");
         let dup = get("L1_MED_DUPLICATION");
