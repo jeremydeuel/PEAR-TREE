@@ -1142,6 +1142,7 @@ class VariantAnnotationContainer:
         ev_path = ev_path(self.sample) if callable(ev_path) else ev_path
         rd_path = rd_path(self.sample) if callable(rd_path) else rd_path
         ann = RteAnnotator(cfg, gene_model=Insertion.gene_model)
+        self.rte_lib = ann.lib
         ann.load_evidence(ev_path, rd_path, wanted=set(self.insertions))
         inputs = {k: InsertionInput.from_legacy(ins, self.element_class(ins.conclusion()))
                   for k, ins in self.insertions.items()}
@@ -1650,6 +1651,29 @@ class VariantAnnotationContainer:
             return 'unknown'
         return 'RTE_other'   # a mapped/dfam RTE that is none of the big three (HERV/LTR, MIR, ...)
 
+    _TEMPLATED_SOURCE = re.compile(r"templated/complex insertion \(source ([^:\s()]+):(\d+)\)")
+
+    def locus_class(self, key, concl):
+        """(class, conclusion) for the table: element_class() of the legacy conclusion, overridden
+        by a confident tools/rte verdict when the legacy class is only a fallback (unknown /
+        artefact / templated_insertion) -- precedence documented in tools/rte/locus_class.py.
+        Without tools/rte (no rte_library) this is exactly element_class() + the conclusion."""
+        cls = self.element_class(concl)
+        rte = getattr(self, 'rte_records', None) or {}
+        if not rte:
+            return cls, concl
+        try:
+            from tools.rte.locus_class import locus_class
+        except ImportError:                       # run as `python tools/annotate_v2.py`
+            from rte.locus_class import locus_class
+        m = self._TEMPLATED_SOURCE.search(concl)
+        tsrc = (m.group(1), int(m.group(2))) if m else None
+        new, note = locus_class(cls, rte.get(key), getattr(self, 'rte_lib', None), tsrc,
+                                CONFIG['annotate'].get('rte_remap_assembly', 'hs1'))
+        if new != cls and note:
+            concl = f"{concl}; RTE: {note}"
+        return new, concl
+
     def write_table(self, path: str):
         """Flat, machine-readable annotation table: one row per called locus. Complements
         print() (the verbose per-junction report). Gzipped when `path` ends in .gz."""
@@ -1666,14 +1690,14 @@ class VariantAnnotationContainer:
         with opener(path, 'wt') as fh:
             fh.write('\t'.join(cols) + '\n')
             for key, ins in self.insertions.items():
-                concl = ins.conclusion()
+                cls, concl = self.locus_class(key, ins.conclusion())
                 ld = ','.join(sorted({m.model for m in ins.left_dfams})) or '.'
                 rd = ','.join(sorted({m.model for m in ins.right_dfams})) or '.'
                 lm = (','.join(sorted({p for p, _, _, _ in ins.left_maps})) or '.')[:80]
                 rm = (','.join(sorted({p for p, _, _, _ in ins.right_maps})) or '.')[:80]
                 site = ins.site()
                 sregion, sgene, sstrand = (site[0], site[1], site[2]) if site else ('.', '.', '.')
-                row = [key, self.element_class(concl), concl.replace('\t', ' ').replace('\n', ' '),
+                row = [key, cls, concl.replace('\t', ' ').replace('\n', ' '),
                        str(ins.nins), str(ins.nwt), str(ins.nart),
                        'Y' if ins.has_left_polyA() else 'N',
                        'Y' if ins.has_right_polyA() else 'N',

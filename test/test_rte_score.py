@@ -193,6 +193,10 @@ def test_annotate_v2_one_sided_records_and_rte_columns():
     assert ra["element"] == "L1" and ra["structure"] == "TRUNCATED_5P" and ra["tsd_len"] == "15"
     assert rb["element"] == "ALU" and rb["tsd_len"] == "12" and rb["tprt_call"] == "TPRT"
     assert by["chrC:polyA_5-900"]["element"] in ("POLYA_ONLY", "UNKNOWN")
+    # no Dfam/remap ran, so the legacy class is a fallback: the confident RTE verdict decides
+    # the class and is appended to the conclusion (tools/rte/locus_class.py)
+    assert ra["class"] == "LINE1" and "; RTE: L1HS, 5'-truncated" in ra["conclusion"]
+    assert rb["class"] == "ALU" and "; RTE: " in rb["conclusion"]
     # legacy columns untouched; without rte_library no extra columns
     vac.rte_records = {}
     vac.write_table(out)
