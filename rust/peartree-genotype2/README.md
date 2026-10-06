@@ -55,6 +55,12 @@ log10 Bayes factor, per-colony P(carrier)) and the numeric P(carrier) matrix tha
 `tools/annotate_v2.py` reads (carrier at P ≥ 0.9). Tree tips without a genotype file are
 missing data.
 
+Python consumers read both formats through `tools/genotype2_io.py` (auto-detection, the
+0.9 / 0.8 / 0.1 thresholds in one place): `tools/phylo/tree_fit.py`, `tools/annotate_v2.py`,
+`cluster/tprt/compare_arms.py` / `check_known.py`, `test/e2e/score_genotypes.py`. Where
+`<P>.joint.tsv` sits beside the matrix they add `joint_*` columns. `src/combine_genotypes.py`
+refuses numeric files (the joint step replaces it).
+
 ## Cluster
 
 `cluster/pipeline.sh` uses it by default (`GENOTYPE_IMPL=v2`): phase 3 runs it per colony with
@@ -73,7 +79,9 @@ and `cluster/genotype2_compare.py` (standard library only): legacy call × v2 bu
 step's hypothesis, legacy `tree_fit` labels against the joint step, and a trace of
 `patients/*/<P>/known_insertions.tsv`. A second report is written for every sibling legacy set
 `genotypes.*` (e.g. `genotypes.het30`). Output `$TPRT_ROOT/<P>/V2/report/report.md`, copied to
-`~/results/tprt_ab/<P>/genotype2_vs_legacy.md`. `--dry-run` resolves every input and prints the
+`~/results/tprt_ab/<P>/genotype2_vs_legacy.md`. When the python has pandas/scipy it also runs
+`tools/phylo/tree_fit.py` on the v2 files (`$TPRT_ROOT/<P>/V2/fit/`), whose `summary.md` ends with a
+tree_fit-class × joint-class table: the independent Python check of the Rust joint step. `--dry-run` resolves every input and prints the
 bsubs. `cluster/build.sh` builds this crate together with the other two.
 
 ## Validation

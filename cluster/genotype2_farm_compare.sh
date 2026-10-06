@@ -22,7 +22,8 @@
 #
 # Jobs:  gt2_<P>[1-N]%THROTTLE   genotype_one.sh (GENOTYPE_IMPL=v2; skip-if-exists, atomic)
 #        gt2_<P>_eval            ended(array) -> this script --evaluate: joint step (length + uniform branch
-#                                prior), cluster/genotype2_compare.py -> $V2_ROOT/report/report.md
+#                                prior), cluster/genotype2_compare.py -> $V2_ROOT/report/report.md,
+#                                tools/phylo/tree_fit.py cross-check -> $V2_ROOT/fit/summary.md (needs pandas/scipy)
 # =============================================================================
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -215,4 +216,23 @@ cp -f "$REPORT/report.md" "$RESULTS_BASE/$P/genotype2_vs_legacy.md"
 [ -s "$REPORT/known.tsv" ] && cp -f "$REPORT/known.tsv" "$RESULTS_BASE/$P/genotype2_known.tsv"
 cp -f "$JOINT/$P.joint.tsv" "$RESULTS_BASE/$P/" 2>/dev/null || true
 note "copied to $RESULTS_BASE/$P/genotype2_vs_legacy.md"
+
+# independent Python cross-check of the Rust joint step: tools/phylo/tree_fit.py (the read-vote model)
+# on the v2 per-colony files + the numeric matrix; it joins <P>.joint.tsv beside the matrix and writes a
+# tree_fit class x joint class table into summary.md. Needs pandas/scipy (the tprt kit venv has them).
+FIT="$V2_ROOT/fit"
+if "$PY" -c 'import pandas, scipy' 2>/dev/null; then
+    note "tree_fit cross-check -> $FIT"
+    rm -rf "$FIT"; mkdir -p "$FIT"
+    if (cd "$PT_ROOT" && "$PY" tools/phylo/tree_fit.py --genotypes "$JOINT/$P.joint_matrix.csv.gz" \
+            --genotype-dir "$OUTDIR" --tree "$TREE" --out "$FIT") > "$V2_ROOT/tree_fit.log" 2>&1; then
+        cp -f "$FIT/summary.md" "$RESULTS_BASE/$P/genotype2_tree_fit_summary.md" 2>/dev/null || true
+        sed -n '/^## Cross-check/,/^How to read/p' "$FIT/summary.md" >&2 || true
+    else
+        note "tree_fit FAILED (see $V2_ROOT/tree_fit.log) -- the report above stands without it"
+        tail -5 "$V2_ROOT/tree_fit.log" >&2 || true
+    fi
+else
+    note "$PY lacks pandas/scipy: tree_fit cross-check skipped (PY=<python with pandas+scipy> to enable)"
+fi
 sed -n '1,/^## Per locus/p' "$REPORT/report.md"
