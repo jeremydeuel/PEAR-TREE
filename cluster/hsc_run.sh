@@ -13,7 +13,7 @@
 #
 # Usage (head node, from anywhere):
 #   bash <checkout>/cluster/hsc_run.sh setup              # build binaries, venv link, src/config.py
-#   bash <checkout>/cluster/hsc_run.sh populate <P>       # bsub: fill patients/*/<P>/colonies.tsv
+#   bash <checkout>/cluster/hsc_run.sh populate <P>       # fill patients/*/<P>/colonies.tsv (BAM headers, runs on the head node)
 #   bash <checkout>/cluster/hsc_run.sh submit <P>         # samples.tsv + the whole pipeline
 #   bash <checkout>/cluster/hsc_run.sh status <P>
 #
@@ -73,9 +73,12 @@ sys.path.insert(0, 'cluster/tprt'); import arm_config; print(arm_config.describe
 cmd_populate() {
     local P="${1:?usage: hsc_run.sh populate <PATIENT_ID>}" d org
     d="$(patient_dir "$P")"; org="$(basename "$(dirname "$d")")"
-    mkdir -p "$PT_ROOT/logs"
+    # runs HERE, not under bsub: header reads only (cheap), and compute nodes may not mount
+    # nst_links (PD51635: node-13-14 "nst_links not visible", job exit 1 in 0 s)
+    local nst="${NST:-/nfs/cancer_ref01/nst_links/live}"
+    [ -d "$nst" ] || die "nst_links not visible on $(hostname): $nst — run populate on a head node"
     cd "$PT_ROOT"
-    ONLY="$org" bsub -K < cluster/populate_colonies_tsv.sh
+    ONLY="$org" PAR="${PAR:-4}" bash cluster/populate_colonies_tsv.sh
     grep -v '^#' "$d/colonies.tsv" | awk -F'\t' 'NR>1 {n++; a[$6]++} END {printf "%d BAMs:", n; for (k in a) printf " %s=%d", k, a[k]; print ""}'
 }
 
