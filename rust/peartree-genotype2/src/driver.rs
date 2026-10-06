@@ -19,7 +19,7 @@ use crate::config::Config;
 use crate::contract::ContractSides;
 use crate::read::{decode_light_into, name, qual_into, seq_into, LightRec};
 use crate::source::{io_counters, is_cram, open_source_buffered, AnyRecord, RegionSource};
-use crate::types::{Locus, LocusModel, ReadInput, ReadObs, Status, OUTPUT_HEADER};
+use crate::types::{output_header, Locus, LocusModel, ReadInput, ReadObs, Status};
 use crate::{haplotype, model, output, readlik, refseq};
 
 use noodles_core::{Position, Region};
@@ -79,7 +79,7 @@ pub fn run<W: Write>(
         cfg.io_fill_bytes >> 10
     );
 
-    writer.write_all(OUTPUT_HEADER.as_bytes())?;
+    writer.write_all(output_header(&cfg.noise_frac_grid).as_bytes())?;
     let t_geno = Instant::now();
     let io0 = io_counters();
 
@@ -311,7 +311,7 @@ fn process_chunk(
 fn genotype_locus(src: &mut dyn RegionSource, header: &Header, m: &LocusModel, cfg: &Config) -> (String, LocusStats) {
     let name = m.locus.name.as_str();
     if m.error.is_some() {
-        return (output::format_simple_row(name, m.kind, Status::Error, 0), LocusStats::default());
+        return (output::format_simple_row(name, m.kind, Status::Error, 0, cfg.noise_frac_grid.len()), LocusStats::default());
     }
     let collected = catch_unwind(AssertUnwindSafe(|| -> io::Result<Outcome> {
         let contig = contig_index(header, &m.locus.chr).ok_or_else(|| {
@@ -322,22 +322,22 @@ fn genotype_locus(src: &mut dyn RegionSource, header: &Header, m: &LocusModel, c
     }));
     let (coverage, obs, n_disc, stats) = match collected {
         Ok(Ok(Outcome::HighCoverage)) => {
-            let row = output::format_simple_row(name, m.kind, Status::HighCoverage, cfg.reads_for_high_coverage + 1);
+            let row = output::format_simple_row(name, m.kind, Status::HighCoverage, cfg.reads_for_high_coverage + 1, cfg.noise_frac_grid.len());
             return (row, LocusStats::default());
         }
         Ok(Ok(Outcome::Collected { coverage, obs, n_disc, stats })) => (coverage, obs, n_disc, stats),
         Ok(Err(e)) => {
             eprintln!("genotyping failed for {name}: {e}");
-            return (output::format_simple_row(name, m.kind, Status::Error, 0), LocusStats::default());
+            return (output::format_simple_row(name, m.kind, Status::Error, 0, cfg.noise_frac_grid.len()), LocusStats::default());
         }
         Err(_) => {
             eprintln!("genotyping failed for {name}: panic while collecting / scoring reads");
-            return (output::format_simple_row(name, m.kind, Status::Error, 0), LocusStats::default());
+            return (output::format_simple_row(name, m.kind, Status::Error, 0, cfg.noise_frac_grid.len()), LocusStats::default());
         }
     };
     let row = match catch_unwind(AssertUnwindSafe(|| {
         if obs.is_empty() && n_disc == 0 {
-            return output::format_simple_row(name, m.kind, Status::NoReads, coverage);
+            return output::format_simple_row(name, m.kind, Status::NoReads, coverage, cfg.noise_frac_grid.len());
         }
         let call = model::call_locus(&obs, n_disc, cfg);
         output::format_row(name, m.kind, &call, coverage, n_disc)
@@ -345,7 +345,7 @@ fn genotype_locus(src: &mut dyn RegionSource, header: &Header, m: &LocusModel, c
         Ok(row) => row,
         Err(_) => {
             eprintln!("genotyping failed for {name}: panic in the genotype model");
-            output::format_simple_row(name, m.kind, Status::Error, coverage)
+            output::format_simple_row(name, m.kind, Status::Error, coverage, cfg.noise_frac_grid.len())
         }
     };
     (row, stats)

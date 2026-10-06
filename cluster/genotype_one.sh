@@ -73,7 +73,7 @@ if [ "$IMPL" = v2 ]; then
     [ -s "$COMBINED" ] || { echo "[$IDX] $ID: combined consensus missing: $COMBINED" >&2; exit 1; }
     [ -s "$GENOME_2BIT" ] || { echo "[$IDX] $ID: reference missing: $GENOME_2BIT" >&2; exit 1; }
     "$BIN2" --step genotype --bam "$BAM" --insertions "$CONTRACT" --combined "$COMBINED" \
-        --reference "$GENOME_2BIT" --out "$TMP" --threads 1 --config "$CFG2"
+        --reference "$GENOME_2BIT" --out "$TMP" --threads "${GENO2_THREADS:-1}" --config "$CFG2"
 else
     "$BIN" --step genotype --bam "$BAM" --insertions "$CONTRACT" \
         --out "$TMP" --threads 1 --config "$CFG"

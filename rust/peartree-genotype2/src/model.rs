@@ -87,6 +87,8 @@ struct Fit {
     pl: [i32; 3],
     gq: i32,
     best: usize,
+    /// Phred profile over `cfg.noise_frac_grid`, relative to the best dosage (may be negative)
+    pl_frac: Vec<i32>,
 }
 
 fn fit(d: &[f64], n_disc: i64, cfg: &Config) -> Fit {
@@ -102,6 +104,12 @@ fn fit(d: &[f64], n_disc: i64, cfg: &Config) -> Fit {
         *slot = logmeanexp(&per_p);
     }
     let max_gl = gl.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+    // shared-fraction profile: the reads at alt fraction φ directly (no purity: φ IS the fraction)
+    let pl_frac: Vec<i32> = cfg
+        .noise_frac_grid
+        .iter()
+        .map(|&f| (-PHRED_PER_NAT * (sum_ll(d, n_disc, d_pseudo, f) - max_gl)).round().clamp(-9999.0, 9999.0) as i32)
+        .collect();
     let mut pl = [0i32; 3];
     for g in 0..3 {
         // `as i32` saturates (and maps NaN to 0)
@@ -132,7 +140,7 @@ fn fit(d: &[f64], n_disc: i64, cfg: &Config) -> Fit {
     // 1 - post_best as the sum of the others: no cancellation when post_best -> 1
     let rest: f64 = (0..3).filter(|&g| g != best).map(|g| post[g]).sum();
     let gq = if rest <= 0.0 { 99 } else { (-10.0 * rest.log10()).round().clamp(0.0, 99.0) as i32 };
-    Fit { post, pl, gq, best }
+    Fit { post, pl, gq, best, pl_frac }
 }
 
 /// MLE of φ on the 0..1 grid (step 1/VAF_STEPS) over the real reads; 0.0 without reads.
@@ -212,6 +220,7 @@ pub fn call_locus(obs: &[ReadObs], n_disc: i64, cfg: &Config) -> Call {
             pl: [0, 0, 0],
             gq: 0,
             score_alt, score_ref,
+            pl_frac: vec![0; cfg.noise_frac_grid.len()],
         };
     }
     let f = fit(&d, n_disc, cfg);
@@ -222,6 +231,7 @@ pub fn call_locus(obs: &[ReadObs], n_disc: i64, cfg: &Config) -> Call {
         pl: f.pl,
         gq: f.gq,
         score_alt, score_ref,
+        pl_frac: f.pl_frac,
     }
 }
 

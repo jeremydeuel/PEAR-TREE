@@ -22,6 +22,12 @@
 //! locus to INDEP. So per colony `P(d_c | present) = (1-ε₁) P1 + ε₁ P0` (`dropout`, default 0.02)
 //! and `P(d_c | absent) = (1-ε₀) P0 + ε₀ P1` (`false_present`, default 0: a single strongly
 //! present colony at an otherwise absent locus is a private event, not an error, unless asked).
+//! NOISE with a shared background: when the per-colony files carry the profile columns
+//! `pl_f<‰>` (one alt fraction φ shared by every colony, `cfg.noise_frac_grid`), NOISE is the
+//! mean over {absent everywhere, each φ of the grid} of Π_c P(d_c | φ): mismapped paralogous
+//! reads or slippage give every colony the same low alt fraction, which three-genotype PLs
+//! cannot express (PD37590: 65 of 88 "clade" calls were such loci for tree_fit's noise class).
+//! Files without the columns fall back to NOISE = absent everywhere.
 //! `log10_bf_tree = log10(Σ_b prior_b L_b / mean(L_indep, L_noise))`. The posterior over ALL
 //! hypotheses uses model weights ½ (tree) / ¼ (INDEP) / ¼ (NOISE), so the posterior odds of
 //! "a tree event" vs "not" equal the BF. Per colony
@@ -131,6 +137,9 @@ struct Row {
     kind: String,
     /// [pl_absent, pl_het, pl_hom] of a `status == ok` row with numeric PLs; None = no data
     pl: Option<[f64; 3]>,
+    /// `pl_f<‰>` profile (same Phred scale as `pl`), one per `ColonyTable::fracs`; empty when
+    /// the file has no profile columns or the row has no data
+    pl_frac: Vec<f64>,
 }
 
 #[derive(Debug)]
@@ -139,6 +148,8 @@ struct ColonyTable {
     order: Vec<String>,
     /// `status == ok` rows whose PL columns were not numbers (treated as missing)
     n_bad_pl: usize,
+    /// shared alt fractions of the `pl_f<‰>` columns, in column order (empty: no profile)
+    fracs: Vec<f64>,
 }
 
 /// Colony id of a per-colony genotype file: basename minus `.gz`, `.txt|.tsv|.csv`, `.genotype(s)`.
@@ -192,8 +203,19 @@ fn read_colony_table_from(path: &str, input: Box<dyn BufRead>) -> io::Result<Col
     let (i_locus, i_status) = (find("locus").unwrap(), find("status").unwrap());
     let i_pl = [find("pl_absent").unwrap(), find("pl_het").unwrap(), find("pl_hom").unwrap()];
     let i_kind = find("kind");
+    // profile columns pl_f<per-mille>, in header order
+    let mut i_frac: Vec<usize> = Vec::new();
+    let mut fracs: Vec<f64> = Vec::new();
+    for (k, c) in cols.iter().enumerate() {
+        if let Some(d) = c.strip_prefix("pl_f") {
+            if let Ok(pm) = d.parse::<u32>() {
+                i_frac.push(k);
+                fracs.push(pm as f64 / 1000.0);
+            }
+        }
+    }
     let ok = Status::Ok.as_str();
-    let mut t = ColonyTable { rows: HashMap::new(), order: Vec::new(), n_bad_pl: 0 };
+    let mut t = ColonyTable { rows: HashMap::new(), order: Vec::new(), n_bad_pl: 0, fracs };
     for line in lines {
         let line = line?;
         let line = line.trim_end_matches(['\r', '\n']);
@@ -214,8 +236,14 @@ fn read_colony_table_from(path: &str, input: Box<dyn BufRead>) -> io::Result<Col
             None
         };
         let kind = i_kind.and_then(|k| f.get(k)).map(|s| s.trim().to_string()).unwrap_or_default();
+        let pl_frac: Vec<f64> = if pl.is_some() {
+            let v: Vec<f64> = i_frac.iter().filter_map(|&k| f.get(k).and_then(|x| x.trim().parse::<f64>().ok())).collect();
+            if v.len() == i_frac.len() && v.iter().all(|x| x.is_finite()) { v } else { Vec::new() }
+        } else {
+            Vec::new()
+        };
         t.order.push(name.to_string());
-        t.rows.insert(name.to_string(), Row { kind, pl });
+        t.rows.insert(name.to_string(), Row { kind, pl, pl_frac });
     }
     Ok(t)
 }
@@ -336,9 +364,10 @@ struct LocusScore {
     p_carrier: Vec<f64>,
 }
 
-/// Score one locus from per-colony `l1`/`l0` (missing cells 0 in both).
-/// ROOT = Σ l1 (every colony present), NOISE = Σ l0 (absent everywhere).
-fn score_locus(ctx: &Ctx, l1: &[f64], l0: &[f64]) -> LocusScore {
+/// Score one locus from per-colony `l1`/`l0` (missing cells 0 in both) and the shared-fraction
+/// profile `lf[k][c]` = log P(d_c | φ_k) (missing cells 0; `lf` empty = no profile).
+/// ROOT = Σ l1 (every colony present); NOISE = mean over {Σ l0, Σ_c lf[k][c] for each k}.
+fn score_locus(ctx: &Ctx, l1: &[f64], l0: &[f64], lf: &[Vec<f64>]) -> LocusScore {
     let nodes = &ctx.tree.nodes;
     let nb = nodes.len();
     let mut sum_d = vec![0.0; nb];
@@ -360,7 +389,13 @@ fn score_locus(ctx: &Ctx, l1: &[f64], l0: &[f64]) -> LocusScore {
     let log_tree = lse(j.iter().cloned());
     let best_tree = argmax(&j);
     let (li, lpres) = indep(l1, l0, &ctx.bl_full, &ctx.bl_v);
-    let ln = sum0;
+    let ln = if lf.is_empty() {
+        sum0
+    } else {
+        let mut terms: Vec<f64> = vec![sum0];
+        terms.extend(lf.iter().map(|row| row.iter().sum::<f64>()));
+        lse(terms.iter().cloned()) - (terms.len() as f64).ln()
+    };
     let bf = (log_tree - (lae(li, ln) - LN2)) / LN10;
     let z = lse([LN_W_TREE + log_tree, LN_W_ALT + li, LN_W_ALT + ln]);
     let cand = [(Best::Node(best_tree), LN_W_TREE + j[best_tree]), (Best::Indep, LN_W_ALT + li), (Best::Noise, LN_W_ALT + ln)];
@@ -600,14 +635,22 @@ pub fn run(args: &JointArgs) -> io::Result<()> {
         tables[tip_ix[colony_stem(f).as_str()]] = Some(t);
     }
     let has_file: Vec<bool> = tables.iter().map(|t| t.is_some()).collect();
+    // the shared-fraction grid must be the same in every file (empty = old format, no profile)
+    let fracs: Vec<f64> = tables.iter().flatten().next().map(|t| t.fracs.clone()).unwrap_or_default();
+    for (f, t) in args.genotype_files.iter().zip(tables.iter().filter_map(|t| t.as_ref())) {
+        if t.fracs != fracs {
+            return Err(bad(format!("joint: {f}: pl_f profile columns {:?} differ from the first file's {:?}", t.fracs, fracs)));
+        }
+    }
     let (l, c) = (loci.len(), tips.len());
     eprintln!(
-        "joint: {c} colonies, {l} loci, {} hypotheses on the tree; branch prior {}, root prior {}, dropout {}, false-present {}",
+        "joint: {c} colonies, {l} loci, {} hypotheses on the tree; branch prior {}, root prior {}, dropout {}, false-present {}; NOISE = {}",
         tree.nodes.len(),
         args.branch_prior,
         args.root_prior,
         args.dropout,
-        args.false_present
+        args.false_present,
+        if fracs.is_empty() { "absent everywhere (no pl_f profile columns)".to_string() } else { format!("absent everywhere or a shared alt fraction in {fracs:?}") }
     );
     let ctx = Ctx::new(&tree, &args.branch_prior, args.root_prior);
 
@@ -615,6 +658,8 @@ pub fn run(args: &JointArgs) -> io::Result<()> {
     let mut kinds = vec![String::new(); l];
     let mut scores = Vec::with_capacity(l);
     let (mut l1, mut l0) = (vec![0.0; c], vec![0.0; c]);
+    let mut lf: Vec<Vec<f64>> = vec![vec![0.0; c]; fracs.len()];
+    let s_phred = -LN10 / 10.0;
     for (i, name) in loci.iter().enumerate() {
         for col in 0..c {
             let row = tables[col].as_ref().and_then(|t| t.rows.get(name));
@@ -631,8 +676,16 @@ pub fn run(args: &JointArgs) -> io::Result<()> {
                 }
                 None => (0.0, 0.0),
             };
+            // profile: the pl_f values are on the pl scale (relative to the best dosage, whose pl is
+            // 0, so pl_cell's normalisation is the identity); a row without a profile is 0 under every φ
+            for k in 0..fracs.len() {
+                lf[k][col] = match row {
+                    Some(r) if r.pl.is_some() && r.pl_frac.len() == fracs.len() => s_phred * r.pl_frac[k],
+                    _ => 0.0,
+                };
+            }
         }
-        scores.push(score_locus(&ctx, &l1, &l0));
+        scores.push(score_locus(&ctx, &l1, &l0, &lf));
     }
 
     let (tsv, mat) = render(&ctx, &loci, &kinds, &scores, &usable, &has_file);
@@ -672,7 +725,7 @@ mod tests {
                 (l1[k], l0[k]) = pl_cell(*p);
             }
         }
-        score_locus(ctx, &l1, &l0)
+        score_locus(ctx, &l1, &l0, &[])
     }
 
     const HET: Option<[f64; 3]> = Some([200.0, 0.0, 150.0]);
@@ -790,17 +843,74 @@ mod tests {
         let mut l0 = vec![present.1; n];
         l1[3] = absent.0;
         l0[3] = absent.1;
-        let plain = score_locus(&ctx, &l1, &l0);
+        let plain = score_locus(&ctx, &l1, &l0, &[]);
         assert_eq!(plain.best, Best::Indep, "without an error term one dropout hands a germline locus to INDEP");
         let mixed: Vec<(f64, f64)> = (0..n).map(|c| with_errors(l1[c], l0[c], 0.02, 0.0)).collect();
         let l1m: Vec<f64> = mixed.iter().map(|x| x.0).collect();
         let l0m: Vec<f64> = mixed.iter().map(|x| x.1).collect();
-        let fixed = score_locus(&ctx, &l1m, &l0m);
+        let fixed = score_locus(&ctx, &l1m, &l0m, &[]);
         assert_eq!(fixed.best, Best::Node(0), "dropout 0.02 keeps it at ROOT");
         // ε = 0 is the identity; the mixture never exceeds the larger term
         assert_eq!(with_errors(-1.0, -5.0, 0.0, 0.0), (-1.0, -5.0));
         let (a, b) = with_errors(-9.0, -0.1, 0.02, 0.0);
         assert!(a > -9.0 && a < -0.1 && (b - -0.1).abs() < 1e-12);
+    }
+
+    #[test]
+    fn profile_columns_parsed_and_grid_checked() {
+        let text = "locus\tkind\tstatus\tpl_absent\tpl_het\tpl_hom\tpl_f020\tpl_f050\tpl_f200\n\
+                    chr1:1-13\tTSD\tok\t12\t0\t40\t-3\t5\t20\n\
+                    chr1:50-50\tTSD\tno_reads\t0\t0\t0\t0\t0\t0\n";
+        let t = read_colony_table_from("mem", Box::new(io::Cursor::new(text.as_bytes().to_vec()))).unwrap();
+        assert_eq!(t.fracs, vec![0.02, 0.05, 0.2]);
+        assert_eq!(t.rows["chr1:1-13"].pl_frac, vec![-3.0, 5.0, 20.0]);
+        assert!(t.rows["chr1:50-50"].pl_frac.is_empty());
+    }
+
+    #[test]
+    fn shared_fraction_noise_absorbs_a_diffuse_locus() {
+        // 16 tips; every colony shows a weak alt signal (PL: absent 4, het 0 -- a 2-of-30 read
+        // locus from mismapped reads), two sisters a little stronger. Without the profile the two
+        // sisters make a "clade"; with a shared φ = 0.05 explaining every colony, NOISE wins.
+        fn balanced(lo: usize, hi: usize) -> String {
+            if hi - lo == 1 {
+                return format!("T{lo}");
+            }
+            let mid = (lo + hi) / 2;
+            format!("({}:1,{}:1)", balanced(lo, mid), balanced(mid, hi))
+        }
+        let n = 16;
+        let tree = Tree::parse(&format!("{};", balanced(0, n))).unwrap();
+        let ctx = Ctx::new(&tree, "length", 0.1);
+        let s = -LN10 / 10.0;
+        // weak cells: PL [absent 4, het 0, hom 40], profile at φ=0.05 is the best fit (pl_f -6)
+        let weak = pl_cell([4.0, 0.0, 40.0]);
+        // the two sisters T0, T1: PL [absent 15, het 0, hom 30], φ=0.05 fits less well (pl_f 6)
+        let strong = pl_cell([15.0, 0.0, 30.0]);
+        let mut l1 = vec![weak.0; n];
+        let mut l0 = vec![weak.1; n];
+        let mut lf = vec![vec![s * -6.0; n]];
+        for c in 0..2 {
+            l1[c] = strong.0;
+            l0[c] = strong.1;
+            lf[0][c] = s * 6.0;
+        }
+        let plain = score_locus(&ctx, &l1, &l0, &[]);
+        assert!(matches!(plain.best, Best::Node(_)) || plain.best == Best::Indep, "{:?}", plain.best);
+        let with = score_locus(&ctx, &l1, &l0, &lf);
+        assert_eq!(with.best, Best::Noise, "a shared alt fraction explains the diffuse signal");
+        assert!(with.bf < plain.bf);
+        // a clean clade (two sisters het at GQ 99, everyone else absent at PL 60) is untouched by the
+        // profile: the shared φ fits the 14 clean absents far worse than "absent"
+        let het = pl_cell([99.0, 0.0, 60.0]);
+        let abs = pl_cell([0.0, 60.0, 120.0]);
+        let l1c: Vec<f64> = (0..n).map(|c| if c < 2 { het.0 } else { abs.0 }).collect();
+        let l0c: Vec<f64> = (0..n).map(|c| if c < 2 { het.1 } else { abs.1 }).collect();
+        let lfc = vec![(0..n).map(|c| if c < 2 { s * 60.0 } else { s * 20.0 }).collect::<Vec<f64>>()];
+        let a = score_locus(&ctx, &l1c, &l0c, &[]);
+        let b = score_locus(&ctx, &l1c, &l0c, &lfc);
+        assert_eq!(a.best, b.best);
+        assert!((a.bf - b.bf).abs() < 0.3, "{} vs {}", a.bf, b.bf);
     }
 
     #[test]
@@ -864,7 +974,8 @@ mod tests {
                     ok\t1\tx\tchr1:1-13\t2\tTSD\t\t3\n";
         let t = read_colony_table_from("mem", Box::new(io::Cursor::new(text.as_bytes().to_vec()))).unwrap();
         assert_eq!(t.order, vec!["chr1:1-13", "chr1:50-50", "chr1:90-60", "chr1:200-212"]);
-        assert_eq!(t.rows["chr1:1-13"], Row { kind: "TSD".into(), pl: Some([200.0, 0.0, 150.0]) }); // first wins
+        assert_eq!(t.rows["chr1:1-13"], Row { kind: "TSD".into(), pl: Some([200.0, 0.0, 150.0]), pl_frac: vec![] }); // first wins
+        assert!(t.fracs.is_empty());
         assert_eq!(t.rows["chr1:50-50"].pl, None);
         assert_eq!(t.rows["chr1:90-60"].kind, "L1_MED_DELETION");
         assert_eq!(t.rows["chr1:90-60"].pl, None);

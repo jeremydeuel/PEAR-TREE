@@ -40,6 +40,9 @@ pub struct Config {
     // ---- genotype model ----
     pub bg_alt_rate: f64,
     pub purity_grid: Vec<f64>,
+    /// shared alt-read fractions φ at which the per-locus log-likelihood profile `pl_f<‰>` is
+    /// reported (the joint step's NOISE hypothesis: one φ shared by every colony)
+    pub noise_frac_grid: Vec<f64>,
     pub prior: [f64; 3],
 
 }
@@ -76,6 +79,7 @@ impl Default for Config {
             min_explained_frac: 0.8,
             bg_alt_rate: 0.005,
             purity_grid: vec![1.0, 0.9, 0.8, 0.7],
+            noise_frac_grid: vec![0.01, 0.02, 0.05, 0.1, 0.2],
             prior: [1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0],
         }
     }
@@ -151,6 +155,7 @@ impl Config {
             "min_explained_frac" => self.min_explained_frac = num(val)?,
             "bg_alt_rate" => self.bg_alt_rate = num(val)?,
             "purity_grid" => self.purity_grid = list(val)?,
+            "noise_frac_grid" => self.noise_frac_grid = list(val)?,
             "prior" => {
                 let l = list(val)?;
                 if l.len() != 3 {
@@ -166,6 +171,9 @@ impl Config {
     fn validate(&self) -> Result<(), String> {
         if self.purity_grid.is_empty() || self.purity_grid.iter().any(|&p| !(p > 0.0 && p <= 1.0)) {
             return Err("purity_grid must be non-empty values in (0, 1]".into());
+        }
+        if self.noise_frac_grid.iter().any(|&p| !(p > 0.0 && p < 1.0)) {
+            return Err("noise_frac_grid values must be in (0, 1)".into());
         }
         if !(self.clip_prob > 0.0 && self.clip_prob < 1.0) {
             return Err("clip_prob must be in (0, 1)".into());

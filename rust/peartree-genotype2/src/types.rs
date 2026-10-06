@@ -250,6 +250,10 @@ pub struct Call {
     /// Phred-scaled evidence of the Alt reads (Σ 10·log10(e)·llr) and of the Ref reads
     pub score_alt: i64,
     pub score_ref: i64,
+    /// log-likelihood profile over `cfg.noise_frac_grid`: −10·log10 P(reads | shared alt fraction φ)
+    /// relative to the best genotype (same scale as `pl`; NEGATIVE when φ fits better than any
+    /// dosage). The joint step's NOISE hypothesis is built from these columns.
+    pub pl_frac: Vec<i32>,
 }
 
 /// Output header (gzip TSV, one row per locus). Numeric throughout; `status` is `ok`,
@@ -258,3 +262,20 @@ pub struct Call {
 /// `reads_for_high_coverage + 1` when the gate trips.
 pub const OUTPUT_HEADER: &str = "locus	kind	status	depth	n_alt	n_ref	n_uninf	n_art	n_disc	n_alt_l	n_alt_r	vaf	p_absent	p_het	p_hom	pl_absent	pl_het	pl_hom	gq	score_alt	score_ref
 ";
+
+/// Column name of the profile value at shared alt fraction `f`: `pl_f` + per-mille (`pl_f050` = 0.05).
+pub fn frac_col_name(f: f64) -> String {
+    format!("pl_f{:03}", (f * 1000.0).round() as i64)
+}
+
+/// `OUTPUT_HEADER` plus one `pl_f<‰>` column per value of the noise fraction grid (none for an
+/// empty grid, which gives the pre-profile format).
+pub fn output_header(noise_frac_grid: &[f64]) -> String {
+    let mut h = OUTPUT_HEADER.trim_end().to_string();
+    for &f in noise_frac_grid {
+        h.push('\t');
+        h.push_str(&frac_col_name(f));
+    }
+    h.push('\n');
+    h
+}

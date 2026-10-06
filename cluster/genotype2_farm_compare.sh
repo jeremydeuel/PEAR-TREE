@@ -19,6 +19,7 @@
 #   V2_ROOT        $TPRT_ROOT/<P>/V2             everything this script writes: bams.fofn genotypes/ logs/ joint/ report/
 #   THROTTLE 12  MEM 4000 (MB; the reservation is what keeps LSF from packing the array onto one node)
 #   QUEUE normal  EVAL_MEM 8000  RESULTS_BASE $HOME/results/tprt_ab (NFS copy of the report)
+#   GENO2_THREADS 1  threads per genotype task (bsub -n + --threads)
 #
 # Jobs:  gt2_<P>[1-N]%THROTTLE   genotype_one.sh (GENOTYPE_IMPL=v2; skip-if-exists, atomic)
 #        gt2_<P>_eval            ended(array) -> this script --evaluate: joint step (length + uniform branch
@@ -47,6 +48,7 @@ done
 [ -n "$P" ] || die "usage: genotype2_farm_compare.sh <PATIENT_ID> [--dry-run|--evaluate]"
 
 THROTTLE="${THROTTLE:-12}"; MEM="${MEM:-4000}"; QUEUE="${QUEUE:-normal}"; EVAL_MEM="${EVAL_MEM:-8000}"
+THREADS="${GENO2_THREADS:-1}"   # per-colony realignment is CPU-bound on the farm (~30 ms CPU/locus at 30x): -n THREADS + --threads
 BIN="${GENOTYPE2_BIN:-$PT_ROOT/rust/peartree-genotype2/target/release/peartree-genotype2}"
 CFG="${GENO2_CFG:-$PT_ROOT/cluster/config.genotype2.grch38}"
 GENOME_2BIT="${GENOME_2BIT:-$JD/hg38.2bit}"
@@ -128,7 +130,7 @@ build_fofn() {
 }
 
 ENV_PASS="LEGACY_RUNDIR='$LEGACY_RUNDIR' LEGACY_GT='$LEGACY_GT' CONTRACT='$CONTRACT' COMBINED='$COMBINED' GENOME_2BIT='$GENOME_2BIT' SAMPLES='$SAMPLES' V2_ROOT='$V2_ROOT' GENOTYPE2_BIN='$BIN' GENO2_CFG='$CFG' LEGACY_FIT='$LEGACY_FIT' LEGACY_CALLS='$LEGACY_CALLS' TPRT_ROOT='$TPRT_ROOT' STAGING_ROOT='$STAGING_ROOT' PATIENTS_DIR='$PATIENTS_DIR' RESULTS_BASE='$RESULTS_BASE'"
-GT_CMD="FOFN='$FOFN' OUTDIR='$OUTDIR' CONTRACT='$CONTRACT' COMBINED='$COMBINED' GENOME_2BIT='$GENOME_2BIT' GENOTYPE_IMPL=v2 GENOTYPE2_BIN='$BIN' GENO2_CFG='$CFG' bash '$PT_ROOT/cluster/genotype_one.sh' \$LSB_JOBINDEX"
+GT_CMD="FOFN='$FOFN' OUTDIR='$OUTDIR' CONTRACT='$CONTRACT' COMBINED='$COMBINED' GENOME_2BIT='$GENOME_2BIT' GENOTYPE_IMPL=v2 GENOTYPE2_BIN='$BIN' GENO2_CFG='$CFG' GENO2_THREADS='$THREADS' bash '$PT_ROOT/cluster/genotype_one.sh' \$LSB_JOBINDEX"
 EVAL_CMD="$ENV_PASS bash '$SELF' '$P' --evaluate"
 
 # --- submit / dry-run -------------------------------------------------------------------------

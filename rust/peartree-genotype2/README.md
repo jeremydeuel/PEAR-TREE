@@ -45,7 +45,11 @@ locus kind status depth n_alt n_ref n_uninf n_art n_disc n_alt_l n_alt_r vaf p_a
 
 `status` = `ok` / `no_reads` / `high_coverage` / `error` (non-ok rows have empty posteriors).
 `n_alt_l` / `n_alt_r` = alt reads per junction (the two-junction hallmark). `score_*` = Phred
-sums of per-read evidence. Rows are in processing (coordinate) order; consumers key by `locus`.
+sums of per-read evidence. Then one `pl_f<‰>` column per value of `noise_frac_grid` (default
+`pl_f010 pl_f020 pl_f050 pl_f100 pl_f200`): −10·log10 P(reads | alt fraction φ) on the PL scale
+(negative when φ fits better than every dosage), the per-locus profile the joint step's NOISE
+hypothesis is built from. Rows are in processing (coordinate) order; consumers key by `locus`
+and by column name (the readers are header-driven).
 
 ### Joint step
 
@@ -60,6 +64,10 @@ at a germline locus 1-3 of 44 colonies have 0-1 alt reads (their alt reads reali
 uninformative / unexplained) and a hard PL 20-50 "absent" per colony handed 1,364 all-carrier loci
 to INDEP; with ε₁ = 0.02 ROOT (or a clade) tolerates ~3 such colonies. ε₀ is off by default so a
 single strongly present colony stays a private event with its full Bayes factor.
+NOISE is "absent everywhere" or one alt fraction φ shared by every colony (mean over φ of the
+`pl_f` profile columns): the signature of mismapped paralogous reads or slippage, which tree_fit
+calls `noise` and which three-genotype PLs cannot express. PD37590 first run: 65 of 88 joint
+"clade" calls were such diffuse loci. Files without profile columns fall back to absent-everywhere.
 
 Python consumers read both formats through `tools/genotype2_io.py` (auto-detection, the
 0.9 / 0.8 / 0.1 thresholds in one place): `tools/phylo/tree_fit.py`, `tools/annotate_v2.py`,
