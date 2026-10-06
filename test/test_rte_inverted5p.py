@@ -127,7 +127,10 @@ def test_pd37590_chr20_inverted_5p(with_polya_clip):
     # the forward part was never sequenced: no inversion point, no twin-priming points
     assert r.detail["inv_junction"] == "unresolved"
     assert "fwd_start" not in r.detail and r.score_input.inv_p1 is None
-    assert r.polya_len >= 10              # from the clip read when the junction string lacks it
+    if with_polya_clip:
+        assert r.polya_len >= 10
+    else:                                 # tail only in the clip read: reported, not scored
+        assert r.polya_len == 0 and r.detail["polya_reads"] >= 10
 
 
 def _strip_clip(inp, ev, side):
