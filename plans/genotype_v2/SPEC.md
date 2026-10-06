@@ -154,7 +154,9 @@ STRINGS and are NOT fed by this file; the joint step below is the per-patient co
 ## Joint phylogenetic step (`newick.rs`, `joint.rs`, owner E)
 
 `--step joint --tree P.tree --genotype-dir DIR (or --genotypes f1 f2 …) --out P.joint.tsv
---matrix P.joint_matrix.csv.gz [--root-prior 0.1] [--branch-prior length|uniform]`
+--matrix P.joint_matrix.csv.gz [--root-prior 0.1] [--branch-prior length|uniform] [--dropout 0.02] [--false-present 0]`
+
+Per-colony genotype-error mixture (added after PD37590): `P(d_c|present) = (1-ε₁)P1 + ε₁P0`, `P(d_c|absent) = (1-ε₀)P0 + ε₀P1`; ε₁ = `--dropout` (default 0.02, colonies whose alt reads the realignment cannot place), ε₀ = `--false-present` (default 0). See README.
 
 Port of `tools/phylo/tree_fit.py` hypotheses, on the numeric per-colony files ONLY (no legacy
 reader): per colony c, `P(d_c | absent) = 10^(-pl_absent/10)`, `P(d_c | present) =

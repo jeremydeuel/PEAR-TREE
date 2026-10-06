@@ -16,6 +16,12 @@
 //! NOISE is approximated as "absent everywhere" (Σ l0): the PLs already integrate the
 //! background alt rate, so the shared per-locus alt fraction of tree_fit's NOISE cannot be
 //! refitted from them.
+//! Genotype-error terms (PD37590, 2026-10): a germline locus present in 41 of 44 colonies has 1-3
+//! colonies with 0-1 alt reads at depth 10-40 whose alt reads realign as uninformative /
+//! unexplained -- a hard "absent" (PL 20-50) that costs ROOT 2-5 log10 units each and hands the
+//! locus to INDEP. So per colony `P(d_c | present) = (1-ε₁) P1 + ε₁ P0` (`dropout`, default 0.02)
+//! and `P(d_c | absent) = (1-ε₀) P0 + ε₀ P1` (`false_present`, default 0: a single strongly
+//! present colony at an otherwise absent locus is a private event, not an error, unless asked).
 //! `log10_bf_tree = log10(Σ_b prior_b L_b / mean(L_indep, L_noise))`. The posterior over ALL
 //! hypotheses uses model weights ½ (tree) / ¼ (INDEP) / ¼ (NOISE), so the posterior odds of
 //! "a tree event" vs "not" equal the BF. Per colony
@@ -49,6 +55,10 @@ pub struct JointArgs {
     pub root_prior: f64,
     /// "length" | "uniform"
     pub branch_prior: String,
+    /// ε₁: P(a carrier colony looks absent) -- allelic dropout / alt reads the realignment cannot place
+    pub dropout: f64,
+    /// ε₀: P(a non-carrier colony looks present) -- contamination / mismapping; 0 = off
+    pub false_present: f64,
 }
 
 const LN10: f64 = std::f64::consts::LN_10;
@@ -390,6 +400,19 @@ fn pl_cell(pl: [f64; 3]) -> (f64, f64) {
     (lae(h, o) - LN2, r)
 }
 
+/// Mix the genotype-error terms into one colony's (log P(d|present), log P(d|absent)):
+/// present = (1-ε₁) P1 + ε₁ P0, absent = (1-ε₀) P0 + ε₀ P1. ε = 0 leaves the term unchanged.
+fn with_errors(l1: f64, l0: f64, dropout: f64, false_present: f64) -> (f64, f64) {
+    let mix = |keep: f64, other: f64, eps: f64| {
+        if eps <= 0.0 {
+            keep
+        } else {
+            lae((1.0 - eps).ln() + keep, eps.ln() + other)
+        }
+    };
+    (mix(l1, l0, dropout), mix(l0, l1, false_present))
+}
+
 // ------------------------------------------------------------------ output
 
 /// pandas to_csv quoting (QUOTE_MINIMAL) for a `;`-separated file.
@@ -519,6 +542,11 @@ pub fn run(args: &JointArgs) -> io::Result<()> {
     if !(0.0..1.0).contains(&args.root_prior) {
         return Err(bad(format!("--root-prior must be in [0, 1), got {}", args.root_prior)));
     }
+    for (name, v) in [("--dropout", args.dropout), ("--false-present", args.false_present)] {
+        if !(0.0..0.5).contains(&v) {
+            return Err(bad(format!("{name} must be in [0, 0.5), got {v}")));
+        }
+    }
     let tree = Tree::read(&args.tree).map_err(bad)?;
     let tips = &tree.tips;
 
@@ -574,10 +602,12 @@ pub fn run(args: &JointArgs) -> io::Result<()> {
     let has_file: Vec<bool> = tables.iter().map(|t| t.is_some()).collect();
     let (l, c) = (loci.len(), tips.len());
     eprintln!(
-        "joint: {c} colonies, {l} loci, {} hypotheses on the tree; branch prior {}, root prior {}",
+        "joint: {c} colonies, {l} loci, {} hypotheses on the tree; branch prior {}, root prior {}, dropout {}, false-present {}",
         tree.nodes.len(),
         args.branch_prior,
-        args.root_prior
+        args.root_prior,
+        args.dropout,
+        args.false_present
     );
     let ctx = Ctx::new(&tree, &args.branch_prior, args.root_prior);
 
@@ -596,7 +626,8 @@ pub fn run(args: &JointArgs) -> io::Result<()> {
             (l1[col], l0[col]) = match row.and_then(|r| r.pl) {
                 Some(pl) => {
                     usable[i * c + col] = true;
-                    pl_cell(pl)
+                    let (p1, p0) = pl_cell(pl);
+                    with_errors(p1, p0, args.dropout, args.false_present)
                 }
                 None => (0.0, 0.0),
             };
@@ -737,6 +768,42 @@ mod tests {
     }
 
     #[test]
+    fn error_terms_rescue_root_from_one_dropout() {
+        // 32 tips (balanced), germline locus: 31 colonies strongly present, one hard "absent"
+        // (PL 40). INDEP's ∫π^31(1-π) = 1/(32·33) is lenient, so without an error term the one
+        // dropout costs ROOT 4 log10 units and INDEP wins; at ε₁ = 0.02 it costs 1.7 and ROOT holds.
+        // (With 8 tips INDEP still wins at 0.02: the prior over colony counts is flatter there.)
+        fn balanced(lo: usize, hi: usize) -> String {
+            if hi - lo == 1 {
+                return format!("T{lo}");
+            }
+            let mid = (lo + hi) / 2;
+            format!("({}:1,{}:1)", balanced(lo, mid), balanced(mid, hi))
+        }
+        let n = 32;
+        let tree = Tree::parse(&format!("{};", balanced(0, n))).unwrap();
+        assert_eq!(tree.tips.len(), n);
+        let ctx = Ctx::new(&tree, "length", 0.1);
+        let present = pl_cell([60.0, 0.0, 30.0]);
+        let absent = pl_cell([0.0, 40.0, 80.0]);
+        let mut l1 = vec![present.0; n];
+        let mut l0 = vec![present.1; n];
+        l1[3] = absent.0;
+        l0[3] = absent.1;
+        let plain = score_locus(&ctx, &l1, &l0);
+        assert_eq!(plain.best, Best::Indep, "without an error term one dropout hands a germline locus to INDEP");
+        let mixed: Vec<(f64, f64)> = (0..n).map(|c| with_errors(l1[c], l0[c], 0.02, 0.0)).collect();
+        let l1m: Vec<f64> = mixed.iter().map(|x| x.0).collect();
+        let l0m: Vec<f64> = mixed.iter().map(|x| x.1).collect();
+        let fixed = score_locus(&ctx, &l1m, &l0m);
+        assert_eq!(fixed.best, Best::Node(0), "dropout 0.02 keeps it at ROOT");
+        // ε = 0 is the identity; the mixture never exceeds the larger term
+        assert_eq!(with_errors(-1.0, -5.0, 0.0, 0.0), (-1.0, -5.0));
+        let (a, b) = with_errors(-9.0, -0.1, 0.02, 0.0);
+        assert!(a > -9.0 && a < -0.1 && (b - -0.1).abs() < 1e-12);
+    }
+
+    #[test]
     fn indep_dp_equals_brute_force() {
         let cases: [([f64; 4], [f64; 4]); 3] = [
             ([-0.3, -5.0, -1.2, 0.0], [-2.0, -0.1, -0.7, 0.0]),
@@ -857,6 +924,8 @@ mod tests {
             out_matrix: out_mat.to_string_lossy().into_owned(),
             root_prior: 0.1,
             branch_prior: "length".into(),
+            dropout: 0.0,
+            false_present: 0.0,
         };
         run(&args).unwrap();
         let tsv = std::fs::read_to_string(&out_tsv).unwrap();

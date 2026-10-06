@@ -9,7 +9,8 @@ peartree-genotype2 --step genotype --bam <bam|cram> --insertions <P.genotyping[.
     [--threads N] [--config cluster/config.genotype2.grch38]
 peartree-genotype2 --step genotype_batch --manifest <input<TAB>output per line> --insertions .. --combined .. --reference ..
 peartree-genotype2 --step joint --tree <patient.tree> --genotypes genotypes/*.txt.gz \
-    --out <P.joint.tsv> --matrix <P.genotypes.csv.gz> [--root-prior 0.1] [--branch-prior length|uniform]
+    --out <P.joint.tsv> --matrix <P.genotypes.csv.gz> [--root-prior 0.1] [--branch-prior length|uniform] \
+    [--dropout 0.02] [--false-present 0]
 ```
 
 ## What it does
@@ -53,7 +54,12 @@ Port of `tools/phylo/tree_fit.py`: per locus, hypotheses ROOT (every colony), ea
 `P(d_c|absent) = 10^-pl_absent/10`. Writes a per-locus table (best hypothesis, carriers,
 log10 Bayes factor, per-colony P(carrier)) and the numeric P(carrier) matrix that
 `tools/annotate_v2.py` reads (carrier at P ≥ 0.9). Tree tips without a genotype file are
-missing data.
+missing data. Genotype-error terms: `P(d_c|present) = (1-ε₁) P1 + ε₁ P0` (`--dropout`, default
+0.02) and `P(d_c|absent) = (1-ε₀) P0 + ε₀ P1` (`--false-present`, default 0). PD37590 showed why:
+at a germline locus 1-3 of 44 colonies have 0-1 alt reads (their alt reads realign as
+uninformative / unexplained) and a hard PL 20-50 "absent" per colony handed 1,364 all-carrier loci
+to INDEP; with ε₁ = 0.02 ROOT (or a clade) tolerates ~3 such colonies. ε₀ is off by default so a
+single strongly present colony stays a private event with its full Bayes factor.
 
 Python consumers read both formats through `tools/genotype2_io.py` (auto-detection, the
 0.9 / 0.8 / 0.1 thresholds in one place): `tools/phylo/tree_fit.py`, `tools/annotate_v2.py`,
