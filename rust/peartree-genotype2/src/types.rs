@@ -160,6 +160,15 @@ pub enum ReadClass {
     Unexplained,
 }
 
+/// Which junction an Alt read supports (from the best alt segment: ALT_L / ALT_R / ALT_FULL).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AltSide {
+    None,
+    Left,
+    Right,
+    Both,
+}
+
 /// Per-read realignment result (natural-log likelihoods).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ReadObs {
@@ -170,6 +179,8 @@ pub struct ReadObs {
     pub explained_frac: f64,
     /// the best alignment covers a junction column
     pub crosses_junction: bool,
+    /// for an Alt read: the junction it supports (`None` for every other class)
+    pub alt_side: AltSide,
 }
 
 impl ReadObs {
@@ -193,36 +204,57 @@ pub struct ReadInput<'a> {
     pub reverse: bool,
 }
 
-/// A finished locus call (owner C fills it; the driver adds coverage/n_disc and formats).
+/// Why a locus row carries no model result (or `Ok`). Written to the `status` column.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Status {
+    Ok,
+    /// no read passed the gates at any breakpoint window
+    NoReads,
+    /// depth above `reads_for_high_coverage` (pileup / collapsed repeat); not genotyped
+    HighCoverage,
+    /// the locus could not be modelled or fetched
+    Error,
+}
+
+impl Status {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Status::Ok => "ok",
+            Status::NoReads => "no_reads",
+            Status::HighCoverage => "high_coverage",
+            Status::Error => "error",
+        }
+    }
+}
+
+/// The numeric result of one locus in one colony (owner C fills it; the driver adds depth,
+/// n_disc and the status and formats the row). There is NO call string: downstream decides
+/// from the posteriors / likelihoods.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Call {
-    pub genotype: &'static str,
-    pub score_genotype: i64,
-    pub score_alternative: i64,
     pub n_alt: i64,
     pub n_ref: i64,
     pub n_art: i64,
     pub n_uninf: i64,
+    /// Alt reads supporting the left / right junction (an ALT_FULL read counts on both)
+    pub n_alt_l: i64,
+    pub n_alt_r: i64,
+    /// MLE of the alt-haplotype read fraction
     pub vaf: f64,
-    pub gq: i32,
-    /// PL for dosage 0, 1, 2 (Phred-scaled, min 0)
-    pub pl: [i32; 3],
-    /// posterior P(dosage) for 0, 1, 2
+    /// posterior P(dosage) for 0 (absent), 1 (het), 2 (hom)
     pub post: [f64; 3],
+    /// Phred-scaled genotype likelihoods for dosage 0, 1, 2 (min 0)
+    pub pl: [i32; 3],
+    /// Phred-scaled confidence of the most probable dosage (0..99)
+    pub gq: i32,
+    /// Phred-scaled evidence of the Alt reads (Σ 10·log10(e)·llr) and of the Ref reads
+    pub score_alt: i64,
+    pub score_ref: i64,
 }
 
-/// Genotype call vocabulary — the on-disk contract consumed by src/combine_genotypes.py,
-/// annotate.py and tools/phylo. Byte-identical to the legacy genotyper.
-pub const GT_ARTEFACT: &str = "artefact";
-pub const GT_WILDTYPE: &str = "wild-type";
-pub const GT_HETEROZYGOUS: &str = "heterozygous";
-pub const GT_HOMOZYGOUS: &str = "homozygous";
-pub const GT_INSERTION: &str = "insertion";
-pub const GT_INSERTION_UNCERTAIN: &str = "insertion?";
-pub const GT_WILDTYPE_UNCERTAIN: &str = "wild-type?";
-pub const GT_NO_COVERAGE: &str = "no-coverage";
-pub const GT_HIGH_COVERAGE: &str = "high-coverage";
-pub const GT_ERROR: &str = "error";
-
-/// Output header (gzip TSV). The first 8 columns keep the legacy meaning.
-pub const OUTPUT_HEADER: &str = "insertion\tgenotype\tscore_genotype\tscore_alternative\tcoverage\tn_alt\tn_ref\tn_art\tvaf\tgq\tpl_ref\tpl_het\tpl_hom\tn_uninf\tn_disc\n";
+/// Output header (gzip TSV, one row per locus). Numeric throughout; `status` is `ok`,
+/// `no_reads`, `high_coverage` or `error` (non-`ok` rows carry zeros in the model columns).
+/// `depth` = primary, mapped, non-duplicate reads overlapping the breakpoint window(s), capped at
+/// `reads_for_high_coverage + 1` when the gate trips.
+pub const OUTPUT_HEADER: &str = "locus	kind	status	depth	n_alt	n_ref	n_uninf	n_art	n_disc	n_alt_l	n_alt_r	vaf	p_absent	p_het	p_hom	pl_absent	pl_het	pl_hom	gq	score_alt	score_ref
+";

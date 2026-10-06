@@ -19,7 +19,7 @@ use crate::config::Config;
 use crate::contract::ContractSides;
 use crate::read::{decode_light_into, name, qual_into, seq_into, LightRec};
 use crate::source::{io_counters, is_cram, open_source_buffered, AnyRecord, RegionSource};
-use crate::types::{Locus, LocusModel, ReadInput, ReadObs, GT_ERROR, GT_HIGH_COVERAGE, OUTPUT_HEADER};
+use crate::types::{Locus, LocusModel, ReadInput, ReadObs, Status, OUTPUT_HEADER};
 use crate::{haplotype, model, output, readlik, refseq};
 
 use noodles_core::{Position, Region};
@@ -310,7 +310,7 @@ fn process_chunk(
 fn genotype_locus(src: &mut dyn RegionSource, header: &Header, m: &LocusModel, cfg: &Config) -> (String, LocusStats) {
     let name = m.locus.name.as_str();
     if m.error.is_some() {
-        return (output::format_simple_row(name, GT_ERROR, 0), LocusStats::default());
+        return (output::format_simple_row(name, m.kind, Status::Error, 0), LocusStats::default());
     }
     let collected = catch_unwind(AssertUnwindSafe(|| -> io::Result<Outcome> {
         let contig = contig_index(header, &m.locus.chr).ok_or_else(|| {
@@ -321,27 +321,30 @@ fn genotype_locus(src: &mut dyn RegionSource, header: &Header, m: &LocusModel, c
     }));
     let (coverage, obs, n_disc, stats) = match collected {
         Ok(Ok(Outcome::HighCoverage)) => {
-            let row = output::format_simple_row(name, GT_HIGH_COVERAGE, cfg.reads_for_high_coverage + 1);
+            let row = output::format_simple_row(name, m.kind, Status::HighCoverage, cfg.reads_for_high_coverage + 1);
             return (row, LocusStats::default());
         }
         Ok(Ok(Outcome::Collected { coverage, obs, n_disc, stats })) => (coverage, obs, n_disc, stats),
         Ok(Err(e)) => {
             eprintln!("genotyping failed for {name}: {e}");
-            return (output::format_simple_row(name, GT_ERROR, 0), LocusStats::default());
+            return (output::format_simple_row(name, m.kind, Status::Error, 0), LocusStats::default());
         }
         Err(_) => {
             eprintln!("genotyping failed for {name}: panic while collecting / scoring reads");
-            return (output::format_simple_row(name, GT_ERROR, 0), LocusStats::default());
+            return (output::format_simple_row(name, m.kind, Status::Error, 0), LocusStats::default());
         }
     };
     let row = match catch_unwind(AssertUnwindSafe(|| {
+        if obs.is_empty() && n_disc == 0 {
+            return output::format_simple_row(name, m.kind, Status::NoReads, coverage);
+        }
         let call = model::call_locus(&obs, n_disc, cfg);
-        output::format_row(name, &call, coverage, n_disc)
+        output::format_row(name, m.kind, &call, coverage, n_disc)
     })) {
         Ok(row) => row,
         Err(_) => {
             eprintln!("genotyping failed for {name}: panic in the genotype model");
-            output::format_simple_row(name, GT_ERROR, coverage)
+            output::format_simple_row(name, m.kind, Status::Error, coverage)
         }
     };
     (row, stats)
@@ -733,7 +736,7 @@ mod tests {
     }
 
     fn dummy_obs() -> ReadObs {
-        ReadObs { ll_ref: 0.0, ll_alt: 0.0, class: ReadClass::Uninformative, explained_frac: 1.0, crosses_junction: false }
+        ReadObs { ll_ref: 0.0, ll_alt: 0.0, class: ReadClass::Uninformative, explained_frac: 1.0, crosses_junction: false, alt_side: crate::types::AltSide::None }
     }
 
     /// A mapped, primary, properly paired forward read on contig 0.

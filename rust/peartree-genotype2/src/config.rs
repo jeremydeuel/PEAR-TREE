@@ -40,11 +40,7 @@ pub struct Config {
     pub bg_alt_rate: f64,
     pub purity_grid: Vec<f64>,
     pub prior: [f64; 3],
-    pub p_confident: f64,
-    pub p_present_certain: f64,
-    pub p_present_uncertain: f64,
-    pub min_artefact_reads: i64,
-    pub artefact_read_fraction: f64,
+
 }
 
 impl Default for Config {
@@ -79,11 +75,6 @@ impl Default for Config {
             bg_alt_rate: 0.005,
             purity_grid: vec![1.0, 0.9, 0.8, 0.7],
             prior: [1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0],
-            p_confident: 0.9,
-            p_present_certain: 0.9,
-            p_present_uncertain: 0.5,
-            min_artefact_reads: 2,
-            artefact_read_fraction: 0.5,
         }
     }
 }
@@ -164,11 +155,6 @@ impl Config {
                 }
                 self.prior = [l[0], l[1], l[2]];
             }
-            "p_confident" => self.p_confident = num(val)?,
-            "p_present_certain" => self.p_present_certain = num(val)?,
-            "p_present_uncertain" => self.p_present_uncertain = num(val)?,
-            "min_artefact_reads" => self.min_artefact_reads = num(val)?,
-            "artefact_read_fraction" => self.artefact_read_fraction = num(val)?,
             other => eprintln!("warning: ignoring unknown config key '{other}'"),
         }
         Ok(())

@@ -1,4 +1,5 @@
-//! Genotype likelihoods, posterior, vocabulary mapping (SPEC "Genotype model"). Owner: C.
+//! Genotype likelihoods, posterior, GQ, VAF (SPEC "Genotype model"). No call strings: the
+//! numbers are the output.
 //!
 //! Model. Dosage `g ∈ {0,1,2}`; colony purity `p` on `cfg.purity_grid` (uniform weights); the
 //! alt-haplotype fraction of the reads is
@@ -19,10 +20,7 @@
 //! MLE over the real Alt/Ref reads only (pseudo-reads are not reads).
 
 use crate::config::Config;
-use crate::types::{
-    Call, ReadClass, ReadObs, GT_ARTEFACT, GT_HETEROZYGOUS, GT_HOMOZYGOUS, GT_INSERTION,
-    GT_INSERTION_UNCERTAIN, GT_NO_COVERAGE, GT_WILDTYPE, GT_WILDTYPE_UNCERTAIN,
-};
+use crate::types::{AltSide, Call, ReadClass, ReadObs};
 
 /// Phred units per nat: `10·log10(e)`.
 const PHRED_PER_NAT: f64 = 10.0 * std::f64::consts::LOG10_E;
@@ -83,6 +81,7 @@ fn phi(g: usize, p: f64, bg: f64) -> f64 {
 }
 
 /// The likelihood part of a call: GL per dosage, posterior, PL, GQ, best dosage.
+#[allow(dead_code)] // `best` is kept for debugging
 struct Fit {
     post: [f64; 3],
     pl: [i32; 3],
@@ -160,21 +159,39 @@ fn normalised_prior(cfg: &Config) -> [f64; 3] {
     if z > 0.0 { p.map(|x| x / z) } else { [1.0 / 3.0; 3] }
 }
 
-/// Call one locus from its read observations. `n_disc` discordant anchors add
-/// `cfg.disc_weight_nats` each towards alt (0 by default). Never returns `high-coverage` /
-/// `error` (the driver decides those before calling).
-// live once driver.rs (owner D) calls it; remove at integration
+/// Summarise one locus from its read observations. `n_disc` discordant anchors add
+/// `cfg.disc_weight_nats` each towards alt (0 by default). The driver decides `status`
+/// (`no_reads` when `obs` is empty, `high_coverage`, `error`) and formats the row.
+///
+/// Uninformative reads stay IN the likelihood: one carries little (|llr| below the reporting
+/// threshold) but many add up -- at a far duplication every reference-junction read has
+/// llr = ln(0.5) by construction and together they are the only evidence of absence. They are
+/// not counted as votes. Unexplained reads (chimeras / mismaps) are counted (`n_art`) and
+/// excluded from the likelihood.
 pub fn call_locus(obs: &[ReadObs], n_disc: i64, cfg: &Config) -> Call {
     let (mut n_alt, mut n_ref, mut n_art, mut n_uninf) = (0i64, 0i64, 0i64, 0i64);
+    let (mut n_alt_l, mut n_alt_r) = (0i64, 0i64);
     let (mut score_alt, mut score_ref) = (0i64, 0i64);
     let mut d: Vec<f64> = Vec::with_capacity(obs.len());
     for o in obs {
         match o.class {
-            ReadClass::Uninformative => n_uninf += 1,
+            ReadClass::Uninformative => {
+                n_uninf += 1;
+                d.push(clamp_llr(o.llr()));
+            }
             ReadClass::Unexplained => n_art += 1,
             ReadClass::Alt => {
                 let x = clamp_llr(o.llr());
                 n_alt += 1;
+                match o.alt_side {
+                    AltSide::Left => n_alt_l += 1,
+                    AltSide::Right => n_alt_r += 1,
+                    AltSide::Both => {
+                        n_alt_l += 1;
+                        n_alt_r += 1;
+                    }
+                    AltSide::None => {}
+                }
                 score_alt += (PHRED_PER_NAT * x).round() as i64;
                 d.push(x);
             }
@@ -186,64 +203,25 @@ pub fn call_locus(obs: &[ReadObs], n_disc: i64, cfg: &Config) -> Call {
             }
         }
     }
-
-    let no_coverage = || Call {
-        genotype: GT_NO_COVERAGE,
-        score_genotype: 0,
-        score_alternative: 0,
-        n_alt,
-        n_ref,
-        n_art,
-        n_uninf,
-        vaf: 0.0,
-        gq: 0,
-        pl: [0, 0, 0],
-        post: normalised_prior(cfg),
-    };
-
-    // no Alt/Ref/Unexplained reads at all
-    if n_alt + n_ref + n_art == 0 {
-        return no_coverage();
+    if d.is_empty() && n_disc == 0 {
+        // nothing enters the likelihood: the posterior is the prior, PL/GQ carry no information
+        return Call {
+            n_alt, n_ref, n_art, n_uninf, n_alt_l, n_alt_r,
+            vaf: 0.0,
+            post: normalised_prior(cfg),
+            pl: [0, 0, 0],
+            gq: 0,
+            score_alt, score_ref,
+        };
     }
-
     let f = fit(&d, n_disc, cfg);
-    let vaf = vaf_mle(&d);
-    let mk = |genotype: &'static str, score_genotype: i64, score_alternative: i64| Call {
-        genotype,
-        score_genotype,
-        score_alternative,
-        n_alt,
-        n_ref,
-        n_art,
-        n_uninf,
-        vaf,
-        gq: f.gq,
-        pl: f.pl,
+    Call {
+        n_alt, n_ref, n_art, n_uninf, n_alt_l, n_alt_r,
+        vaf: vaf_mle(&d),
         post: f.post,
-    };
-
-    // artefact-dominated locus (PL/GQ/VAF still describe the Alt/Ref reads, for the joint step)
-    let total = n_alt + n_ref + n_art;
-    if n_art >= cfg.min_artefact_reads && n_art as f64 >= cfg.artefact_read_fraction * total as f64 {
-        return mk(GT_ARTEFACT, 0, score_alt.max(score_ref));
-    }
-    // Unexplained reads below the artefact rule and nothing informative: the model has no data
-    // (its posterior would be the prior), so this is no-coverage as in the legacy summariser.
-    if n_alt + n_ref == 0 {
-        return no_coverage();
-    }
-
-    let present = f.post[1] + f.post[2];
-    let wt = |g| mk(g, score_ref, score_alt);
-    let ins = |g| mk(g, score_alt, score_ref);
-    match f.best {
-        0 if f.post[0] >= cfg.p_confident => wt(GT_WILDTYPE),
-        0 => wt(GT_WILDTYPE_UNCERTAIN),
-        1 if f.post[1] >= cfg.p_confident => ins(GT_HETEROZYGOUS),
-        2 if f.post[2] >= cfg.p_confident => ins(GT_HOMOZYGOUS),
-        _ if present >= cfg.p_present_certain => ins(GT_INSERTION),
-        _ if present >= cfg.p_present_uncertain => ins(GT_INSERTION_UNCERTAIN),
-        _ => wt(GT_WILDTYPE_UNCERTAIN),
+        pl: f.pl,
+        gq: f.gq,
+        score_alt, score_ref,
     }
 }
 
@@ -252,7 +230,7 @@ mod tests {
     use super::*;
 
     fn read(class: ReadClass, llr: f64) -> ReadObs {
-        ReadObs { ll_ref: -40.0, ll_alt: -40.0 + llr, class, explained_frac: 1.0, crosses_junction: true }
+        ReadObs { ll_ref: -40.0, ll_alt: -40.0 + llr, class, explained_frac: 1.0, crosses_junction: true, alt_side: AltSide::None }
     }
     fn alt(llr: f64) -> ReadObs {
         read(ReadClass::Alt, llr)
@@ -260,179 +238,150 @@ mod tests {
     fn refr(llr: f64) -> ReadObs {
         read(ReadClass::Ref, llr)
     }
-    fn reads(n_alt: usize, alt_llr: f64, n_ref: usize, ref_llr: f64) -> Vec<ReadObs> {
-        let mut v = vec![alt(alt_llr); n_alt];
-        v.extend(vec![refr(ref_llr); n_ref]);
+    fn reads(na: usize, la: f64, nr: usize, lr: f64) -> Vec<ReadObs> {
+        let mut v = vec![alt(la); na];
+        v.extend(vec![refr(lr); nr]);
         v
     }
     fn call(obs: &[ReadObs]) -> Call {
         call_locus(obs, 0, &Config::default())
     }
+    fn present(c: &Call) -> f64 {
+        c.post[1] + c.post[2]
+    }
 
     #[test]
     fn clean_wild_type() {
         let c = call(&reads(0, 0.0, 8, -15.0));
-        assert_eq!(c.genotype, GT_WILDTYPE);
-        assert_eq!((c.n_ref, c.n_alt), (8, 0));
+        assert!(c.post[0] > 0.98, "{:?}", c.post);
         assert_eq!(c.pl[0], 0);
-        assert!(c.pl[1] > 10 && c.pl[2] > c.pl[1], "{:?}", c.pl);
+        assert!(c.pl[1] > 10 && c.pl[2] > 100);
         assert_eq!(c.vaf, 0.0);
-        assert!(c.gq >= 10);
-        assert_eq!(c.score_genotype, 8 * 65); // round(15 · 4.3429) = 65 per read
-        assert_eq!(c.score_alternative, 0);
+        assert_eq!((c.n_alt, c.n_ref), (0, 8));
+        assert_eq!(c.score_ref, 8 * 65);
+        assert_eq!(c.score_alt, 0);
     }
 
     #[test]
-    fn single_ref_read_is_uncertain() {
-        // GL ∝ 0.995 (g0), mean_p(1 - p/2) = 0.575 (g1), ≈0.00375 (g2: φ ≥ 0.995)
-        // → post0 = 0.995 / 1.574 ≈ 0.632 under the flat prior (not 0.67: the purity grid makes
-        // a het colony look like 57.5% ref, not 50%).
-        let c = call(&[refr(-15.0)]);
-        assert_eq!(c.genotype, GT_WILDTYPE_UNCERTAIN);
-        assert!((c.post[0] - 0.632).abs() < 0.002, "{:?}", c.post);
-        assert_eq!(c.gq, 4);
+    fn one_ref_read_is_weak_absence_evidence() {
+        // a het alternative explains a ref read ~half the time: P(absent) ≈ 0.63 under the flat prior
+        let c = call(&reads(0, 0.0, 1, -15.0));
+        assert!(c.post[0] > 0.6 && c.post[0] < 0.7, "{:?}", c.post);
+        assert!(c.gq < 10);
     }
 
     #[test]
     fn balanced_het() {
         let c = call(&reads(6, 15.0, 6, -15.0));
-        assert_eq!(c.genotype, GT_HETEROZYGOUS);
+        assert!(c.post[1] > 0.95, "{:?}", c.post);
         assert!((c.vaf - 0.5).abs() < 1e-9);
-        assert!(c.gq > 10, "gq {}", c.gq);
+        assert!(c.gq >= 10);
         assert_eq!(c.pl[1], 0);
     }
 
     #[test]
-    fn purity_diluted_het() {
-        // VAF 0.33: the purity grid down to 0.7 (φ1 = 0.35) explains it as a confident het.
+    fn purity_diluted_het_is_still_het() {
         let c = call(&reads(4, 15.0, 8, -15.0));
-        assert_eq!(c.genotype, GT_HETEROZYGOUS);
-        assert!((c.vaf - 0.33).abs() < 1e-9, "vaf {}", c.vaf);
-        assert!(c.post[1] > 0.99);
+        assert!(c.post[1] > 0.99, "{:?}", c.post);
+        assert!((c.vaf - 1.0 / 3.0).abs() < 0.01);
     }
 
     #[test]
-    fn homozygous() {
+    fn hom_and_presence_certain_with_unclear_zygosity() {
         let c = call(&reads(8, 15.0, 0, 0.0));
-        assert_eq!(c.genotype, GT_HOMOZYGOUS);
-        assert_eq!(c.vaf, 1.0);
-        assert!(c.post[2] > 0.99);
+        assert!(c.post[2] > 0.99, "{:?}", c.post);
+        let c2 = call(&reads(2, 15.0, 0, 0.0));
+        assert!(present(&c2) > 0.999 && c2.post[2] < 0.9, "{:?}", c2.post);
     }
 
     #[test]
-    fn two_alt_reads_insertion() {
-        // post2 ≈ 1/(1 + mean_p (p/2)^2) ≈ 0.845 < p_confident, P(present) ≈ 1
-        let c = call(&reads(2, 15.0, 0, 0.0));
-        assert_eq!(c.genotype, GT_INSERTION);
-        assert!(c.post[2] > 0.8 && c.post[2] < 0.9, "{:?}", c.post);
-    }
-
-    #[test]
-    fn single_alt_read_strong() {
-        // GL ∝ 0.005·e^20 (g0) vs 0.425·e^20 (g1) vs ≈e^20 (g2): P(present) ≈ 0.9965
+    fn one_alt_read_is_strong_presence_evidence() {
+        // bg_alt_rate 0.005: a single read just above the informative threshold is ~85x likelier
+        // under presence -- downstream must weigh this with depth / the joint step
         let c = call(&[alt(20.0)]);
-        assert_eq!(c.genotype, GT_INSERTION);
-        assert!((c.post[0] - 0.0035).abs() < 0.0005, "{:?}", c.post);
+        assert!(c.post[0] < 0.01, "{:?}", c.post);
+        let c5 = call(&[alt(5.0)]);
+        assert!(c5.post[0] < 0.02, "{:?}", c5.post);
     }
 
     #[test]
-    fn single_alt_read_weak() {
-        // llr 5: g0 ∝ 0.995 + 0.005·e^5 = 1.737, g1 ∝ 63.6, g2 ∝ 147.9 → P(present) ≈ 0.992.
-        // bg_alt_rate = 0.005 caps a single alt read's weight against absence at ~e^5/1.74.
-        let c = call(&[alt(5.0)]);
-        assert_eq!(c.genotype, GT_INSERTION);
-        assert!((c.post[0] - 0.0082).abs() < 0.0005, "{:?}", c.post);
-    }
-
-    #[test]
-    fn low_vaf_is_not_confident_wild_type() {
-        // 3 alt + 30 ref (VAF 0.09): post0 ≈ 0.78 (bg_alt_rate = 0.005 makes 3 alt reads cost
-        // ~16 nats under absence, about as much as 30 ref reads cost under a 70%-pure het)
+    fn low_vaf_is_ambiguous() {
+        // 3 alt + 30 ref (VAF 0.09): P(absent) ≈ 0.78 -- neither a confident absence nor presence
         let c = call(&reads(3, 15.0, 30, -15.0));
-        assert_eq!(c.genotype, GT_WILDTYPE_UNCERTAIN);
         assert!(c.post[0] > 0.7 && c.post[0] < 0.85, "{:?}", c.post);
-        assert!(c.gq < 10);
-        assert!((c.vaf - 0.09).abs() < 1e-9, "vaf {}", c.vaf);
-        // wild-type call: the ref side supports it
-        assert_eq!(c.score_genotype, 30 * 65);
-        assert_eq!(c.score_alternative, 3 * 65);
+        assert!((c.vaf - 0.09).abs() < 1e-9);
+        assert_eq!(c.score_ref, 30 * 65);
+        assert_eq!(c.score_alt, 3 * 65);
     }
 
     #[test]
-    fn artefact_rule() {
-        let mut obs = vec![read(ReadClass::Unexplained, 0.0); 3];
-        obs.push(alt(15.0));
-        let c = call(&obs);
-        assert_eq!(c.genotype, GT_ARTEFACT);
+    fn unexplained_reads_are_counted_not_modelled() {
+        let mut v = vec![read(ReadClass::Unexplained, 0.0); 3];
+        v.push(alt(15.0));
+        let c = call(&v);
         assert_eq!((c.n_art, c.n_alt), (3, 1));
-        assert_eq!(c.score_genotype, 0);
-        assert_eq!(c.score_alternative, 65);
+        assert!(present(&c) > 0.99); // the one alt read is all the model sees
     }
 
     #[test]
-    fn uninformative_only_is_no_coverage() {
-        let c = call(&vec![read(ReadClass::Uninformative, 1.0); 5]);
-        assert_eq!(c.genotype, GT_NO_COVERAGE);
+    fn uninformative_zero_llr_reads_leave_the_prior() {
+        let c = call(&vec![read(ReadClass::Uninformative, 0.0); 5]);
         assert_eq!(c.n_uninf, 5);
-        assert_eq!((c.score_genotype, c.score_alternative, c.gq, c.pl), (0, 0, 0, [0, 0, 0]));
-        assert_eq!(call(&[]).genotype, GT_NO_COVERAGE);
-        // one Unexplained read (below min_artefact_reads) and nothing informative
-        let c = call(&[read(ReadClass::Unexplained, 0.0)]);
-        assert_eq!(c.genotype, GT_NO_COVERAGE);
-        assert_eq!(c.n_art, 1);
+        assert!((c.post[0] - 1.0 / 3.0).abs() < 1e-6, "{:?}", c.post);
+        assert!(c.gq <= 2); // the prior's own GQ: -10 log10(2/3)
     }
 
     #[test]
-    fn disc_weight_moves_the_call() {
-        let obs = [refr(-15.0)];
-        let mut cfg = Config::default();
-        // weight 0 (default): discordant anchors are counted elsewhere, change nothing here
-        assert_eq!(call_locus(&obs, 5, &cfg), call_locus(&obs, 0, &cfg));
-        cfg.disc_weight_nats = 10.0;
-        // 1 ref read + 3 anchors at 10 nats: wild-type? -> heterozygous (the ref read rules out
-        // hom, the pseudo-reads rule out absence)
-        let c = call_locus(&obs, 3, &cfg);
-        assert_eq!(c.genotype, GT_HETEROZYGOUS);
-        assert_eq!((c.n_ref, c.n_alt), (1, 0));
-        assert_eq!(c.vaf, 0.0); // pseudo-reads are not reads
-        // and they cannot create coverage
-        assert_eq!(call_locus(&[], 3, &cfg).genotype, GT_NO_COVERAGE);
+    fn far_dup_reference_reads_add_up() {
+        // far duplication: every ref-junction read has llr = ln 0.5 and is Uninformative alone
+        let c = call(&vec![read(ReadClass::Uninformative, 0.5f64.ln()); 12]);
+        assert!(c.post[0] > 0.9, "{:?}", c.post);
+        assert_eq!((c.n_alt, c.n_ref, c.n_uninf), (0, 0, 12));
     }
 
     #[test]
-    fn scores_and_hand_computed_case() {
-        // alt llr 10, 15; ref llr -20.  score_alt = round(43.43) + round(65.14) = 108,
-        // score_ref = round(86.86) = 87.  Independent numpy reimplementation of the SPEC
-        // formulas (relative to Σ ll_ref): GL = (14.407, 22.727, 19.404) → PL = (36, 0, 14),
-        // post = (0.00024, 0.9650, 0.0348) → heterozygous, GQ = round(-10·log10 0.0350) = 15,
-        // VAF MLE = 0.67.
-        let obs = [alt(10.0), alt(15.0), refr(-20.0)];
-        let c = call(&obs);
-        assert_eq!((c.n_alt, c.n_ref), (2, 1));
-        assert_eq!(c.genotype, GT_HETEROZYGOUS);
-        assert_eq!((c.score_genotype, c.score_alternative), (108, 87));
-        assert_eq!(c.pl, [HAND_PL[0], HAND_PL[1], HAND_PL[2]]);
-        assert_eq!(c.gq, HAND_GQ);
-        assert!((c.vaf - 0.67).abs() < 1e-9);
+    fn empty_is_prior() {
+        let c = call(&[]);
+        assert_eq!(c.pl, [0, 0, 0]);
+        assert_eq!(c.gq, 0);
+        assert_eq!(c.vaf, 0.0);
     }
-    const HAND_PL: [i32; 3] = [36, 0, 14];
-    const HAND_GQ: i32 = 15;
 
-    /// Threshold review: `cargo test sweep -- --ignored --nocapture`.
+    #[test]
+    fn disc_pseudo_reads_move_the_posterior_only_when_weighted() {
+        let cfg = Config::default();
+        let one_ref = reads(0, 0.0, 1, -15.0);
+        let a = call_locus(&one_ref, 3, &cfg);
+        let b = call_locus(&one_ref, 0, &cfg);
+        assert_eq!(a.post, b.post);
+        let w = Config { disc_weight_nats: 10.0, ..Config::default() };
+        let c = call_locus(&one_ref, 3, &w);
+        assert!(c.post[1] > 0.9, "{:?}", c.post);
+    }
+
+    #[test]
+    fn per_junction_alt_counts() {
+        let mut l = alt(15.0);
+        l.alt_side = AltSide::Left;
+        let mut r = alt(15.0);
+        r.alt_side = AltSide::Right;
+        let mut b = alt(15.0);
+        b.alt_side = AltSide::Both;
+        let c = call(&[l, l, r, b]);
+        assert_eq!((c.n_alt, c.n_alt_l, c.n_alt_r), (4, 3, 2));
+    }
+
+    /// Prints P(absent)/GQ for n ref-only and n alt-only reads (threshold review).
     #[test]
     #[ignore]
     fn sweep() {
-        for (label, a, llr) in [("n_ref (ref-only, llr -15)", false, -15.0), ("n_alt (alt-only, llr +15)", true, 15.0)] {
-            println!("\n| {label} | genotype | GQ | post0 | post1 | post2 | PL |");
-            println!("|---|---|---|---|---|---|---|");
-            for n in 0..=12usize {
-                let obs = if a { reads(n, llr, 0, 0.0) } else { reads(0, 0.0, n, llr) };
-                let c = call(&obs);
-                println!(
-                    "| {n} | {} | {} | {:.4} | {:.4} | {:.4} | {} {} {} |",
-                    c.genotype, c.gq, c.post[0], c.post[1], c.post[2], c.pl[0], c.pl[1], c.pl[2]
-                );
-            }
+        for n in 0..=12 {
+            let c = call(&reads(0, 0.0, n, -15.0));
+            println!("ref x{n}: post {:?} gq {} pl {:?}", c.post, c.gq, c.pl);
+        }
+        for n in 0..=12 {
+            let c = call(&reads(n, 15.0, 0, 0.0));
+            println!("alt x{n}: post {:?} gq {} pl {:?}", c.post, c.gq, c.pl);
         }
     }
 }

@@ -99,42 +99,33 @@ Scores are natural-log likelihoods:
 Dosage `g ∈ {0,1,2}`; purity grid `purity_grid` (weights uniform); alt-haplotype fraction
 `φ(g,p)`: g=0 → `bg_alt_rate`; g=1 → `p/2 + (1-p/2)·bg`... precisely `φ1 = p/2` floored at
 `bg_alt_rate`; g=2 → `max(p, 1-bg_alt_rate)`.
-Per read `ll_r(φ) = logaddexp(ln(1-φ) + ll_ref, ln φ + ll_alt)`; Uninformative reads are
-dropped; Unexplained reads are excluded from GL but counted (`n_art`).
+Per read `ll_r(φ) = logaddexp(ln(1-φ) + ll_ref, ln φ + ll_alt)`; Uninformative reads STAY in
+the likelihood (not counted as votes; at a far duplication every reference-junction read has
+llr = ln 0.5 and together they are the only evidence of absence); Unexplained reads are
+excluded from GL but counted (`n_art`). With no voting read the locus is `no-coverage` unless
+the uninformative reads move the posterior to ≥ `p_confident_absent`.
 `GL_g = logmeanexp over p in grid of Σ_r ll_r(φ(g,p))`; `PL_g = round(-10·log10 e^(GL_g - max GL))`;
 posterior with `prior` (default flat `1/3,1/3,1/3`); `GQ = min(99, -10·log10(1 - post_best))`.
 `vaf` = MLE of φ on a 0..1 grid (step 0.01) of Σ_r ll_r(φ).
 
-Vocabulary mapping (strings are the on-disk contract read by `src/combine_genotypes.py`,
-`annotate.py`, `tools/phylo`):
-
-| condition (in order) | genotype |
-|---|---|
-| depth gate tripped (driver) | `high-coverage` |
-| model error | `error` |
-| no reads after gates, or no Alt/Ref/Unexplained reads | `no-coverage` |
-| `n_art >= min_artefact_reads && n_art >= artefact_read_fraction·(n_alt+n_ref+n_art)` | `artefact` |
-| best=0, post ≥ `p_confident` | `wild-type` |
-| best=0 otherwise | `wild-type?` |
-| best=1, post ≥ `p_confident` | `heterozygous` |
-| best=2, post ≥ `p_confident` | `homozygous` |
-| `P(present)=post1+post2 ≥ p_present_certain` (zygosity unclear) | `insertion` |
-| `P(present) ≥ p_present_uncertain` | `insertion?` |
-| else | `wild-type?` |
+**No call strings (Jeremy, 2026-10-06: "don't keep legacy").** The per-colony output is numeric;
+downstream (the joint step, annotate) decides from posteriors / likelihoods. A `status` word
+marks rows without a model result: `no_reads` (nothing passed the gates), `high_coverage`
+(depth gate), `error` (could not be modelled / fetched); their posterior columns are EMPTY.
 
 Scores: `score_alt = Σ_{Alt reads} 10·log10(e)·llr`, `score_ref = Σ_{Ref reads} 10·log10(e)·(-llr)`
-(Phred-scaled read evidence, integers). `score_genotype` = the side supporting the call
-(alt for present calls, ref for wild-type calls), `score_alternative` the other (legacy
-semantics). NOTE for combine_genotypes `min_best_score` (800 in legacy units) — the benchmark
-must report the new distribution so the gate can be recalibrated.
+(Phred-scaled read evidence, integers), always both. `n_alt_l` / `n_alt_r` = Alt reads whose
+best alt segment is ALT_L / ALT_R (an ALT_FULL read counts on both): the two-junction hallmark.
 
 Output (gzip TSV, header exactly):
 ```
-insertion	genotype	score_genotype	score_alternative	coverage	n_alt	n_ref	n_art	vaf	gq	pl_ref	pl_het	pl_hom	n_uninf	n_disc
+locus	kind	status	depth	n_alt	n_ref	n_uninf	n_art	n_disc	n_alt_l	n_alt_r	vaf	p_absent	p_het	p_hom	pl_absent	pl_het	pl_hom	gq	score_alt	score_ref
 ```
-First 8 columns keep legacy meaning (`combine_genotypes.py` reads 1-4 positionally and
-`n_alt`/`n_ref` by name; appended columns are safe). `coverage` = primary, mapped, non-dup
-reads overlapping the window(s) (capped at `reads_for_high_coverage + 1` when the gate trips).
+`kind` = TSD / BLUNT / TSD_DELETION / L1_MED_DELETION / L1_MED_DUPLICATION / ONE_SIDED.
+`depth` = primary, mapped, non-duplicate reads overlapping the window(s) (capped at
+`reads_for_high_coverage + 1` when the gate trips). The legacy consumers
+(`src/combine_genotypes.py`, `annotate.py`'s `read_genotyping`, `tools/phylo`) read genotype
+STRINGS and are NOT fed by this file; the joint step below is the per-patient consumer.
 
 ## Driver / I/O (`source.rs`, `read.rs`, `driver.rs`, owner D)
 
@@ -163,19 +154,15 @@ reads overlapping the window(s) (capped at `reads_for_high_coverage + 1` when th
 `--step joint --tree P.tree --genotype-dir DIR (or --genotypes f1 f2 …) --out P.joint.tsv
 --matrix P.joint_matrix.csv.gz [--root-prior 0.1] [--branch-prior length|uniform]`
 
-Port of `tools/phylo/tree_fit.py` + `genotype_likelihood.py` hypotheses, on the PL columns:
-per colony c, `P(d_c | absent) = e^{GL_0}`, `P(d_c | present) = ½(e^{GL_1} + e^{GL_2})`
-(legacy files without PL columns: fall back to the beta-binomial read-vote model on
-`n_alt`/`n_ref` as in genotype_likelihood.py, so the step can be validated against
-tree_fit.py on existing output). Hypotheses: ROOT (every colony present), each branch
+Port of `tools/phylo/tree_fit.py` hypotheses, on the numeric per-colony files ONLY (no legacy
+reader): per colony c, `P(d_c | absent) = 10^(-pl_absent/10)`, `P(d_c | present) =
+½(10^(-pl_het/10) + 10^(-pl_hom/10))`; `status != ok` rows contribute log 1 to every hypothesis. Hypotheses: ROOT (every colony present), each branch
 (clade below it), NOISE (none present, one shared alt-fraction fitted per locus — the
 constant-allele-fraction artefact), INDEP (independent presence, π ~ U(0,1), DP over the
 carrier count). Output per locus: best hypothesis id, log10 BF (tree vs max(NOISE, INDEP)),
-carriers (tips), n_carriers, per-colony posterior P(carrier). Matrix: `;`-separated like
-`<patient>.genotypes.csv.gz` (rows loci, cols colonies) with the legacy vocabulary:
-P(carrier) ≥ 0.9 → the colony's own zygosity string if confident else `insertion`;
-0.5–0.9 → `insertion?`; P(non-carrier) ≥ 0.9 → `wild-type`; else `wild-type?`; NA states
-(`no-coverage`/`high-coverage`/`error`) pass through. Tree tips are matched to genotype
+carriers (tips), n_carriers, per-colony posterior P(carrier). Matrix: `;`-separated
+(rows loci, cols colonies, empty first header cell) of NUMERIC per-colony P(carrier) (4
+decimals); a colony whose row is `status != ok` or absent gets an empty cell. Tree tips are matched to genotype
 file stems (`S1.txt.gz` → `S1`; farm: `<colony>.txt.gz`); unmatched tips are an error.
 
 ## Benchmark (owner F, after merge)

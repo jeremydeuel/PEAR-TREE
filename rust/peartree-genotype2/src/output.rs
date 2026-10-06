@@ -1,41 +1,41 @@
-//! Output row formatting (SPEC "Output"). Owner: C.
-//!
-//! Column order is `types::OUTPUT_HEADER`; every row has all 15 columns:
-//! `insertion genotype score_genotype score_alternative coverage n_alt n_ref n_art vaf gq
-//! pl_ref pl_het pl_hom n_uninf n_disc`.
+//! Output row formatting (`types::OUTPUT_HEADER`): numeric columns + a status word.
 
-use crate::types::{Call, GT_HIGH_COVERAGE};
+use crate::types::{Call, LocusKind, Status};
 
-/// Format one output row (ends with '\n'). `coverage` and `n_disc` come from the driver.
-// live once driver.rs (owner D) calls it; remove at integration
-pub fn format_row(name: &str, call: &Call, coverage: i64, n_disc: i64) -> String {
+/// Format one `ok` row (ends with '\n'). `depth` and `n_disc` come from the driver.
+pub fn format_row(name: &str, kind: LocusKind, call: &Call, depth: i64, n_disc: i64) -> String {
     format!(
-        "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{:.3}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+        "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{:.3}\t{:.4}\t{:.4}\t{:.4}\t{}\t{}\t{}\t{}\t{}\t{}\n",
         name,
-        call.genotype,
-        call.score_genotype,
-        call.score_alternative,
-        coverage,
+        kind.as_str(),
+        Status::Ok.as_str(),
+        depth,
         call.n_alt,
         call.n_ref,
+        call.n_uninf,
         call.n_art,
+        n_disc,
+        call.n_alt_l,
+        call.n_alt_r,
         call.vaf,
-        call.gq,
+        call.post[0],
+        call.post[1],
+        call.post[2],
         call.pl[0],
         call.pl[1],
         call.pl[2],
-        call.n_uninf,
-        n_disc
+        call.gq,
+        call.score_alt,
+        call.score_ref
     )
 }
 
-/// Rows for the driver-decided states: `high-coverage` (coverage known), `error`, `no-coverage`.
-/// As in the legacy genotyper, a `high-coverage` row carries the (capped) coverage as its
-/// `score_genotype`; every other count / score is 0, vaf `0.000`, gq 0, PL `0 0 0`.
-// live once driver.rs (owner D) calls it; remove at integration
-pub fn format_simple_row(name: &str, genotype: &'static str, coverage: i64) -> String {
-    let score_genotype = if genotype == GT_HIGH_COVERAGE { coverage } else { 0 };
-    format!("{name}\t{genotype}\t{score_genotype}\t0\t{coverage}\t0\t0\t0\t0.000\t0\t0\t0\t0\t0\t0\n")
+/// Row for a locus without a model result (`no_reads`, `high_coverage`, `error`): the depth
+/// (capped for `high_coverage`), zeros everywhere else; the posterior columns are empty so a
+/// consumer cannot mistake them for a measurement.
+pub fn format_simple_row(name: &str, kind: LocusKind, status: Status, depth: i64) -> String {
+    debug_assert!(status != Status::Ok);
+    format!("{name}\t{}\t{}\t{depth}\t0\t0\t0\t0\t0\t0\t0\t0.000\t\t\t\t0\t0\t0\t0\t0\t0\n", kind.as_str(), status.as_str())
 }
 
 #[cfg(test)]
@@ -43,41 +43,39 @@ mod tests {
     use super::*;
     use crate::config::Config;
     use crate::model::call_locus;
-    use crate::types::{ReadClass, ReadObs, GT_ERROR, GT_NO_COVERAGE, OUTPUT_HEADER};
+    use crate::types::{AltSide, ReadClass, ReadObs, OUTPUT_HEADER};
 
     fn obs(class: ReadClass, llr: f64) -> ReadObs {
-        ReadObs { ll_ref: -40.0, ll_alt: -40.0 + llr, class, explained_frac: 1.0, crosses_junction: true }
+        ReadObs { ll_ref: -40.0, ll_alt: -40.0 + llr, class, explained_frac: 1.0, crosses_junction: true, alt_side: AltSide::None }
+    }
+
+    fn n_cols() -> usize {
+        OUTPUT_HEADER.trim_end().split('\t').count()
     }
 
     #[test]
-    fn hand_computed_row() {
-        // see model::tests::scores_and_hand_computed_case for the numbers
-        let reads = [
-            obs(ReadClass::Alt, 10.0),
-            obs(ReadClass::Alt, 15.0),
-            obs(ReadClass::Ref, -20.0),
-            obs(ReadClass::Uninformative, 1.0),
-            obs(ReadClass::Unexplained, 0.0),
-        ];
+    fn ok_row_has_every_column() {
+        let reads = [obs(ReadClass::Alt, 10.0), obs(ReadClass::Alt, 15.0), obs(ReadClass::Ref, -20.0), obs(ReadClass::Uninformative, 1.0), obs(ReadClass::Unexplained, 0.0)];
         let c = call_locus(&reads, 2, &Config::default());
-        let row = format_row("chr1:100-112", &c, 9, 2);
-        assert_eq!(row, "chr1:100-112\theterozygous\t108\t87\t9\t2\t1\t1\t0.670\t15\t36\t0\t14\t1\t2\n");
-        assert_eq!(row.trim_end_matches('\n').split('\t').count(), OUTPUT_HEADER.trim_end().split('\t').count());
+        let row = format_row("chr1:100-112", LocusKind::Tsd, &c, 9, 2);
+        let f: Vec<&str> = row.trim_end_matches('\n').split('\t').collect();
+        assert_eq!(f.len(), n_cols(), "{row}");
+        assert_eq!(&f[..11], &["chr1:100-112", "TSD", "ok", "9", "2", "1", "1", "1", "2", "0", "0"]);
+        assert_eq!(f[11], "0.720");
+        let p: Vec<f64> = f[12..15].iter().map(|x| x.parse().unwrap()).collect();
+        assert!((p.iter().sum::<f64>() - 1.0).abs() < 2e-4);
+        assert_eq!(f[16], "0"); // pl_het is the best
+        assert_eq!((f[19], f[20]), ("108", "87"));
     }
 
     #[test]
     fn simple_rows() {
-        let n_cols = OUTPUT_HEADER.trim_end().split('\t').count();
-        assert_eq!(n_cols, 15);
-        let hc = format_simple_row("chr2:5-9", GT_HIGH_COVERAGE, 181);
-        assert_eq!(hc, "chr2:5-9\thigh-coverage\t181\t0\t181\t0\t0\t0\t0.000\t0\t0\t0\t0\t0\t0\n");
-        let er = format_simple_row("chr2:5-9", GT_ERROR, 0);
-        assert_eq!(er, "chr2:5-9\terror\t0\t0\t0\t0\t0\t0\t0.000\t0\t0\t0\t0\t0\t0\n");
-        let nc = format_simple_row("chr2:5-9", GT_NO_COVERAGE, 3);
-        assert_eq!(nc, "chr2:5-9\tno-coverage\t0\t0\t3\t0\t0\t0\t0.000\t0\t0\t0\t0\t0\t0\n");
-        for r in [hc, er, nc] {
-            assert!(r.ends_with('\n'));
-            assert_eq!(r.trim_end_matches('\n').split('\t').count(), n_cols);
+        for st in [Status::NoReads, Status::HighCoverage, Status::Error] {
+            let row = format_simple_row("x:1-2", LocusKind::Blunt, st, 181);
+            let f: Vec<&str> = row.trim_end_matches('\n').split('\t').collect();
+            assert_eq!(f.len(), n_cols(), "{row}");
+            assert_eq!((f[1], f[2], f[3]), ("BLUNT", st.as_str(), "181"));
+            assert_eq!((f[12], f[13], f[14]), ("", "", ""));
         }
     }
 }

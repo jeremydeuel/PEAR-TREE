@@ -35,7 +35,7 @@ for SET in "${SETS[@]}"; do
     REF="$OUT/ref/reduced.fa"
     REPORT="$GT/bench_v2.md"
     echo "[$(ts)] === $SET: $SAMPLES colonies + WT S$WT ==="
-    mkdir -p "$GT/v2" "$GT/legacy_t"
+    mkdir -p "$GT/v2" "$GT/legacy_t" "$GT/v2_joint" "$GT/tprt_joint"; rm -f "$GT/v2"/P1.joint* "$GT/tprt"/P1.joint*
     : > "$GT/timing.tsv"
     for i in $(seq 1 "$WT"); do
         BAM="$OUT/S$i.bam"; [ "$i" = "$WT" ] && BAM="$GT/S$WT.bam"
@@ -62,7 +62,7 @@ for SET in "${SETS[@]}"; do
         echo
         python3 "$REPO/test/e2e/score_genotypes.py" --e2e-dir "$OUT" --geno-dir "$GT/v2" --samples "$SAMPLES" --wt-sample "S$WT" --label "(v2)"
         echo
-        echo "## score_genotype distribution of present calls (for combine_genotypes min_best_score)"
+        echo "## alt evidence score of present calls (legacy score_genotype vs v2 score_alt)"
         echo
         for mode in tprt v2; do
             python3 - "$GT/$mode" <<'PYEOF'
@@ -73,7 +73,11 @@ for f in glob.glob(os.path.join(d, 'S*.txt.gz')):
         hdr = fh.readline().rstrip('\n').split('\t')
         for line in fh:
             p = line.rstrip('\n').split('\t')
-            if p[1] in ('heterozygous', 'homozygous', 'insertion'):
+            if hdr[:3] == ['locus', 'kind', 'status']:
+                c = {h: i for i, h in enumerate(hdr)}
+                if p[c['status']] == 'ok' and float(p[c['p_het']]) + float(p[c['p_hom']]) >= 0.9:
+                    vals.append(int(p[c['score_alt']]))
+            elif p[1] in ('heterozygous', 'homozygous', 'insertion'):
                 vals.append(int(p[2]))
 vals.sort()
 q = lambda x: vals[min(len(vals) - 1, int(x * len(vals)))] if vals else 'NA'
@@ -86,23 +90,13 @@ PYEOF
             echo
             TIPS=$(seq -s, -f 'S%g' 1 "$SAMPLES")
             FILES=(); for i in $(seq 1 "$SAMPLES"); do FILES+=("$GT/v2/S$i.txt.gz"); done
-            "$NEW" --step joint --tree "$OUT/donor/tree.nwk" --genotypes "${FILES[@]}" \
-                --out "$GT/v2/P1.joint.tsv" --matrix "$GT/v2/P1.joint_matrix.csv.gz" 2>"$GT/v2/joint.log"
-            FILESL=(); for i in $(seq 1 "$SAMPLES"); do FILESL+=("$GT/tprt/S$i.txt.gz"); done
-            "$NEW" --step joint --tree "$OUT/donor/tree.nwk" --genotypes "${FILESL[@]}" \
-                --out "$GT/tprt/P1.joint.tsv" --matrix "$GT/tprt/P1.joint_matrix.csv.gz" 2>"$GT/tprt/joint.log"
-            python3 "$DIR/score_joint.py" --truth "$OUT/phylo/truth.tsv" --joint "$GT/v2/P1.joint.tsv" --tips "$TIPS" --label "(v2 genotypes)"
-            python3 "$DIR/score_joint.py" --truth "$OUT/phylo/truth.tsv" --joint "$GT/tprt/P1.joint.tsv" --tips "$TIPS" --label "(legacy genotypes)"
+            if ! "$NEW" --step joint --tree "$OUT/donor/tree.nwk" --genotypes "${FILES[@]}" \
+                --out "$GT/v2_joint/P1.joint.tsv" --matrix "$GT/v2_joint/P1.joint_matrix.csv.gz" 2>"$GT/v2_joint/joint.log"; then
+                echo "joint step failed (see $GT/v2_joint/joint.log)"
+            fi
+            [ -s "$GT/v2_joint/P1.joint.tsv" ] && python3 "$DIR/score_joint.py" --truth "$OUT/phylo/truth.tsv" --joint "$GT/v2_joint/P1.joint.tsv" --tips "$TIPS" --label "(v2 genotypes)"
             [ -s "$OUT/phylo/fit/phylo_fit.tsv" ] && python3 "$DIR/score_joint.py" --truth "$OUT/phylo/truth.tsv" --python-fit "$OUT/phylo/fit/phylo_fit.tsv" --tips "$TIPS" --label "(legacy genotypes, on disk)"
             echo
-            echo "## tree_fit.py on v2 genotypes (legacy read-vote model on n_alt/n_ref)"
-            echo
-            if "$PY" "$REPO/tools/phylo/tree_fit.py" --genotypes "$OUT/annot/P1.genotypes.csv.gz" --genotype-dir "$GT/v2" \
-                    --tree "$OUT/donor/tree.nwk" --annotation "$OUT/annot/P1.annotated.tsv" --out "$GT/v2/fit" --sex F >"$GT/v2/fit.log" 2>&1; then
-                python3 "$DIR/score_joint.py" --truth "$OUT/phylo/truth.tsv" --python-fit "$GT/v2/fit/phylo_fit.tsv" --tips "$TIPS" --label "(v2 genotypes)"
-            else
-                echo "tree_fit.py failed on v2 genotypes (see $GT/v2/fit.log)"
-            fi
         fi
     } | tee "$REPORT"
     echo "[$(ts)] -> $REPORT"

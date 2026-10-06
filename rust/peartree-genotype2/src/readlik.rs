@@ -12,7 +12,7 @@
 
 use crate::align::{align_multi_opts, Alignment};
 use crate::config::Config;
-use crate::types::{Hyp, LocusModel, ReadClass, ReadInput, ReadObs, Segment};
+use crate::types::{AltSide, Hyp, LocusModel, ReadClass, ReadInput, ReadObs, Segment};
 
 /// Realign one read against every segment of `model` and classify it.
 pub fn score_read(model: &LocusModel, read: &ReadInput, cfg: &Config) -> ReadObs {
@@ -24,6 +24,7 @@ pub fn score_read(model: &LocusModel, read: &ReadInput, cfg: &Config) -> ReadObs
             class: ReadClass::Uninformative,
             explained_frac: 0.0,
             crosses_junction: false,
+            alt_side: AltSide::None,
         };
     }
     let (lead, trail) = soft_clips(read.cigar);
@@ -97,7 +98,13 @@ pub fn score_read(model: &LocusModel, read: &ReadInput, cfg: &Config) -> ReadObs
     } else {
         ReadClass::Uninformative
     };
-    ReadObs { ll_ref, ll_alt, class, explained_frac, crosses_junction }
+    let alt_side = match (class, best_alt.map(|(_, s)| s.label)) {
+        (ReadClass::Alt, Some("ALT_L")) => AltSide::Left,
+        (ReadClass::Alt, Some("ALT_R")) => AltSide::Right,
+        (ReadClass::Alt, Some("ALT_FULL")) => AltSide::Both,
+        _ => AltSide::None,
+    };
+    ReadObs { ll_ref, ll_alt, class, explained_frac, crosses_junction, alt_side }
 }
 
 /// (leading, trailing) soft-clip lengths; hard clips are skipped.

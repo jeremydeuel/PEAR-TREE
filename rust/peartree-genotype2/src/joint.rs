@@ -34,10 +34,17 @@ use flate2::write::GzEncoder;
 use flate2::Compression;
 
 use crate::newick::Tree;
-use crate::types::{
-    GT_ERROR, GT_HETEROZYGOUS, GT_HIGH_COVERAGE, GT_HOMOZYGOUS, GT_INSERTION, GT_INSERTION_UNCERTAIN,
-    GT_NO_COVERAGE, GT_WILDTYPE, GT_WILDTYPE_UNCERTAIN,
-};
+// TEMPORARY shim (legacy vocabulary removed from types.rs): joint.rs is being rewritten for the
+// numeric per-colony format; these constants keep the crate building meanwhile.
+const GT_ERROR: &str = "error";
+const GT_HETEROZYGOUS: &str = "heterozygous";
+const GT_HIGH_COVERAGE: &str = "high-coverage";
+const GT_HOMOZYGOUS: &str = "homozygous";
+const GT_INSERTION: &str = "insertion";
+const GT_INSERTION_UNCERTAIN: &str = "insertion?";
+const GT_NO_COVERAGE: &str = "no-coverage";
+const GT_WILDTYPE: &str = "wild-type";
+const GT_WILDTYPE_UNCERTAIN: &str = "wild-type?";
 
 pub struct JointArgs {
     pub tree: String,

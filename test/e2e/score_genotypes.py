@@ -26,8 +26,11 @@ import collections
 import gzip
 import os
 
-PRESENT = {'heterozygous', 'homozygous', 'insertion'}
-ABSENT = {'wild-type'}
+PRESENT = {'heterozygous', 'homozygous', 'insertion', 'present'}
+ABSENT = {'wild-type', 'absent'}
+# numeric (peartree-genotype2) files: posterior thresholds that define present / absent
+V2_P_PRESENT = 0.9
+V2_P_ABSENT = 0.8
 KINDS = ['TSD 2-40', 'target-site deletion', 'blunt 0-1', 'L1DEL (< -30)', 'L1DUP (> 40)',
          'one-sided', 'other']
 
@@ -59,12 +62,30 @@ def read_tsv(path):
 
 
 def read_calls(path):
+    """Legacy files: the genotype string. Numeric peartree-genotype2 files (header starts with
+    `locus\tkind\tstatus`): 'present' if P(het)+P(hom) >= V2_P_PRESENT, 'absent' if
+    P(absent) >= V2_P_ABSENT, else the status word or 'p_present=<x>' (a no-call reason)."""
     calls = {}
     with gzip.open(path, 'rt') as fh:
-        fh.readline()
+        head = fh.readline().rstrip('\n').split('\t')
+        v2 = head[:3] == ['locus', 'kind', 'status']
+        col = {h: i for i, h in enumerate(head)}
         for line in fh:
             p = line.rstrip('\n').split('\t')
-            calls[p[0]] = p[1]
+            if not v2:
+                calls[p[0]] = p[1]
+                continue
+            if p[col['status']] != 'ok':
+                calls[p[0]] = p[col['status']]
+                continue
+            p_abs = float(p[col['p_absent']])
+            p_pres = float(p[col['p_het']]) + float(p[col['p_hom']])
+            if p_pres >= V2_P_PRESENT:
+                calls[p[0]] = 'present'
+            elif p_abs >= V2_P_ABSENT:
+                calls[p[0]] = 'absent'
+            else:
+                calls[p[0]] = f'p_present={p_pres:.1f}'
     return calls
 
 
