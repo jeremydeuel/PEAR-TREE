@@ -29,7 +29,7 @@ import sys
 from multiprocessing import Pool
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from compare_arms import (CARRIER, WILDTYPE, Locus, bucket_label, carrier_class, contract_loci,  # noqa: E402
+from compare_arms import (GIO, Locus, bucket_label, carrier_class, cell_bucket, contract_loci,  # noqa: E402
                           fastq_loci, md_table, read_calls, read_fit, read_tsv, write_tsv)
 
 RTE_CLASSES = ('LINE', 'LINE1', 'L1', 'SINE', 'Alu', 'SVA', 'ALU', 'RTE_other', 'pseudogene', 'Pseudogene',
@@ -119,7 +119,12 @@ def main():
     combined = fastq_loci(comb)[1] if os.path.exists(comb) else None
     contract = contract_loci(contract_path)
     unf, unf_cols = read_calls(os.path.join(rd, f'{P}.genotypes.unfiltered.csv.gz'))
-    fin, fin_cols = read_calls(os.path.join(rd, f'{P}.genotypes.csv.gz'))
+    fin, fin_cols = read_calls(os.path.join(rd, f'{P}.genotypes.csv.gz'), carriers_only=True)
+    if unf is None and fin is not None and fin.fmt == GIO.FMT_NUMERIC:
+        # genotype2: no combine_genotypes gates; every genotyped locus has a row in the numeric
+        # matrix (= "genotyped"), the final calls are its loci with >= 1 carrier (what annotate keeps)
+        unf, unf_cols = read_calls(os.path.join(rd, f'{P}.genotypes.csv.gz'))
+    joint = GIO.read_joint(os.path.join(rd, f'{P}.joint.tsv'))
     ann_header, ann_rows = read_tsv(os.path.join(rd, f'{P}.annotated.csv.gz'))
     ann = {r['locus']: r for r in ann_rows if 'locus' in r}
     fit = read_fit(args.eval) if args.eval else None
@@ -132,17 +137,34 @@ def main():
         if not m:
             return 'absent', ''
         gts = dict(zip(cols, calls[m[0]]))
-        called = {c for c, g in gts.items() if g in CARRIER}
+        called = {c for c, g in gts.items() if cell_bucket(g, calls.fmt) == GIO.PRESENT}
         hit = sorted(called & set(truth))
         miss = sorted(set(truth) - called)
         extra = sorted(called - set(truth))
-        miss_s = ','.join(f'{c}={gts.get(c, "not genotyped")}' for c in miss)
+        # legacy: the call string; numeric: P(carrier) ('no data' for an empty cell)
+        miss_s = ','.join(f'{c}={(gts.get(c, "not genotyped") or "no data")}' for c in miss)
         s = f'{m[0]} ({m[1]}): {len(hit)}/{len(truth)} carriers'
         if miss:
             s += f'; missed {miss_s}'
         if extra:
             s += f'; +{len(extra)} extra ({",".join(extra[:6])}{"..." if len(extra) > 6 else ""})'
         return s, m[0]
+
+    def joint_summary(locus, truth):
+        """genotype2 joint step's hypothesis for the matching locus, carriers vs the known ones."""
+        m = best(locus, joint.keys(), args.tol)
+        if not m:
+            return 'absent'
+        jr = joint[m[0]]
+        car = {c for c in jr.get('carriers', '').split(',') if c}
+        hit, miss, extra = car & set(truth), sorted(set(truth) - car), sorted(car - set(truth))
+        s = (f"{jr.get('best', '')} ({GIO.joint_class(jr)}, log10BF {jr.get('log10_bf_tree', '')}): "
+             f"{len(hit)}/{len(truth)} carriers")
+        if miss:
+            s += '; missed ' + ','.join('%s=%s' % (c, jr.get('p_' + c, '') or 'no data') for c in miss)
+        if extra:
+            s += f'; +{len(extra)} extra ({",".join(extra[:6])}{"..." if len(extra) > 6 else ""})'
+        return s
 
     trace, md_rows, detail = [], [], []
     matched_final = set()
@@ -200,6 +222,10 @@ def main():
         md_rows.append([loc, k.get('tier', ''), f"{k.get('subclass', '')}", len(car),
                         f'{len(disc_car)}/{len(car)}' + (f' ({len(no_file)} pending)' if no_file else ''),
                         ','.join(disc_other) or '0', mark(stages[1][1]), mark(stages[2][1]), su, sf, acls, lab or '-', lost])
+        if joint:   # genotype2 run dir: the joint step's hypothesis per known locus
+            sj = joint_summary(loc, car)
+            trace[-1]['joint'] = sj
+            md_rows[-1].insert(10, sj)
         detail.append((loc, disc_names, missed, other_names))
 
     # ---- potentially more: final calls matching no known locus
@@ -207,16 +233,19 @@ def main():
     for loc, gts in (fin or {}).items():
         if loc in matched_final:
             continue
-        n_car, inf, cc = carrier_class(gts, args.germline_frac)
+        n_car, inf, cc = carrier_class(gts, args.germline_frac, fin.fmt)
         if cc in ('germline-like', 'no carrier'):
             continue
         a = ann.get(loc, {})
         lab = labels.get(loc, '')
-        carriers = [c for c, g in zip(fin_cols, gts) if g in CARRIER]
+        carriers = [c for c, g in zip(fin_cols, gts) if cell_bucket(g, fin.fmt) == GIO.PRESENT]
         new.append({'locus': loc, 'kind': Locus(loc).kind, 'carriers': n_car, 'informative': inf, 'carrier_class': cc,
                     'class': a.get('class', ''), 'tprt_call': a.get('tprt_call', ''), 'tprt_score': a.get('tprt_score', ''),
                     'phylo_label': lab, 'phylo_bucket': bucket_label(lab) if lab else '',
                     'carrier_ids': ','.join(carriers)})
+        if joint:
+            jr = joint.get(loc)
+            new[-1]['joint'] = f"{jr.get('best', '')} ({GIO.joint_class(jr)})" if jr else ''
     new.sort(key=lambda r: (r['phylo_bucket'] != 'consistent', r['class'] not in RTE_CLASSES,
                             r['carrier_class'] != 'shared', -int(r['carriers'] or 0)))
 
@@ -232,7 +261,8 @@ def main():
            f'Discovery files: {len(per_colony)} colonies ({n_pending} still running). Discovery is pooled: a '
            f'locus found in any colony goes on to genotyping, which types every colony.', '',
            md_table(['known locus', 'tier', 'element', 'carriers', 'disc carriers', 'disc non-carriers', 'combined',
-                     'contract', 'genotyped (unfiltered)', 'final calls', 'annotation', 'phylo', 'lost at / status'], md_rows),
+                     'contract', 'genotyped (unfiltered)', 'final calls']
+                    + (['joint (genotype2)'] if joint else []) + ['annotation', 'phylo', 'lost at / status'], md_rows),
            '', '## Discovery detail', '',
            *[f'- **{loc}**: carrier names {", ".join(dn) or "-"}'
              + (f'; missed in {"; ".join(ms)}' if ms else '')

@@ -28,6 +28,11 @@ import re
 import subprocess
 import sys
 from src.config import CONFIG
+try:
+    from tools import genotype2_io as GIO
+except ImportError:          # run with tools/ but not the repo root importable
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import genotype2_io as GIO
 
 class RepeatMasker_Annotation:
     def __init__(self, line):
@@ -292,6 +297,7 @@ class Insertion:
         self.nins = 0
         self.nart = 0
         self.nwt = 0
+        self.joint = None   # genotype2 <patient>.joint.tsv row (dict) when that table was read
         self.right_dfams = []
         self.left_dfams = []
         self.right_maps = []
@@ -1258,10 +1264,27 @@ class VariantAnnotationContainer:
 
     def read_genotyping(self):
         """
-        This function read sthe genotyping file, calculates the number of tips with insertions, artefacts and wild-type calls, updates the Insertion object with these numbers and filteres insertions with at least one heterozygous or homozygous call.
+        Reads the patient genotype matrix (`<patient>.genotypes.csv.gz`, `;`-separated, rows =
+        loci), counts per locus the carrier / wild-type / artefact colonies (nins / nwt / nart)
+        and keeps the loci with at least one carrier. The format is auto-detected once per file
+        (tools/genotype2_io.matrix_format):
+          * legacy combine_genotypes call strings: carrier = present_calls(), wild-type =
+            `wild-type`, artefact = `artefact`;
+          * genotype2 joint-step numeric P(carrier): carrier at P >= GIO.P_CARRIER, wild-type at
+            P <= GIO.P_ABSENT_MATRIX, empty cell = no data; there is no artefact call (nart = 0).
+            When `<patient>.joint.tsv` sits next to the matrix, its per-locus verdict (best,
+            n_carriers, log10_bf_tree) is attached to each Insertion (`joint`) and written as
+            extra columns by write_table(); without it the output is unchanged.
         """
         print(f"reading genotyping file {self.genotyping_file}...")
         present = self.present_calls()
+        fmt = GIO.matrix_format(self.genotyping_file)
+        self.joint = {}
+        if fmt == GIO.FMT_NUMERIC:
+            jpath = GIO.joint_tsv_for(self.genotyping_file)
+            if jpath:
+                self.joint = GIO.read_joint(jpath)
+                print(f"numeric genotype matrix; joint table {jpath} ({len(self.joint)} loci)")
         titles = None
         with gzip.open(self.genotyping_file, 'rt') as ifh:
             for line in ifh:
@@ -1273,11 +1296,30 @@ class VariantAnnotationContainer:
                 line = line.split(";", maxsplit=len(titles))
                 title = line[0]
                 if title in self.insertions.keys():
-                    self.insertions[title].nins = sum([1 for gt in line if gt in present])
-                    self.insertions[title].nart = sum([1 for gt in line if gt == "artefact"])
-                    self.insertions[title].nwt = sum([1 for gt in line if gt == "wild-type"])
+                    cells = line[1:]
+                    ins = self.insertions[title]
+                    if fmt == GIO.FMT_NUMERIC:
+                        b = [GIO.p_carrier_bucket(c) for c in cells]
+                        ins.nins = b.count(GIO.PRESENT)
+                        ins.nart = 0
+                        ins.nwt = b.count(GIO.ABSENT)
+                        if self.joint:
+                            ins.joint = self.joint.get(title)
+                    else:
+                        ins.nins = sum([1 for gt in cells if gt in present])
+                        ins.nart = sum([1 for gt in cells if gt == "artefact"])
+                        ins.nwt = sum([1 for gt in cells if gt == "wild-type"])
         self.insertions = {key: value for key, value in self.insertions.items() if value.nins>0}
         print(f"imported genotypes, found {len(self.insertions)} insertions with one or more tips containing insertions.")
+
+    # peartree-genotype2 joint matrix thresholds live in tools/genotype2_io (kept as aliases).
+    P_CARRIER = GIO.P_CARRIER
+    JOINT_COLUMNS = ('best', 'n_carriers', 'log10_bf_tree')   # written as joint_<col>
+
+    @staticmethod
+    def _numeric_matrix(cells):
+        """True when every non-empty cell parses as a probability (the genotype2 joint matrix)."""
+        return GIO.cells_numeric(cells)
 
     @staticmethod
     def present_calls():
@@ -1686,6 +1728,10 @@ class VariantAnnotationContainer:
             # tools/rte columns (plans/tprt_hallmarks/SPEC.md), from the structured RteRecord
             rte_cols = next(iter(rte.values())).COLUMNS
             cols = cols + rte_cols
+        # genotype2 joint verdict, only when <patient>.joint.tsv was read (numeric matrix input)
+        joint = bool(getattr(self, 'joint', None))
+        if joint:
+            cols = cols + [f'joint_{c}' for c in self.JOINT_COLUMNS]
         n = 0
         with opener(path, 'wt') as fh:
             fh.write('\t'.join(cols) + '\n')
@@ -1705,6 +1751,8 @@ class VariantAnnotationContainer:
                 if rte:
                     rec = rte.get(key)
                     row += rec.row() if rec is not None else ['.'] * len(rte_cols)
+                if joint:
+                    row += [(getattr(ins, 'joint', None) or {}).get(c, '') or '.' for c in self.JOINT_COLUMNS]
                 fh.write('\t'.join(row) + '\n')
                 n += 1
         print(f"wrote annotation table ({n} loci) to {path}")
@@ -1713,6 +1761,8 @@ class VariantAnnotationContainer:
         for key, insertion in self.insertions.items():
             print(f"> insertion {key} found in {insertion.nins} tip{'s' if insertion.nins!=1 else ''} ({insertion.nwt}=wt, {insertion.nart}=art)")
             print(f" {insertion.conclusion()}")
+            if getattr(insertion, 'joint', None):
+                print("  JOINT: " + " ".join(f"{c}={insertion.joint.get(c, '')}" for c in self.JOINT_COLUMNS))
             site = insertion.site()
             if site is not None:
                 print(f"  SITE: {site[3]}")

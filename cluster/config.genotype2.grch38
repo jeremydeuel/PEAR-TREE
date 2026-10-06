@@ -1,0 +1,44 @@
+# peartree-genotype2 config for GRCh38 colony BAMs (realignment genotyper; plans/genotype_v2/SPEC.md).
+# Every key below is the binary's default except min_mapq-related ones, listed so the choice is
+# visible. Unknown keys warn and are ignored.
+
+# Reads: bwa-mem caps MAPQ at 60. A read below min_mapq is still used when it carries a soft clip
+# of >= min_clip_for_lowmapq bases facing a junction and MAPQ >= min_mapq_clipped: its MAPQ
+# reflects only the short aligned flank (the legacy genotyper's reference bias).
+min_mapq = 60
+min_mapq_clipped = 20
+min_clip_for_lowmapq = 20
+reads_for_high_coverage = 180
+
+# Haplotypes: genome flank per segment (>= read length + 100), ALT_FULL merge of the two junction
+# consensuses (short insertions), far-duplication threshold for retained reference junctions.
+flank = 300
+merge_overlap_min = 20
+dup_retained_min_span = 150
+
+# Aligner (natural-log likelihoods): gap costs in phred, cheaper gap opening inside homopolymers
+# (poly-A length jitter), soft-clipped read bases cost ln(clip_prob) each.
+gap_open_phred = 30
+gap_ext_phred = 10
+homopolymer_min_len = 4
+homopolymer_gap_open_phred = 13
+clip_prob = 0.25
+band_halfwidth = 32
+llr_informative = 4.6
+min_explained_frac = 0.8
+
+# Genotype model: background alt-read rate under absence, colony purity grid (uniform weights),
+# flat dosage prior. Discordant anchors are counted (n_disc) but carry no weight by default.
+bg_alt_rate = 0.005
+purity_grid = 1.0,0.9,0.8,0.7
+# shared alt-read fractions of the per-locus log-likelihood profile (pl_f010 .. pl_f200 columns): the joint
+# step's NOISE hypothesis = one fraction shared by every colony (mismapped paralogous reads, slippage)
+noise_frac_grid = 0.01,0.02,0.05,0.1,0.2
+prior = 0.333333,0.333333,0.333333
+disc_weight_nats = 0
+
+# I/O: the BAM is read through a 4 MiB seek-aware buffer; after a buffer miss the first read fetches
+# only io_fill_bytes (doubling while a query keeps streaming). Loci of a 17k contract sit several MiB
+# apart in a 100 GB BAM, so a fixed 4 MiB fill read 31 GB per colony on Lustre (PD37590, 12 min/colony).
+io_buffer_bytes = 4194304
+io_fill_bytes = 262144

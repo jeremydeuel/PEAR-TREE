@@ -26,13 +26,18 @@ bash "$DIR/run_e2e.sh"
 echo "[$(ts)] B. genotype every colony"
 [ -s "$OUT/genotype/tprt/S$SAMPLES.txt.gz" ] || bash "$DIR/run_genotype_e2e.sh"
 
-PH="$OUT/phylo"
+# genotype inputs, any format (auto-detected by tools/genotype2_io): default the legacy .tprt
+# genotyper + annotate's call matrix; for genotype2 (test/genotype2/bench.sh outputs) e.g.
+#   GENO_DIR=$OUT/genotype/v2 GENO_MATRIX=$OUT/genotype/v2_joint/P1.joint_matrix.csv.gz PH=$OUT/phylo_v2
+GENO_DIR="${GENO_DIR:-$OUT/genotype/tprt}"
+GENO_MATRIX="${GENO_MATRIX:-$OUT/annot/P1.genotypes.csv.gz}"
+PH="${PH:-$OUT/phylo}"
 mkdir -p "$PH"
 echo "[$(ts)] C. truth table (genotyped loci -> simulated events)"
-"$PY" "$DIR/phylo_truth.py" --e2e-dir "$OUT" --genotype-dir "$OUT/genotype/tprt" --out "$PH/truth.tsv"
+"$PY" "$DIR/phylo_truth.py" --e2e-dir "$OUT" --genotype-dir "$GENO_DIR" --out "$PH/truth.tsv"
 echo "[$(ts)] D. tree_fit (the farm interface)"
-"$PY" "$REPO/tools/phylo/tree_fit.py" --genotypes "$OUT/annot/P1.genotypes.csv.gz" \
-    --genotype-dir "$OUT/genotype/tprt" --tree "$OUT/donor/tree.nwk" \
+"$PY" "$REPO/tools/phylo/tree_fit.py" --genotypes "$GENO_MATRIX" \
+    --genotype-dir "$GENO_DIR" --tree "$OUT/donor/tree.nwk" \
     --annotation "$OUT/annot/P1.annotated.tsv" --out "$PH/fit" --sex F ${TREE_FIT_ARGS:-}
 echo "[$(ts)] E. calibration vs truth"
 "$PY" "$REPO/tools/phylo/calibration.py" --fit "$PH/fit" --truth "$PH/truth.tsv" --out "$PH/calibration" \

@@ -1,0 +1,27 @@
+[package]
+name = "peartree-genotype2"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.87"
+description = "PEAR-TREE genotyping step v2: realignment-based, phylogeny-aware SV/MEI genotyper"
+
+[[bin]]
+name = "peartree-genotype2"
+path = "src/main.rs"
+
+[dependencies]
+# same noodles line as peartree-genotype / peartree-discovery (one coherent pin, MSRV <= 1.87)
+noodles-bam = "0.80"
+noodles-sam = "0.76"
+noodles-bgzf = "0.40"
+noodles-core = "0.17"
+noodles-cram = "0.83"
+noodles-fasta = "0.53"
+flate2 = "1.0"
+rustc-hash = "2"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+debug = 1

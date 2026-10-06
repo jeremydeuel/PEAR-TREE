@@ -51,6 +51,7 @@ cargo --version
 
 cargo build --release --manifest-path rust/peartree-discovery/Cargo.toml
 cargo build --release --manifest-path rust/peartree-genotype/Cargo.toml
+cargo build --release --manifest-path rust/peartree-genotype2/Cargo.toml
 # combine_insertions port (only used with COMBINE_IMPL=rust; the python combine does not need
 # it, so a failure here must not block the discovery/genotype builds above)
 cargo build --release --manifest-path rust/peartree-combine/Cargo.toml \
@@ -60,6 +61,7 @@ echo
 echo "built:"
 ls -la rust/peartree-discovery/target/release/peartree-discovery
 ls -la rust/peartree-genotype/target/release/peartree-genotype
+ls -la rust/peartree-genotype2/target/release/peartree-genotype2
 ls -la rust/peartree-combine/target/release/peartree-combine 2>/dev/null || true
 
 # Report which OPTIONAL, CONFIG-GATED features this binary actually implements. A stale binary

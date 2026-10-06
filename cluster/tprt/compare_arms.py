@@ -46,6 +46,12 @@ import sys
 from collections import Counter, defaultdict
 from multiprocessing import Pool
 
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..')))
+from tools import genotype2_io as GIO  # noqa: E402  (stdlib-only part)
+
+# legacy call vocabulary (combine_genotypes matrix); a genotype2 numeric P(carrier) matrix is
+# bucketed by tools/genotype2_io instead: carrier at P >= GIO.P_CARRIER, wild-type at
+# P <= GIO.P_ABSENT_MATRIX, else ambiguous (cell_bucket below)
 CARRIER = {'heterozygous', 'homozygous', 'insertion'}
 WILDTYPE = {'wild-type', 'wild-type?', 'wildtype', 'wt'}
 LABEL_COLS = ('phylo_label', 'label', 'phylo_class', 'class_phylo', 'verdict', 'status', 'category',
@@ -203,25 +209,39 @@ def contract_loci(path):
     return out
 
 
-def read_calls(path):
-    """<P>.genotypes.csv.gz (';'-separated: insertion;<colony>...) -> {locus: Counter of calls}."""
-    if not path or not os.path.exists(path):
+class CallMatrix(dict):
+    """{locus: [cells]} of a patient matrix; `fmt` = GIO.FMT_CALLS (combine_genotypes strings) or
+    GIO.FMT_NUMERIC (genotype2 joint step, P(carrier) as written; '' = no data); `n_rows` = rows
+    in the file (before carriers_only)."""
+    fmt = GIO.FMT_CALLS
+    n_rows = 0
+
+
+def read_calls(path, carriers_only=False):
+    """<P>.genotypes.csv.gz (';'-separated, rows = loci), either format (auto-detected) ->
+    (CallMatrix {locus: [cells]}, colonies); (None, []) when missing. carriers_only (numeric
+    matrix only): keep the loci with >= 1 carrier colony -- the joint matrix has a row for every
+    genotyped locus (no combine_genotypes gates), and annotate keeps exactly these."""
+    fmt, colonies, rows = GIO.read_matrix(path)
+    if rows is None:
         return None, []
-    calls = {}
-    with gzip.open(path, 'rt') as fh:
-        header = fh.readline().rstrip('\n').split(';')
-        colonies = header[1:]
-        for line in fh:
-            f = line.rstrip('\n').split(';')
-            if not f or not f[0]:
-                continue
-            calls[f[0]] = f[1:]
+    calls = CallMatrix(rows)
+    calls.fmt, calls.n_rows = fmt, len(rows)
+    if carriers_only and fmt == GIO.FMT_NUMERIC:
+        for loc in [l for l, g in calls.items() if not any(cell_bucket(x, fmt) == GIO.PRESENT for x in g)]:
+            del calls[loc]
     return calls, colonies
 
 
-def carrier_class(gts, germline_frac):
-    n_car = sum(1 for g in gts if g in CARRIER)
-    n_wt = sum(1 for g in gts if g in WILDTYPE)
+def cell_bucket(g, fmt=GIO.FMT_CALLS):
+    """present / absent / ambiguous / no_data of one matrix cell (legacy: CARRIER / WILDTYPE)."""
+    return GIO.matrix_cell_bucket(g, fmt, CARRIER, WILDTYPE)
+
+
+def carrier_class(gts, germline_frac, fmt=GIO.FMT_CALLS):
+    b = [cell_bucket(g, fmt) for g in gts]
+    n_car = b.count(GIO.PRESENT)
+    n_wt = b.count(GIO.ABSENT)
     inf = n_car + n_wt
     if n_car == 0:
         return n_car, inf, 'no carrier'
@@ -314,6 +334,7 @@ class Arm:
         self.disc_union = set()
         self.contract = None
         self.calls, self.colonies = None, []
+        self.joint = {}
         self.ann = {}
         self.ann_header = None
         self.fit = None
@@ -365,15 +386,19 @@ class Arm:
             self.fail_reasons = reasons
         else:
             self.fail_reasons = Counter()
-        self.calls, self.colonies = read_calls(os.path.join(rd, f'{P}.genotypes.csv.gz'))
+        self.calls, self.colonies = read_calls(os.path.join(rd, f'{P}.genotypes.csv.gz'), carriers_only=True)
+        if self.calls is not None and self.calls.fmt == GIO.FMT_NUMERIC:
+            st['genotyped loci (numeric P(carrier) matrix, all rows)'] = self.calls.n_rows
         st['final calls (genotypes.csv.gz)'] = len(self.calls) if self.calls is not None else None
+        # genotype2 joint step's per-locus verdict (<P>.joint.tsv), when this arm ran it
+        self.joint = GIO.read_joint(os.path.join(rd, f'{P}.joint.tsv'))
         self.ann_header, rows = read_tsv(os.path.join(rd, f'{P}.annotated.csv.gz'))
         self.ann = {r['locus']: r for r in rows if 'locus' in r}
         st['annotated loci'] = len(self.ann) if self.ann_header else None
         self.carriers = {}
         if self.calls:
             for loc, gts in self.calls.items():
-                self.carriers[loc] = carrier_class(gts, args.germline_frac)
+                self.carriers[loc] = carrier_class(gts, args.germline_frac, self.calls.fmt)
         self.fit = read_fit(evaldir, args.label_col)
         self.lsf = lsf_reports(os.path.join(rd, 'logs'))
 
@@ -387,12 +412,15 @@ class Arm:
         a = self.ann.get(loc, {})
         n_car, inf, cc = self.carriers.get(loc, ('', '', ''))
         lab = self.label(loc)
+        j = self.joint.get(loc)
         return {'locus': loc, 'kind': Locus(loc).kind, 'class': a.get('class', ''),
                 'element': a.get('element', ''), 'structure': a.get('structure', ''),
                 'tags': a.get('tags', ''), 'tprt_score': a.get('tprt_score', ''),
                 'tprt_call': a.get('tprt_call', ''), 'carriers': n_car, 'informative': inf,
                 'carrier_class': cc, 'phylo_label': lab,
-                'phylo_bucket': bucket_label(lab) if lab != '' else ''}
+                'phylo_bucket': bucket_label(lab) if lab != '' else '',
+                'joint': (f"{j.get('best', '')} ({GIO.joint_class(j)}; log10BF {j.get('log10_bf_tree', '')})"
+                          if j else '')}
 
 
 # ------------------------------------------------------------------ report helpers
@@ -498,10 +526,32 @@ def main():
     md += [f'## Carriers and phylogeny', '',
            f'Carrier class from `<P>.genotypes.csv.gz` (carrier = heterozygous/homozygous/insertion; '
            f'informative = carrier + wild-type; germline-like = carriers >= {args.germline_frac:g} x informative).', '']
+    numeric = [x.name for x in arms if x.calls is not None and x.calls.fmt == GIO.FMT_NUMERIC]
+    if numeric:
+        md += [f'Arm(s) {", ".join(numeric)}: numeric genotype2 P(carrier) matrix (no call strings): carrier = '
+               f'P >= {GIO.P_CARRIER:g}, wild-type = P <= {GIO.P_ABSENT_MATRIX:g}, else ambiguous; final calls = '
+               'loci with >= 1 carrier (the matrix has no combine_genotypes gates).', '']
     for x in arms:
         cc = Counter(v[2] for v in x.carriers.values())
         md.append(f'- arm {x.name}: ' + ', '.join(f'{k} {v}' for k, v in sorted(cc.items())))
     md.append('')
+    for x in arms:
+        if not x.joint:
+            continue
+        # joint hypothesis of the final calls x carrier class (and x phylo bucket when tree_fit ran)
+        jt = defaultdict(Counter)
+        for loc in (x.calls or {}):
+            jr = x.joint.get(loc)
+            lab = x.label(loc)
+            jt[GIO.joint_class(jr) if jr else 'not in joint'][x.carriers[loc][2]] += 1
+            if x.fit:
+                jt[GIO.joint_class(jr) if jr else 'not in joint']['phylo ' + (bucket_label(lab) if lab else 'not in fit')] += 1
+        jc = ['private', 'shared', 'germline-like', 'no carrier'] + (
+            ['phylo consistent', 'phylo violating', 'phylo other', 'phylo not in fit'] if x.fit else [])
+        md += [f'Arm {x.name} genotype2 joint step (`{x.P}.joint.tsv`, {len(x.joint)} loci) on the final calls:', '',
+               md_table([f'arm {x.name} joint hypothesis'] + jc,
+                        [[k] + [jt[k].get(c, 0) for c in jc]
+                         for k in ('ROOT', 'clade', 'private', 'INDEP', 'NOISE', 'NA', 'not in joint') if k in jt]), '']
     for x in arms:
         if not x.fit:
             md += [f'Arm {x.name}: no phylo fit (`{os.path.join(x.evaldir or "", "fit", "phylo_fit.tsv")}` absent — '
@@ -564,6 +614,8 @@ def main():
         md += [md_table(['level', 'A', LB, 'matched', 'identical name', 'full', 'partial (one-sided)', 'A-only', f'{LB}-only'], ov), '']
         cols = ['locus', 'kind', 'class', 'element', 'structure', 'tags', 'tprt_score', 'tprt_call',
                 'carriers', 'informative', 'carrier_class', 'phylo_label', 'phylo_bucket']
+        if A.joint or B.joint:
+            cols.append('joint')
         for nm, arm, lst in ((f'{LB}-only', B, b_only), ('A-only', A, a_only)):
             rows = sorted((arm.row_for(l) for l in lst), key=score_key)
             write_tsv(os.path.join(args.out_dir, f'{nm[0].lower()}_only.tsv'), cols, [[r[c] for c in cols] for r in rows])
