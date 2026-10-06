@@ -32,6 +32,15 @@ pub struct Stats {
     pub disc_clusters: u64,
     pub disc_paired: u64,
     pub disc_rejected_rte: u64,
+    // `polya_rescue_min_fragments` counters (global). Serialised only when the key is on
+    // (`polya_floor_on`), so the default stats sidecar is unchanged.
+    pub polya_floor_on: bool,
+    /// join() poly-A rescues refused: the cluster's poly-A reads are < N fragments
+    pub pa_rescue_floor_rejected: u64,
+    /// Bp+polyA emissions refused: the poly-A-mate pool is < N fragments
+    pub pa_pair_floor_rejected: u64,
+    /// Feature A anchor/partner candidates skipped: < N fragments
+    pub disc_floor_rejected: u64,
 }
 
 impl Stats {
@@ -60,17 +69,29 @@ impl Stats {
         self.disc_clusters += other.disc_clusters;
         self.disc_paired += other.disc_paired;
         self.disc_rejected_rte += other.disc_rejected_rte;
+        self.pa_rescue_floor_rejected += other.pa_rescue_floor_rejected;
+        self.pa_pair_floor_rejected += other.pa_pair_floor_rejected;
+        self.disc_floor_rejected += other.disc_floor_rejected;
     }
 
     /// Serialise to JSON. The `left`/`right` field names match the Python keys
     /// exactly (incl. `rescued_pA`); the `discordant` block is a Rust-only addition
     /// for Feature A (Python has no equivalent), zero-valued unless enabled.
     pub fn to_json(&self) -> String {
+        let floor = if self.polya_floor_on {
+            format!(
+                ",\n  \"polya_rescue_floor\": {{\"rescue_rejected\": {}, \"pair_rejected\": {}, \"disc_rejected\": {}}}",
+                self.pa_rescue_floor_rejected, self.pa_pair_floor_rejected, self.disc_floor_rejected
+            )
+        } else {
+            String::new()
+        };
         format!(
-            "{{\n  \"left\": {},\n  \"right\": {},\n  \"discordant\": {}\n}}\n",
+            "{{\n  \"left\": {},\n  \"right\": {},\n  \"discordant\": {}{}\n}}\n",
             side_json(&self.left),
             side_json(&self.right),
-            self.discordant_json()
+            self.discordant_json(),
+            floor
         )
     }
 

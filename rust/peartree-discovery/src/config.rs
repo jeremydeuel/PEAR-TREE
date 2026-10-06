@@ -322,6 +322,16 @@ pub struct DiscoveryConfig {
     /// to the end of the read and never pass. 0 = off (legacy).
     pub one_sided_min_spanning_fragments: usize,
     pub one_sided_span_beyond: usize,
+    /// Poly-A rescue fragment floor: when > 0, every insertion end that rests on poly-A
+    /// rescue evidence needs >= this many DISTINCT fragments (qname hash; mates and
+    /// supplementaries of one template count once) -- the rule that BOTH ends of an
+    /// insertion are covered by >= 2 independent fragments each, enforced in discovery.
+    /// Applies to (1) the join() poly-A rescue of a lone / sub-floor clip cluster (fragments
+    /// among the cluster's poly-A reads), (2) the poly-A-mate end of a Bp+polyA emission
+    /// (fragments among the poly-A reads `pa_pool` gathers within `cluster_window`), and
+    /// (3) Feature A discordant rescue (anchor and sub-floor partner `n_frags`). A Bp whose
+    /// poly-A end fails is left exactly as if no poly-A read were in range. 0 = off (legacy).
+    pub polya_rescue_min_fragments: usize,
     /// SPEC-8b junction spare: a Bp+Bp pair is never SPEC-8b-rejected when either stored
     /// clip's first k junction-proximal bases are structured (no homopolymer >= 8, >= 3
     /// distinct bases). Rescues short-tag orphan transductions / short inserts whose long
@@ -423,6 +433,7 @@ impl Default for DiscoveryConfig {
             one_sided_min_polya: 10,
             one_sided_min_spanning_fragments: 0,
             one_sided_span_beyond: 10,
+            polya_rescue_min_fragments: 0,
             clip_slippage_junction_spare: 0,
             short_overhang_evidence: false,
             short_overhang_window: 3,
@@ -565,6 +576,7 @@ impl DiscoveryConfig {
             "one_sided_min_polya" => self.one_sided_min_polya = parse_num(val)?,
             "one_sided_min_spanning_fragments" => self.one_sided_min_spanning_fragments = parse_num(val)?,
             "one_sided_span_beyond" => self.one_sided_span_beyond = parse_num(val)?,
+            "polya_rescue_min_fragments" => self.polya_rescue_min_fragments = parse_num(val)?,
             "clip_slippage_junction_spare" => self.clip_slippage_junction_spare = parse_num(val)?,
             "short_overhang_evidence" => self.short_overhang_evidence = parse_bool(val)?,
             "short_overhang_window" => self.short_overhang_window = parse_num(val)?,
@@ -733,5 +745,13 @@ mod tests {
         assert!(set.contains("X"));
         assert!(set.contains("NC_000014.9"));
         assert!(!set.contains("3"));
+    }
+
+    #[test]
+    fn polya_rescue_min_fragments_default_off_and_parses() {
+        let mut c = DiscoveryConfig::default();
+        assert_eq!(c.polya_rescue_min_fragments, 0);
+        c.set("polya_rescue_min_fragments", "2").unwrap();
+        assert_eq!(c.polya_rescue_min_fragments, 2);
     }
 }

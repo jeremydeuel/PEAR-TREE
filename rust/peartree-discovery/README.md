@@ -119,6 +119,7 @@ the file. With no config the run is **byte-identical** to the pre-config port.
 | `exclude_same_contig_supplementary` | 1000 | supplementary-exclusion distance |
 | `cluster_window` / `tsd_min` / `tsd_max` (`max_bp_window`) | 6 / 2 / 40 | clustering + TSD-pairing windows |
 | `polya_near_dist` / `polya_far_dist` | 12 / 120 | polyA-rescue proximity band |
+| `polya_rescue_min_fragments` | 0 | Poly-A rescue fragment floor (both insertion ends need >= N independent fragments, enforced in discovery). When > 0: (1) the `join()` poly-A rescue of a lone / sub-floor clip cluster needs >= N distinct fragments among the cluster's poly-A reads; (2) a Bp+polyA emission needs >= N distinct fragments among the poly-A-mate reads pooled at that end (`cluster_window`) — on failure the Bp is treated exactly as if no poly-A read were in range; (3) Feature A anchor and sub-floor partner need `n_frags` >= N. Fragment = qname hash (mates / supplementaries of one template count once). Rejections in `stats.json` → `polya_rescue_floor` (block written only when on). 0 = off, byte-identical. Set to 2 in the `.tprt` configs |
 | `reject_fully_mapping_reads` | true | XA/SA full-map early reject. Env: `PEARTREE_KEEP_FULLMAP=1` |
 | `contig_allowlist` / `contig_allowlist_file` | none | SPEC-5/SENS-4 primary-assembly allowlist (comma list, or one name per line). When set, replaces the `len(name) <= 5` + not-MT heuristic — recovers RefSeq/T2T names like `NC_000014.9` |
 | `exclude_bed` | none | SPEC-5 BED of regions whose breakpoints are dropped |

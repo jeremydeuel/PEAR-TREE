@@ -249,6 +249,11 @@ pub fn join(mut breakpoints: Vec<Breakpoint>, cfg: &DiscoveryConfig, evidence_fl
         let bp = breakpoints.pop().unwrap();
         let side = bp.side;
         return match rescue_polya(bp) {
+            // poly-A rescue fragment floor: a lone read is ONE fragment
+            Rescue::Rescued(_) if cfg.polya_rescue_min_fragments > 1 => {
+                stats.pa_rescue_floor_rejected += 1;
+                None
+            }
             Rescue::Rescued(mut b) => {
                 stats.side_mut(side).rescued_pa += 1;
                 b.ev = solo_ev;
@@ -331,13 +336,24 @@ pub fn join(mut breakpoints: Vec<Breakpoint>, cfg: &DiscoveryConfig, evidence_fl
     if n < evidence_floor {
         // the sidecar keeps every read of the cluster on the rescued breakpoint
         let group_ev = merge_ev(&breakpoints, cfg);
+        let is_pa = |bp: &Breakpoint| {
+            (bp.side == CLIP_LEFT && bp.clipped.pyslice(Some(-8), None).eq_bytes(b"AAAAAAAA"))
+                || (bp.side == CLIP_RIGHT && bp.clipped.pyslice(None, Some(8)).eq_bytes(b"TTTTTTTT"))
+        };
+        // poly-A rescue fragment floor: distinct fragments among the cluster's poly-A reads
+        // (the reads the rescued breakpoint stands for)
+        let pa_frags_ok = cfg.polya_rescue_min_fragments == 0 || {
+            let f: Vec<u64> = breakpoints.iter().filter(|bp| is_pa(bp)).map(bp_frag).collect();
+            count_fragments(&f) >= cfg.polya_rescue_min_fragments
+        };
         // try polyA rescue on the individual breakpoints; first hit wins
         for bp in breakpoints.into_iter() {
-            let side_bp = bp.side;
-            let is_a = side_bp == CLIP_LEFT && bp.clipped.pyslice(Some(-8), None).eq_bytes(b"AAAAAAAA");
-            let is_t = side_bp == CLIP_RIGHT && bp.clipped.pyslice(None, Some(8)).eq_bytes(b"TTTTTTTT");
-            if is_a || is_t {
+            if is_pa(&bp) {
                 return match rescue_polya(bp) {
+                    Rescue::Rescued(_) if !pa_frags_ok => {
+                        stats.pa_rescue_floor_rejected += 1;
+                        None
+                    }
                     Rescue::Rescued(mut b) => {
                         stats.side_mut(side).rescued_pa += 1;
                         b.ev = group_ev;
@@ -566,6 +582,47 @@ mod tests {
         let b = join(g.clone(), &cfg(Some(1)), 1, &mut st).expect("floor 1 admits one fragment");
         assert_eq!(b.n_reads, 1);
         assert!(join(g, &cfg(Some(2)), 2, &mut st).is_none());
+    }
+
+    /// RIGHT-clipped poly-T (poly-A tail) read at 2000: clip = 10 T + structured tail
+    fn polyt_bp(qname: &str, read1: bool) -> Breakpoint {
+        let mut clip = vec![b'T'; 10];
+        clip.extend(dna(77, 20));
+        let mut b = bp(CLIP_RIGHT, 2000, qname, read1, true);
+        b.clipped = QualitySeq::new(clip, vec![30; 30]);
+        b
+    }
+
+    fn cfg_floor(frag: Option<usize>, n: usize) -> DiscoveryConfig {
+        DiscoveryConfig { polya_rescue_min_fragments: n, ..cfg(frag) }
+    }
+
+    #[test]
+    fn polya_rescue_floor_rejects_a_lone_read() {
+        let mut st = Stats::default();
+        let g = vec![polyt_bp("solo", true)];
+        // legacy: a lone poly-A read is rescued
+        assert!(join(g.clone(), &cfg_floor(None, 0), 2, &mut st).is_some());
+        assert_eq!((st.right.rescued_pa, st.pa_rescue_floor_rejected), (1, 0));
+        // floor 2: one fragment -> refused
+        assert!(join(g.clone(), &cfg_floor(None, 2), 2, &mut st).is_none());
+        assert_eq!((st.right.rescued_pa, st.pa_rescue_floor_rejected), (1, 1));
+        // floor 1 admits one fragment
+        assert!(join(g, &cfg_floor(None, 1), 2, &mut st).is_some());
+    }
+
+    #[test]
+    fn polya_rescue_floor_counts_distinct_fragments_of_the_subfloor_cluster() {
+        let mut st = Stats::default();
+        // fragment floor 3: two poly-A reads form a sub-floor cluster -> rescue path
+        let two = vec![polyt_bp("fragA", true), polyt_bp("fragB", true)];
+        assert!(join(two, &cfg_floor(Some(3), 2), 3, &mut st).is_some());
+        // two records of ONE template (mate / supplementary) are one fragment -> refused
+        let same = vec![polyt_bp("fragA", true), polyt_bp("fragA", false)];
+        assert!(join(same.clone(), &cfg_floor(Some(3), 2), 3, &mut st).is_none());
+        assert_eq!(st.pa_rescue_floor_rejected, 1);
+        // key off: legacy rescue
+        assert!(join(same, &cfg_floor(Some(3), 0), 3, &mut st).is_some());
     }
 
     #[test]

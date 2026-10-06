@@ -23,7 +23,7 @@ use crate::evidence::{
 use crate::exons::GeneModel;
 use crate::filters::{both_clips_slippage, clean_clipped_seq, is_adapter, is_low_complexity, is_slippage_clip, longest_homopolymer_run, mean_kmer_diversity};
 use crate::intervals::IntervalIndex;
-use crate::model::{join, Breakpoint};
+use crate::model::{count_fragments, join, Breakpoint};
 use crate::polya::PolyABreakpoint;
 use crate::qseq::{revcomp_bytes, QualitySeq};
 use crate::read::BamRead;
@@ -410,6 +410,9 @@ pub struct Discovery {
     /// TPRT sidecar: short-overhang candidate collector for the current contig (None
     /// unless `evidence_sidecar` && `short_overhang_evidence`).
     sc_short: Option<ShortCollector>,
+    /// `polya_rescue_min_fragments`: Bp+polyA emissions refused by `output` (stored, not
+    /// added, so the sidecar dry run of `output` does not double count).
+    pa_pair_floor_rejected: std::cell::Cell<u64>,
 }
 
 impl Discovery {
@@ -444,6 +447,7 @@ impl Discovery {
             bam_threads: bam_threads.max(1),
             sc_disc_tmp: Vec::new(),
             sc_short: None,
+            pa_pair_floor_rejected: std::cell::Cell::new(0),
         }
     }
 
@@ -542,7 +546,13 @@ impl Discovery {
 
     /// OBS-1 reject-counter sidecar, serialised as JSON.
     pub fn stats_json(&self) -> String {
-        self.stats.to_json()
+        if self.config.polya_rescue_min_fragments == 0 {
+            return self.stats.to_json();
+        }
+        let mut st = self.stats.clone();
+        st.polya_floor_on = true;
+        st.pa_pair_floor_rejected = self.pa_pair_floor_rejected.get();
+        st.to_json()
     }
 
     /// D3: install the RTE track used for the discordant mate-origin check.
@@ -1962,6 +1972,7 @@ impl Discovery {
 
     pub fn output<W: Write>(&self, writer: &mut W, hallmarks: &mut Vec<u8>, mut sc: Option<&mut Sidecar>) -> io::Result<()> {
         let cw = self.config.cluster_window;
+        let mut pa_rejected: u64 = 0;
         // SENS-5: hallmark annotation is non-gating — the FASTQ output below is
         // identical whether or not it is enabled; only this sidecar is added.
         let hm = self.config.hallmark_score;
@@ -2072,13 +2083,27 @@ impl Discovery {
             let mut pa_out_l: Vec<usize> = vec![usize::MAX; l.len()];
             let mut pa_out_r: Vec<usize> = vec![usize::MAX; r.len()];
             let (mut il, mut ir, mut ip) = (0usize, 0usize, 0usize);
+            // poly-A rescue fragment floor on the poly-A-mate end of a Bp+polyA emission
+            let pa_min = self.config.polya_rescue_min_fragments;
+            let pa_end_ok = |ip: usize| pa_min == 0 || pa_pool_fragments(&p, ip, cw) >= pa_min;
+            // breakpoints refused a poly-A end (a revisit of the same breakpoint counts once)
+            let (mut pa_rej_l, mut pa_rej_r) = (vec![false; l.len()], vec![false; r.len()]);
             while il < l.len() && ir < r.len() {
                 let tsd = r[ir].breakpoint - l[il].breakpoint;
                 if tsd < self.config.tsd_min {
                     while ip < p.len() && p[ip].breakpoint.unwrap() - l[il].breakpoint < self.config.polya_near_dist {
                         ip += 1;
                     }
-                    if ip != p.len() && p[ip].breakpoint.unwrap() - l[il].breakpoint < self.config.polya_far_dist && p[ip].clip == CLIP_RIGHT {
+                    if ip != p.len()
+                        && p[ip].breakpoint.unwrap() - l[il].breakpoint < self.config.polya_far_dist
+                        && p[ip].clip == CLIP_RIGHT
+                        && (pa_end_ok(ip) || {
+                            // the poly-A end is < N fragments: no emission, and the pointers
+                            // move exactly as when no poly-A read is in range
+                            pa_rej_l[il] = true;
+                            false
+                        })
+                    {
                         used_l[il] = 1;
                         pa_out_l[il] = outs.len();
                         outs.push(Out {
@@ -2097,7 +2122,14 @@ impl Discovery {
                     while ip < p.len() && r[ir].breakpoint - p[ip].breakpoint.unwrap() > self.config.polya_far_dist {
                         ip += 1;
                     }
-                    if ip != p.len() && r[ir].breakpoint - p[ip].breakpoint.unwrap() > self.config.polya_near_dist && p[ip].clip == CLIP_LEFT {
+                    if ip != p.len()
+                        && r[ir].breakpoint - p[ip].breakpoint.unwrap() > self.config.polya_near_dist
+                        && p[ip].clip == CLIP_LEFT
+                        && (pa_end_ok(ip) || {
+                            pa_rej_r[ir] = true;
+                            false
+                        })
+                    {
                         used_r[ir] = 1;
                         pa_out_r[ir] = outs.len();
                         outs.push(Out {
@@ -2134,6 +2166,7 @@ impl Discovery {
                     ir += 1;
                 }
             }
+            pa_rejected += pa_rej_l.iter().chain(&pa_rej_r).filter(|&&x| x).count() as u64;
             if self.config.extra_pairing() {
                 self.extra_pairs(&l, &r, &mut used_l, &mut used_r, &pa_out_l, &pa_out_r, &mut outs);
             }
@@ -2150,6 +2183,7 @@ impl Discovery {
                 print_output(writer, o.left, o.right)?;
             }
         }
+        self.pa_pair_floor_rejected.set(pa_rejected);
         Ok(())
     }
 
@@ -2233,6 +2267,10 @@ impl Discovery {
         let in_window = |gap: i64| gap >= tsd_min && gap <= tsd_max;
         let anchor_min = self.config.discordant_min_anchor_reads;
         let partner_min = self.config.discordant_partner_min_reads;
+        // `polya_rescue_min_fragments`: both ends of a rescued call need >= N fragments
+        // (anchor and sub-floor partner `n_frags`); 0 = off (legacy)
+        let frag_min = self.config.polya_rescue_min_fragments;
+        let mut floor_rejected: u64 = 0;
 
         let by_contig = |bps: &[Breakpoint]| {
             let mut m: FxHashMap<String, Vec<usize>> = FxHashMap::default();
@@ -2251,13 +2289,13 @@ impl Discovery {
         contigs.dedup();
 
         // strongest sub-floor clip of the given side within [lo, hi] (sorted-by-pos input).
-        fn pick_partner<'a>(sorted: &[&'a Breakpoint], lo: i64, hi: i64, min_reads: usize) -> Option<&'a Breakpoint> {
+        fn pick_partner<'a>(sorted: &[&'a Breakpoint], lo: i64, hi: i64, min_reads: usize, min_frags: usize) -> Option<&'a Breakpoint> {
             let start = sorted.partition_point(|b| b.breakpoint < lo);
             let mut best: Option<&'a Breakpoint> = None;
             let mut i = start;
             while i < sorted.len() && sorted[i].breakpoint <= hi {
                 let b = sorted[i];
-                if b.n_reads >= min_reads && best.map_or(true, |cur| b.n_reads > cur.n_reads) {
+                if b.n_reads >= min_reads && b.n_frags >= min_frags && best.map_or(true, |cur| b.n_reads > cur.n_reads) {
                     best = Some(b);
                 }
                 i += 1;
@@ -2291,6 +2329,10 @@ impl Discovery {
                 if lb.n_reads < anchor_min {
                     continue;
                 }
+                if lb.n_frags < frag_min {
+                    floor_rejected += 1;
+                    continue;
+                }
                 if r.iter().any(|rb| in_window(rb.breakpoint - lb.breakpoint)) {
                     continue;
                 }
@@ -2305,7 +2347,12 @@ impl Discovery {
                 if is_low_complexity(&lb.unclipped.seq, 0.8) {
                     continue;
                 }
-                if let Some(mb) = pick_partner(&sr, lb.breakpoint + tsd_min, lb.breakpoint + tsd_max, partner_min) {
+                let (lo, hi) = (lb.breakpoint + tsd_min, lb.breakpoint + tsd_max);
+                let pick = pick_partner(&sr, lo, hi, partner_min, frag_min);
+                if pick.is_none() && frag_min > 0 && pick_partner(&sr, lo, hi, partner_min, 0).is_some() {
+                    floor_rejected += 1;
+                }
+                if let Some(mb) = pick {
                     if is_low_complexity(&mb.unclipped.seq, 0.8) {
                         continue;
                     }
@@ -2321,6 +2368,10 @@ impl Discovery {
                 if rb.n_reads < anchor_min {
                     continue;
                 }
+                if rb.n_frags < frag_min {
+                    floor_rejected += 1;
+                    continue;
+                }
                 if l.iter().any(|lb| in_window(rb.breakpoint - lb.breakpoint)) {
                     continue;
                 }
@@ -2330,7 +2381,12 @@ impl Discovery {
                 if is_low_complexity(&rb.unclipped.seq, 0.8) {
                     continue;
                 }
-                if let Some(mb) = pick_partner(&sl, rb.breakpoint - tsd_max, rb.breakpoint - tsd_min, partner_min) {
+                let (lo, hi) = (rb.breakpoint - tsd_max, rb.breakpoint - tsd_min);
+                let pick = pick_partner(&sl, lo, hi, partner_min, frag_min);
+                if pick.is_none() && frag_min > 0 && pick_partner(&sl, lo, hi, partner_min, 0).is_some() {
+                    floor_rejected += 1;
+                }
+                if let Some(mb) = pick {
                     if is_low_complexity(&mb.unclipped.seq, 0.8) {
                         continue;
                     }
@@ -2343,6 +2399,7 @@ impl Discovery {
             }
         }
         self.stats.disc_paired = paired;
+        self.stats.disc_floor_rejected = floor_rejected;
         Ok(())
     }
 
@@ -2563,6 +2620,13 @@ fn build_requests(ev: &EvExtra, target: Target, idx: u32, ref_id: i32, fetch_all
             .unwrap_or((-1, -1, -1));
         out.push(req(hash, r12, ReqKind::Mate, -1, -1, false, at));
     }
+}
+
+/// Distinct fragments (qname hash) among the poly-A reads `pa_pool` gathers at `p[ip]`: the
+/// support of a Bp+polyA emission's poly-A end (`polya_rescue_min_fragments`).
+fn pa_pool_fragments(p: &[&PolyABreakpoint], ip: usize, window: i64) -> usize {
+    let f: Vec<u64> = pa_pool(p, ip, window).iter().map(|q| frag_hash(q.qname.as_bytes())).collect();
+    count_fragments(&f)
 }
 
 /// Poly-A reads pooled at an emitted poly-A end: `p[ip]` first, then every other poly-A
@@ -2991,6 +3055,61 @@ mod tests {
         let lh = fbp(CLIP_LEFT, 1000, &[b'T'; 60], 3);
         assert!(d.spec8b_rejects(&lh, &rb));
         let _ = legacy;
+    }
+
+    /// poly-A-mate read (RIGHT poly-A end) anchored at `pos`
+    fn pa_read(qname: &str, pos: i64) -> PolyABreakpoint {
+        PolyABreakpoint {
+            polya: true,
+            qname: qname.into(),
+            is_forward: true,
+            is_read1: false,
+            reference_name: Some("1".into()),
+            breakpoint: Some(pos),
+            clipped: Some(QualitySeq::new(vec![b'A'; 20], vec![30; 20])),
+            clip: CLIP_RIGHT,
+            ev: None,
+            sc: None,
+            sc_mate_routed: false,
+        }
+    }
+
+    /// LEFT Bp at 1000 (+ an unrelated RIGHT Bp at 900 that drives the pairing loop) and
+    /// the given poly-A-mate reads; returns (emitted loci, pairs refused by the floor).
+    fn run_pa_pairing(floor: usize, pa: Vec<PolyABreakpoint>) -> (Vec<String>, u64) {
+        let c = DiscoveryConfig { polya_rescue_min_fragments: floor, ..DiscoveryConfig::default() };
+        let mut d = Discovery::new(String::new(), 1, c, None, None);
+        d.final_left_breakpoints.push(fbp(CLIP_LEFT, 1000, &dna(3, 30), 3));
+        d.final_right_breakpoints.push(fbp(CLIP_RIGHT, 900, &dna(4, 30), 3));
+        d.polya = pa;
+        let (mut out, mut hm) = (Vec::new(), Vec::new());
+        d.output(&mut out, &mut hm, None).unwrap();
+        let names: Vec<String> = String::from_utf8(out)
+            .unwrap()
+            .lines()
+            .filter(|l| l.starts_with('@') && l.contains(":LEFT:CLIPPED"))
+            .map(|l| l.to_string())
+            .collect();
+        (names, d.pa_pair_floor_rejected.get())
+    }
+
+    #[test]
+    fn polya_pair_floor_needs_n_distinct_fragments_at_the_polya_end() {
+        // a lone poly-A read 50 bp downstream: paired legacy, refused at floor 2
+        let (n0, r0) = run_pa_pairing(0, vec![pa_read("q1", 1050)]);
+        assert_eq!((n0.len(), r0), (1, 0));
+        let (n2, r2) = run_pa_pairing(2, vec![pa_read("q1", 1050)]);
+        assert_eq!((n2.len(), r2), (0, 1));
+        // two distinct fragments in the pool -> kept
+        let (n, r) = run_pa_pairing(2, vec![pa_read("q1", 1050), pa_read("q2", 1053)]);
+        assert_eq!((n.len(), r), (1, 0));
+        // two records of ONE template (mate / supplementary) -> one fragment, refused
+        let (n, r) = run_pa_pairing(2, vec![pa_read("q1", 1050), pa_read("q1", 1053)]);
+        assert_eq!((n.len(), r), (0, 1));
+        // the floor output is the legacy output when every poly-A end passes
+        let (a, _) = run_pa_pairing(0, vec![pa_read("q1", 1050), pa_read("q2", 1053)]);
+        let (b, _) = run_pa_pairing(2, vec![pa_read("q1", 1050), pa_read("q2", 1053)]);
+        assert_eq!(a, b);
     }
 
     #[test]
