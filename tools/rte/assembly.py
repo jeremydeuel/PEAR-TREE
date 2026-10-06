@@ -578,9 +578,41 @@ class AssemblyResult:
         return res
 
     @staticmethod
+    def _strand_from_polya(layouts, min_run=10):
+        """Element strand from a poly-A tail seen in the reads at a breakpoint (reference-
+        forward): A-run | REF = + element (3' end at the LEFT junction), REF | T-run = - element.
+        The junction strings may carry no poly-A (combine trimmed it / the evidence row is
+        missing) while a clip read still shows it. Unanimous votes only (any opposite-strand
+        tail, e.g. slippage on both sides, leaves the strand to the element segments).
+        Returns (strand, [tail length per voting read]) or (0, [])."""
+        votes = {1: set(), -1: set()}
+        lens = {1: [], -1: []}
+        for lay in layouts:
+            segs = lay.segments
+            for i, s in enumerate(segs):
+                if s.kind != "POLYA" or s.qlen < min_run:
+                    continue
+                base = s.target or ("A" if s.strand >= 0 else "T")
+                if base == "A" and i + 1 < len(segs) and segs[i + 1].kind == "REF":
+                    votes[1].add(lay.frag_key)
+                    lens[1].append(s.qlen)
+                elif base == "T" and i > 0 and segs[i - 1].kind == "REF":
+                    votes[-1].add(lay.frag_key)
+                    lens[-1].append(s.qlen)
+        for st in (1, -1):
+            if votes[st] and not votes[-st]:
+                return st, lens[st]
+        return 0, []
+
+    @staticmethod
     def _strand_from_segments(layouts, consensus, lib):
-        """Fallback element strand: majority (bp) strand of element segments adjacent to a
-        junction REF, else of all element segments of the chosen class."""
+        """Fallback element strand: a poly-A tail at a breakpoint in the reads (it marks the 3'
+        end; an element piece next to REF can be the INVERTED 5' part of a twin-primed insert
+        and point the wrong way), else the majority (bp) strand of element segments adjacent to
+        a junction REF, else of all element segments of the chosen class."""
+        pst, _lens = AssemblyResult._strand_from_polya(layouts)
+        if pst:
+            return pst, "polya_reads"
         cls_ = lib.cons_class.get(consensus) if consensus else None
         adj = Counter()
         allc = Counter()

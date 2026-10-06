@@ -194,6 +194,15 @@ class RteAnnotator:
         hint = (pa.strand, pa.source) if pa.strand else None
         asm = self.assembler.assemble(ctx, junction_seqs, reads, hint)
         strand = asm.strand
+        if not pa.strand and asm.strand_source == "polya_reads":
+            # the junction strings carry no poly-A but clip reads do (A-run | REF): that tail set
+            # the strand, so it is also the poly-A hallmark (median run over the voting reads;
+            # a read can end inside the tail, so this is a lower bound)
+            _st, lens = asm._strand_from_polya(asm.raw_layouts)
+            if lens and _st == strand:
+                lens = sorted(lens)
+                pa.strand, pa.source = strand, "polya_reads"
+                pa.length = float(lens[len(lens) // 2])
         en_motif(site, strand, self.genome)
         slippage_context(site, strand, self.genome)
         # pseudogene proof

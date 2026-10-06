@@ -12,7 +12,8 @@ structure (needs a read/consensus crossing the 5' junction, else 5P_UNRESOLVED):
                        Kazazian 2001). p2 = its consensus end at the flank; p1 = start of the
                        forward part (from a read crossing the inversion point, else the lowest
                        sense coordinate); junction = p1 - p2 (>0 deletion, <0 duplication,
-                       Zumalave 2026 i-del / i-dup)
+                       Zumalave 2026 i-del / i-dup). Only the inverted piece sequenced (no sense
+                       piece at all): p1 unknown, detail inv_junction=unresolved
   INVERTED_5P_SWITCH   as INVERTED_5P with >= 2 distinct orientation-switch points (twin priming
                        + template switch)
 
@@ -431,6 +432,10 @@ def _inversion(call, res, j5, lib, c):
         d = p1 - p2
         call.detail["inv_junction"] = (f"del{d}" if d > 0 else (f"dup{-d}" if d < 0 else "blunt"))
         call.detail["inv_exact"] = int(inner is not None)
+    else:
+        # only the inverted piece (+ poly-A) was sequenced: the forward part and hence the
+        # inversion point / i-del size are unknown -- say so instead of guessing
+        call.detail["inv_junction"] = "unresolved"
     if inner is not None and abs(inner[0] - inner[1]) <= c["foldback_tolerance"]:
         call.add("FOLDBACK_INVDUP_5P")
 
