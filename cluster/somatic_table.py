@@ -173,6 +173,57 @@ def write_xlsx(path, sheets):
             z.writestr(f"xl/worksheets/sheet{i + 1}.xml", sheet_xml(rows, widths, freeze=is_table, autofilter=is_table))
 
 
+# ------------------------------------------------------------------ combine outputs
+def read_consensus(path, wanted):
+    """combined.txt.gz (FASTQ, titles <locus>:L / <locus>:R) -> {(locus, 'L'|'R'): seq}"""
+    out = {}
+    if not path or not os.path.exists(path):
+        return out
+    with gzip.open(path, "rt") as fh:
+        while True:
+            t = fh.readline()
+            if not t:
+                break
+            seq = fh.readline().strip()
+            fh.readline()
+            fh.readline()
+            name = t.strip()[1:]
+            loc, _, side = name.rpartition(":")
+            if loc in wanted and side in ("L", "R"):
+                out[(loc, side)] = seq
+    return out
+
+
+def read_evidence(path, wanted):
+    """insertions.evidence.tsv.gz -> {(locus, 'L'|'R'): row} (side LEFT/RIGHT mapped to L/R)"""
+    out = {}
+    for r in read_tsv(path):
+        loc = r.get("insertion_id", "")
+        if loc in wanted:
+            side = {"LEFT": "L", "RIGHT": "R"}.get(r.get("side", "").upper(), r.get("side", ""))
+            out.setdefault((loc, side), r)
+    return out
+
+
+def read_reads(path, wanted):
+    """insertions.reads.fa.gz (>locus|side|role|sample|frag|r12) -> {locus: [(side, role, sample, frag, r12, seq)]}"""
+    out = collections.defaultdict(list)
+    if not path or not os.path.exists(path):
+        return out
+    with gzip.open(path, "rt") as fh:
+        head = None
+        for line in fh:
+            line = line.rstrip("\n")
+            if line.startswith(">"):
+                head = line[1:].split("|")
+            elif head is not None:
+                if head[0] in wanted:
+                    h = head + [""] * (6 - len(head))
+                    out[head[0]].append((h[1], h[2], h[3], h[4], h[5], line))
+                head = None
+    return out
+
+
 # ------------------------------------------------------------------ main
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -184,6 +235,10 @@ def main():
     ap.add_argument("--annotation", help="annotate_v2 table <P>.annotated.csv.gz")
     ap.add_argument("--known", help="patients/<organ>/<P>/known_insertions.tsv")
     ap.add_argument("--refbias", help="joint reference-bias table (<P>.joint.refbias.tsv)")
+    ap.add_argument("--insertions-dir",
+                    help="combine output dir: adds clip consensus (<P>.combined.txt.gz), per-side evidence "
+                         "(<P>.insertions.evidence.tsv.gz) and a reads sheet with every clipped read and mate "
+                         "(<P>.insertions.reads.fa.gz)")
     ap.add_argument("--min-p", type=float, default=0.9, help="carrier P(carrier) for tiers B/C (0.9 = annotate_v2's)")
     ap.add_argument("--out", required=True, help="output .xlsx")
     a = ap.parse_args()
@@ -220,6 +275,15 @@ def main():
         if os.path.exists(p):
             gt[c] = {g["locus"]: g for g in read_tsv(p) if g["locus"] in cand}
 
+    cons, evid, reads_by = {}, {}, {}
+    if a.insertions_dir:
+        stem = os.path.join(a.insertions_dir, a.patient)
+        cons = read_consensus(stem + ".combined.txt.gz", cand)
+        evid = read_evidence(stem + ".insertions.evidence.tsv.gz", cand)
+        reads_by = read_reads(stem + ".insertions.reads.fa.gz", cand)
+        print(f"combine outputs: consensus for {len({k[0] for k in cons})} loci, evidence for "
+              f"{len({k[0] for k in evid})}, reads for {len(reads_by)} ({sum(map(len, reads_by.values()))} reads)")
+
     header = ["tier", "locus", "chrom", "start", "end", "kind", "source", "known", "known_carriers",
               "joint_class", "joint_best", "n_carriers", "carriers", "min_P_carrier", "post_best", "log10_bf_tree",
               "carrier_reads (alt/ref/uninf)", "carrier_vaf_mean", "alt_reads_in_noncarriers", "n_noncarriers_with_alt",
@@ -227,7 +291,11 @@ def main():
               "treefit_legacy_class", "treefit_legacy_label", "treefit_legacy_carriers",
               "element_class", "element", "tprt_call", "tprt_score", "tsd_len", "tsd_seq", "polya_len",
               "left_polyA", "right_polyA", "en_motif", "structure", "element_identity", "nearest_active",
-              "site_region", "site_gene", "site_strand", "conclusion"]
+              "site_region", "site_gene", "site_strand", "conclusion",
+              "L_n_reads", "L_n_fragments", "L_n_samples", "L_n_mates", "L_polya_len", "L_beyond_polya",
+              "R_n_reads", "R_n_fragments", "R_n_samples", "R_n_mates", "R_polya_len", "R_beyond_polya",
+              "reads_by_role", "L_junction (REF upper | clip lower)", "R_junction (REF upper | clip lower)",
+              "L_clip_consensus", "R_clip_consensus"]
     rows = []
     for loc, src in cand.items():
         j = joint.get(loc, {})
@@ -282,11 +350,12 @@ def main():
                      clean(an.get("en_motif", "")), clean(an.get("structure", "")),
                      num(clean(an.get("element_identity", ""))), clean(an.get("nearest_active", "")),
                      clean(an.get("site_region", "")), clean(an.get("site_gene", "")), clean(an.get("site_strand", "")),
-                     clean(an.get("conclusion", ""))])
+                     clean(an.get("conclusion", ""))] + side_cols(loc, evid, cons, reads_by))
     rank = {"A": 0, "B": 1, "C": 2, "D": 3}
     rows.sort(key=lambda r: (rank[r[0]], -(r[11] or 0), -(fnum(r[29], 0)), r[1]))
     widths = [5, 28, 7, 11, 11, 18, 10, 7, 30, 10, 16, 6, 40, 9, 9, 9, 50, 9, 9, 9,
-              18, 16, 30, 18, 16, 30, 18, 18, 12, 8, 7, 14, 8, 6, 6, 9, 14, 9, 14, 14, 14, 6, 60]
+              18, 16, 30, 18, 16, 30, 18, 18, 12, 8, 7, 14, 8, 6, 6, 9, 14, 9, 14, 14, 14, 6, 60,
+              7, 7, 7, 7, 7, 9, 7, 7, 7, 7, 7, 9, 30, 60, 60, 50, 50]
 
     tier_n = collections.Counter(r[0] for r in rows)
     readme = [["PEAR-TREE somatic insertion candidates", a.patient],
@@ -313,16 +382,46 @@ def main():
                             "private, noise, uninformative_depth) and label (phylo_consistent / ambiguous / phylo_violating)"],
               ["element_class ... conclusion", "annotate_v2 on the legacy run (only loci with a legacy het/hom call are annotated; "
                                                "'(not annotated)' otherwise)"],
-              ["tprt_call / tprt_score", "TPRT hallmark call (TPRT, LIKELY_TPRT, UNCERTAIN, ...) and score"]]
+              ["tprt_call / tprt_score", "TPRT hallmark call (TPRT, LIKELY_TPRT, UNCERTAIN, ...) and score"],
+              ["L_/R_ n_reads ... beyond_polya", "combine evidence per insertion end (L = left junction, R = right): reads, "
+                                                 "distinct fragments, colonies, mates, median poly-A length, sequence beyond the poly-A"],
+              ["L_/R_junction", "combine junction consensus: reference flank in UPPER case, clipped (inserted) sequence in lower case"],
+              ["L_/R_clip_consensus", "the clip consensus written to <P>.combined.txt.gz"],
+              ["reads sheet", "every read combine kept for the locus (<P>.insertions.reads.fa.gz): side, role (CLIP = split read at "
+                              "the junction, POLYA, DISC = discordant pair, SPAN, SHORT, MATE = the mate of an evidence read), "
+                              "colony, whether that colony is a joint carrier, fragment id, read 1/2, sequence in allele-forward "
+                              "orientation. Filter by locus"]]
     sheets = [("README", readme, [26, 120], False), ("somatic", [header] + rows, widths, True)]
     krows = [r for r in rows if r[0] == "A"]
     sheets.append(("known", [header] + krows, widths, True))
+    if reads_by:
+        order = {r[1]: (i, r[0], r[12]) for i, r in enumerate(rows)}
+        rr = [["tier", "locus", "side", "role", "colony", "joint_carrier", "fragment", "read", "length", "sequence"]]
+        for loc in sorted(reads_by, key=lambda x: order.get(x, (10 ** 9, "", ""))[0]):
+            _, tier, car = order.get(loc, (0, "", ""))
+            cs = set(car.split(",")) if car else set()
+            for side, role, sample, frag, r12, seq in sorted(reads_by[loc], key=lambda r: (r[0], r[1] != "CLIP", r[1], r[2])):
+                rr.append([tier, loc, side, role, sample, "yes" if sample in cs else "no", frag, r12, len(seq), seq])
+        sheets.append(("reads", rr, [5, 28, 7, 7, 18, 8, 18, 5, 7, 160], True))
     rb = read_tsv(a.refbias)
     if rb:
         h = list(rb[0].keys())
         sheets.append(("refbias", [h] + [[num_or(r[c]) for c in h] for r in rb], [10, 22] + [12] * (len(h) - 2), True))
     write_xlsx(a.out, sheets)
     print(f"wrote {a.out}: {len(rows)} loci ({', '.join(f'{t} {tier_n.get(t, 0)}' for t in TIERS)})")
+
+
+def side_cols(loc, evid, cons, reads_by):
+    out = []
+    for side in ("L", "R"):
+        e = evid.get((loc, side), {})
+        out += [num_or(e.get("n_reads", "")), num_or(e.get("n_fragments", "")), num_or(e.get("n_samples", "")),
+                num_or(e.get("n_mates", "")), num_or(e.get("polya_len_median", "")), e.get("beyond_polya", "")]
+    roles = collections.Counter(f"{r[0]}:{r[1]}" for r in reads_by.get(loc, []))
+    out.append(", ".join(f"{k} {v}" for k, v in sorted(roles.items())))
+    out += [evid.get((loc, "L"), {}).get("clip_consensus", ""), evid.get((loc, "R"), {}).get("clip_consensus", ""),
+            cons.get((loc, "L"), ""), cons.get((loc, "R"), "")]
+    return out
 
 
 def num_or(x):
