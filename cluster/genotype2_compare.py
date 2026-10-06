@@ -446,8 +446,9 @@ def main():
         ['alt reads in v2 only', alt_v2_only],
     ]))
     R.append('')
-    R.append('v2 counts the whole pileup (depth), including reads that are uninformative for the junction; '
-             'legacy `coverage` counted MAPQ >= 60 reads overlapping the ±1 bp register only.')
+    R.append('The two denominators differ: v2 `depth` = primary, mapped, non-duplicate reads overlapping the '
+             'breakpoint window(s) (PD37590: ~13 reads fewer per cell than legacy `coverage`, which also counted '
+             'reads near the locus that never reach the junction register and are neither alt nor ref).')
     R.append('')
 
     # ------------------------------------------------------------------ discordant cells
