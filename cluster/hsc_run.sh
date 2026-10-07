@@ -26,7 +26,8 @@
 # Layout:  $HSC_ROOT/<P>/<P>/      pipeline run dir (discovery/ insertions/ genotypes/ fit/ logs/ ...)
 #          $HSC_ROOT/tmp/<P>/      annotate scratch
 #          $HOME/results/hsc/<P>/  NFS copies: calls, joint table, annotation, <P>.somatic.xlsx
-# Env overrides: HSC_ROOT, VENV, HSC_ASSEMBLY, KEEP_BAMS=1 (skip the staged-BAM cleanup), plus every
+# Env overrides: HSC_ROOT, VENV, HSC_ASSEMBLY, KEEP_BAMS=1 (skip the staged-BAM cleanup),
+# PT_RESTAGE=1 (drop each BAM after discovery, stage it again for genotyping: large patients), plus every
 # pipeline.sh knob (GT_THROTTLE, CI_MEM, ...).
 # =============================================================================
 set -euo pipefail
@@ -165,6 +166,21 @@ cmd_submit() {
     local n; n=$(grep -c . "$W/samples.tsv" || true)
     [ "$n" -gt 0 ] || die "fleet.sh samples $P listed no $asm WGS colonies"
     note "$P: $n $asm WGS samples -> $W/samples.tsv"
+    # capacity: without PT_RESTAGE every BAM stays staged until genotyping ends (~25 GB per colony
+    # at ~15-30x). Refuse a run that cannot fit the team's free Lustre quota (PD49229: 722 colonies
+    # ~17 TB vs 8.2 TB free, 2026-10-07); PT_RESTAGE=1 bounds the peak to the running jobs.
+    if [ "${PT_RESTAGE:-0}" != 1 ]; then
+        local need_tb free_tb
+        need_tb=$(awk -v n="$n" -v g="${HSC_GB_PER_BAM:-25}" 'BEGIN { printf "%.1f", n * g / 1000 }')
+        free_tb=$(lfs quota -g team273 /lustre/scratch126 2>/dev/null \
+            | awk 'NR==3 && NF>=4 { printf "%.1f", ($4 - $2) / 1e9 } NR==4 && NF>=3 { printf "%.1f", ($3 - $1) / 1e9 }')
+        if [ -n "$free_tb" ] && awk -v a="$need_tb" -v b="$free_tb" 'BEGIN { exit !(a > b * 0.9) }'; then
+            die "$P: ~$need_tb TB staged at peak but team273 has $free_tb TB free -- rerun with PT_RESTAGE=1 (re-stage per genotype job)"
+        fi
+        note "capacity: ~$need_tb TB staged at peak, ${free_tb:-?} TB free"
+    else
+        note "PT_RESTAGE=1: each BAM is dropped after discovery and staged again for genotyping"
+    fi
     (export PT_ASSEMBLY="$asm"; cd "$PT_ROOT" && "$VENV/bin/python" -c "import sys; sys.path.insert(0, 'cluster/tprt'); \
 import arm_config; print(arm_config.describe('B'))") >&2
 

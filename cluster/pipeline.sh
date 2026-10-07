@@ -109,6 +109,7 @@ PT_MIN_READLEN="${PT_MIN_READLEN:-100}"
 
 # --- resources (tuned from the PD44579 run) -----------------------------------
 STAGE_THROTTLE="${STAGE_THROTTLE:-20}"   # concurrent stageBam.pl -> bounds iRODS + Lustre I/O
+PT_RESTAGE="${PT_RESTAGE:-0}"            # 1 = drop each BAM after discovery, re-stage it for genotyping (drop_bam)
 GT_THROTTLE="${GT_THROTTLE:-30}"
 # tier1 budgets are MEASURED on the full PD44579 run (peak RSS from LSF, with headroom):
 #   discovery          12.2 GB peak  -> 16 GB
@@ -211,6 +212,7 @@ PT_HEADER_GATE='$PT_HEADER_GATE'
 PT_MIN_READLEN='$PT_MIN_READLEN'
 PT_ASSEMBLY='$PT_ASSEMBLY'
 STAGE_THROTTLE='$STAGE_THROTTLE'
+PT_RESTAGE='$PT_RESTAGE'
 SD_MEM_T2='$SD_MEM_T2'
 GT_MEM_T2='$GT_MEM_T2'
 RETRY_QUEUE='$RETRY_QUEUE'
@@ -353,6 +355,79 @@ submit_dag() {
 # =============================================================================
 # phase 1 — stage THIS sample, then discover it (fault-isolated, idempotent)
 # =============================================================================
+# Stage ONE sample's BAM from iRODS into bam_path (callers check the file with -s afterwards).
+# Returns 0 (stageBam.pl ran), 2 = iRODS lists no files for this sample (legit no-data),
+# 1 = stageBam.pl failure. Uses SAMPLE / PROJ / BAM from the caller.
+stage_bam() {
+    log "$SAMPLE: staging from iRODS project $PROJ -> $(dirname "$BAM")"
+    # Three stageBam.pl traps, all hit on the PD37449 pilot (2026-10-04):
+    #  1. ASYNC: it submits its own LSF transfer job ("Job <N> is submitted to queue <normal>.")
+    #     and returns at once -> wait on that job, else every colony looks "missing".
+    #  2. CONCURRENCY: 10 tasks calling it at the same second with the same -o crossed their
+    #     requests (lo0006's task listed + transferred lo0016) -> 20 duplicate transfers,
+    #     18 failed, 7 colonies never requested. So: a PRIVATE -o per sample, submissions
+    #     serialised under flock, and the printed sample name is verified.
+    #  3. PERL: the submitting shell's modules leak into the job (samtools-1.19 -> perl 5.38);
+    #     dataImportExport's perl 5.36 then dies on "ListUtil.c: loadable library and perl
+    #     binaries are mismatched". So: a clean subshell (module purge, PERL* unset).
+    # Layout: stageBam.pl appends <proj>/<sample>/mapped_sample/ to -o; the file list it
+    # PRINTS shows a flat <-o>/mapped_sample/ path, which is not where the transfer writes.
+    local PRIV="$STAGING_ROOT/.stagebam/$SAMPLE"
+    rm -rf "$PRIV"; mkdir -p "$PRIV"
+    local so rc=0
+    so="$( {
+        command -v flock >/dev/null 2>&1 && exec 9>"$STAGING_ROOT/.stagebam.lock" && flock -w 1800 9
+        unset PERL5LIB PERLLIB PERL_LOCAL_LIB_ROOT PERL_MB_OPT PERL_MM_OPT
+        module purge >/dev/null 2>&1 || true
+        module load dataImportExport >/dev/null 2>&1 || true
+        stageBam.pl --lustre 126 --types m --sample "$SAMPLE" --project "$PROJ" -o "$PRIV" -fo
+    } 2>&1 )" || rc=$?
+    printf '%s\n' "$so"
+    if grep -qE 'total files 0\b' <<<"$so"; then
+        log "$SAMPLE: iRODS lists no files for project $PROJ -> skipping (not an error)"
+        rm -rf "$PRIV"; return 2         # iRODS has nothing for this sample: legit no-data
+    fi
+    # the listed sample must be OURS (trap 2); stageBam prints it on its own line
+    if ! grep -qx "$SAMPLE" <<<"$so"; then
+        log "$SAMPLE: stageBam.pl did not list this sample (listed: $(grep -xE 'PD[0-9]+[a-z]+_?[a-z0-9]*' <<<"$so" | paste -sd, -)) -- refusing"
+        return 1
+    fi
+    local tj; tj="$(sed -n 's/^Job <\([0-9]*\)> is submitted.*/\1/p' <<<"$so" | tail -1)"
+    if [ -n "$tj" ]; then
+        log "$SAMPLE: waiting for stageBam.pl transfer job $tj"
+        wait_job "$tj"
+    elif [ "$rc" -ne 0 ]; then
+        log "$SAMPLE: stageBam.pl failed (rc=$rc) and submitted no transfer job"; return 1
+    fi
+    # find the published BAM in the private dir (never the tmpExportData/ progress copy),
+    # allowing lustre a short grace period, then move the set into bam_path's directory
+    local t=0 got=""
+    while [ -z "$got" ] && [ "$t" -le "${STAGE_GRACE_S:-600}" ]; do
+        for c in "$PRIV/$PROJ/$SAMPLE/mapped_sample/$SAMPLE.sample.dupmarked.bam" \
+                 "$PRIV/mapped_sample/$SAMPLE.sample.dupmarked.bam"; do
+            [ -s "$c" ] && { got="$c"; break; }
+        done
+        [ -n "$got" ] || { sleep 30; t=$((t+30)); }
+    done
+    if [ -n "$got" ]; then
+        mkdir -p "$(dirname "$BAM")"
+        for f in "$got" "$got.bai" "$got.bas" "$got.met.gz"; do
+            [ -e "$f" ] && mv -f "$f" "$(dirname "$BAM")/"
+        done
+        rm -rf "$PRIV"
+    fi
+}
+
+# PT_RESTAGE=1: a staged BAM lives only as long as ONE job needs it -- discovery deletes it when
+# done and genotyping stages it again (and deletes it after), so the peak is ~(running sd +
+# running gt) BAMs instead of the whole patient (PD49229: 722 colonies ~17 TB vs 8 TB free).
+# Costs a second iRODS transfer per colony. Off = BAMs stay until phase 5 cleanup.
+drop_bam() {   # drop_bam <proj> <sample>  (no-op unless PT_RESTAGE=1)
+    [ "${PT_RESTAGE:-0}" = 1 ] || return 0
+    rm -rf "${STAGING_ROOT:?}/$1/$2" && log "$2: PT_RESTAGE -> staged BAM removed"
+    rmdir "$STAGING_ROOT/$1" 2>/dev/null || true
+}
+
 cmd_stage_discover() {
     load_env
     local IDX="${1:?stage-discover <index>}"
@@ -366,64 +441,9 @@ cmd_stage_discover() {
 
     local BAM; BAM="$(bam_path "$PROJ" "$SAMPLE")"
     if [ ! -s "$BAM" ]; then
-        log "$SAMPLE: staging from iRODS project $PROJ -> $(dirname "$BAM")"
-        # Three stageBam.pl traps, all hit on the PD37449 pilot (2026-10-04):
-        #  1. ASYNC: it submits its own LSF transfer job ("Job <N> is submitted to queue <normal>.")
-        #     and returns at once -> wait on that job, else every colony looks "missing".
-        #  2. CONCURRENCY: 10 tasks calling it at the same second with the same -o crossed their
-        #     requests (lo0006's task listed + transferred lo0016) -> 20 duplicate transfers,
-        #     18 failed, 7 colonies never requested. So: a PRIVATE -o per sample, submissions
-        #     serialised under flock, and the printed sample name is verified.
-        #  3. PERL: the submitting shell's modules leak into the job (samtools-1.19 -> perl 5.38);
-        #     dataImportExport's perl 5.36 then dies on "ListUtil.c: loadable library and perl
-        #     binaries are mismatched". So: a clean subshell (module purge, PERL* unset).
-        # Layout: stageBam.pl appends <proj>/<sample>/mapped_sample/ to -o; the file list it
-        # PRINTS shows a flat <-o>/mapped_sample/ path, which is not where the transfer writes.
-        local PRIV="$STAGING_ROOT/.stagebam/$SAMPLE"
-        rm -rf "$PRIV"; mkdir -p "$PRIV"
-        local so rc=0
-        so="$( {
-            command -v flock >/dev/null 2>&1 && exec 9>"$STAGING_ROOT/.stagebam.lock" && flock -w 1800 9
-            unset PERL5LIB PERLLIB PERL_LOCAL_LIB_ROOT PERL_MB_OPT PERL_MM_OPT
-            module purge >/dev/null 2>&1 || true
-            module load dataImportExport >/dev/null 2>&1 || true
-            stageBam.pl --lustre 126 --types m --sample "$SAMPLE" --project "$PROJ" -o "$PRIV" -fo
-        } 2>&1 )" || rc=$?
-        printf '%s\n' "$so"
-        if grep -qE 'total files 0\b' <<<"$so"; then
-            : > "$RUNDIR/missing/$SAMPLE"      # iRODS has nothing for this sample: legit no-data
-            log "$SAMPLE: iRODS lists no files for project $PROJ -> skipping (not an error)"
-            rm -rf "$PRIV"; exit 0
-        fi
-        # the listed sample must be OURS (trap 2); stageBam prints it on its own line
-        if ! grep -qx "$SAMPLE" <<<"$so"; then
-            log "$SAMPLE: stageBam.pl did not list this sample (listed: $(grep -xE 'PD[0-9]+[a-z]+_?[a-z0-9]*' <<<"$so" | paste -sd, -)) -- refusing"
-            exit 1
-        fi
-        local tj; tj="$(sed -n 's/^Job <\([0-9]*\)> is submitted.*/\1/p' <<<"$so" | tail -1)"
-        if [ -n "$tj" ]; then
-            log "$SAMPLE: waiting for stageBam.pl transfer job $tj"
-            wait_job "$tj"
-        elif [ "$rc" -ne 0 ]; then
-            log "$SAMPLE: stageBam.pl failed (rc=$rc) and submitted no transfer job"; exit 1
-        fi
-        # find the published BAM in the private dir (never the tmpExportData/ progress copy),
-        # allowing lustre a short grace period, then move the set into bam_path's directory
-        local t=0 got=""
-        while [ -z "$got" ] && [ "$t" -le "${STAGE_GRACE_S:-600}" ]; do
-            for c in "$PRIV/$PROJ/$SAMPLE/mapped_sample/$SAMPLE.sample.dupmarked.bam" \
-                     "$PRIV/mapped_sample/$SAMPLE.sample.dupmarked.bam"; do
-                [ -s "$c" ] && { got="$c"; break; }
-            done
-            [ -n "$got" ] || { sleep 30; t=$((t+30)); }
-        done
-        if [ -n "$got" ]; then
-            mkdir -p "$(dirname "$BAM")"
-            for f in "$got" "$got.bai" "$got.bas" "$got.met.gz"; do
-                [ -e "$f" ] && mv -f "$f" "$(dirname "$BAM")/"
-            done
-            rm -rf "$PRIV"
-        fi
+        local src=0; stage_bam || src=$?
+        if [ "$src" -eq 2 ]; then : > "$RUNDIR/missing/$SAMPLE"; exit 0; fi
+        [ "$src" -eq 0 ] || exit 1
     fi
 
     if [ ! -s "$BAM" ]; then
@@ -451,6 +471,7 @@ cmd_stage_discover() {
         if [ "$chr1" != "$want_len" ] || ! grep -q WGS <<<"$ds" || [ "$rl" -lt "${PT_MIN_READLEN:-100}" ]; then
             log "$SAMPLE: HEADER GATE -- $want_name length '${chr1:-none}' ($PT_HEADER_GATE = $want_len), @RG DS '${ds:-none}' (need WGS), read length $rl (need >= ${PT_MIN_READLEN:-100}) -> skipped as no-data"
             printf 'header_gate\t%s=%s\tDS=%s\treadlen=%s\n' "$want_name" "${chr1:-none}" "${ds:-none}" "$rl" > "$RUNDIR/missing/$SAMPLE"
+            drop_bam "$PROJ" "$SAMPLE"
             exit 0
         fi
         log "$SAMPLE: header gate ok ($PT_HEADER_GATE, DS ${ds}, read length $rl)"
@@ -466,6 +487,7 @@ cmd_stage_discover() {
         [ -e "$TMP.$ext" ] && mv -f "$TMP.$ext" "$OUT.$ext"
     done
     log "$SAMPLE: done -> $OUT"
+    drop_bam "$PROJ" "$SAMPLE"
 }
 
 # =============================================================================
@@ -648,6 +670,13 @@ cmd_genotype() {
     if [ -s "$OUT" ]; then log "$SAMPLE: genotype exists, skipping"; exit 0; fi
 
     local BAM; BAM="$(bam_path "$PROJ" "$SAMPLE")"
+    if [ ! -s "$BAM" ] && [ "${PT_RESTAGE:-0}" = 1 ] && [ ! -e "$RUNDIR/missing/$SAMPLE" ] \
+            && [ -s "$RUNDIR/discovery/$SAMPLE.txt.gz" ]; then
+        log "$SAMPLE: PT_RESTAGE -> staging again for genotyping"
+        local src=0; stage_bam || src=$?
+        if [ "$src" -eq 2 ]; then : > "$RUNDIR/missing/$SAMPLE"; exit 0; fi
+        { [ "$src" -eq 0 ] && [ -s "$BAM" ]; } || { log "$SAMPLE: RE-STAGING FAILED -- no BAM at $BAM"; exit 1; }
+    fi
     if [ ! -s "$BAM" ]; then log "$SAMPLE: no BAM -> skipping (expected)"; exit 0; fi
 
     if [ ! -s "$BAM.bai" ] && [ ! -s "${BAM%.bam}.bai" ]; then
@@ -677,6 +706,7 @@ cmd_genotype() {
     if [ "$rc" -ne 0 ]; then log "$SAMPLE: GENOTYPING FAILED"; rm -f "$TMP"; exit 1; fi
     mv -f "$TMP" "$OUT"
     log "$SAMPLE: genotyped -> $OUT"
+    drop_bam "$PROJ" "$SAMPLE"
 }
 
 # Run a genotyper. In the tier-1 array (PT_GT_WATCHDOG=1, submitted with bsub -Q 99) a run that
