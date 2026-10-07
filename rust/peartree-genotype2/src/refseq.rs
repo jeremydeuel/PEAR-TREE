@@ -41,6 +41,20 @@ fn bad(msg: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, msg.into())
 }
 
+/// The reference's own name for `chr`: itself, else the same contig with the `chr` prefix
+/// toggled. hs37d5 BAMs (and so their contract loci) say `1`, the UCSC hg19.2bit that serves
+/// them says `chr1` (identical sequence for 1..22, X, Y); combine and annotate toggle the same way.
+fn resolve<V>(map: &HashMap<String, V>, chr: &str) -> Option<String> {
+    if map.contains_key(chr) {
+        return Some(chr.to_string());
+    }
+    let alt = match chr.strip_prefix("chr") {
+        Some(rest) => rest.to_string(),
+        None => format!("chr{chr}"),
+    };
+    map.contains_key(&alt).then_some(alt)
+}
+
 fn unknown_contig(chr: &str) -> io::Error {
     io::Error::new(io::ErrorKind::NotFound, format!("contig '{chr}' not in the reference"))
 }
@@ -109,7 +123,8 @@ impl Fasta {
 
 impl RefSeq for Fasta {
     fn fetch(&mut self, chr: &str, start: i64, end: i64) -> io::Result<Vec<u8>> {
-        let e = self.index.get(chr).ok_or_else(|| unknown_contig(chr))?;
+        let key = resolve(&self.index, chr).ok_or_else(|| unknown_contig(chr))?;
+        let e = &self.index[&key];
         let (mut out, cs, ce) = padded_buffer(start, end, e.len);
         if cs >= ce {
             return Ok(out);
@@ -137,7 +152,7 @@ impl RefSeq for Fasta {
     }
 
     fn contig_len(&self, chr: &str) -> Option<i64> {
-        self.index.get(chr).map(|e| e.len)
+        resolve(&self.index, chr).map(|k| self.index[&k].len)
     }
 }
 
@@ -240,8 +255,9 @@ impl TwoBit {
 
 impl RefSeq for TwoBit {
     fn fetch(&mut self, chr: &str, start: i64, end: i64) -> io::Result<Vec<u8>> {
+        let key = resolve(&self.contigs, chr).ok_or_else(|| unknown_contig(chr))?;
         let (offset, len, have_detail) = {
-            let c = self.contigs.get(chr).ok_or_else(|| unknown_contig(chr))?;
+            let c = &self.contigs[&key];
             (c.offset, c.len, c.detail.is_some())
         };
         let (mut out, cs, ce) = padded_buffer(start, end, len);
@@ -250,12 +266,12 @@ impl RefSeq for TwoBit {
         }
         if !have_detail {
             let d = self.load_detail(offset)?;
-            if let Some(c) = self.contigs.get_mut(chr) {
+            if let Some(c) = self.contigs.get_mut(&key) {
                 c.detail = Some(d);
             }
         }
         let (dna_off, n_blocks) = {
-            let d = self.contigs.get(chr).and_then(|c| c.detail.as_ref()).ok_or_else(|| unknown_contig(chr))?;
+            let d = self.contigs.get(&key).and_then(|c| c.detail.as_ref()).ok_or_else(|| unknown_contig(chr))?;
             (d.dna_off, d.n_blocks.clone())
         };
         let first_byte = (cs / 4) as u64;
@@ -279,7 +295,7 @@ impl RefSeq for TwoBit {
     }
 
     fn contig_len(&self, chr: &str) -> Option<i64> {
-        self.contigs.get(chr).map(|c| c.len)
+        resolve(&self.contigs, chr).map(|k| self.contigs[&k].len)
     }
 }
 
@@ -478,6 +494,20 @@ mod tests {
         let p = d.join("junk.2bit");
         std::fs::write(&p, b"this is not a 2bit file at all").unwrap();
         assert!(open_reference(p.to_str().unwrap()).is_err());
+    }
+
+    #[test]
+    fn chr_prefix_is_toggled_for_hs37d5_names() {
+        // hs37d5 contract loci say `1`; the hg19.2bit serving them says `chr1` (and vice versa)
+        let d = tmpdir("alias");
+        let t = truth();
+        let p = d.join("alias.2bit");
+        std::fs::write(&p, make_2bit(&t, false, false)).unwrap();
+        let mut r = open_reference(p.to_str().unwrap()).unwrap();
+        assert_eq!(r.contig_len("1"), Some(t[0].1.len() as i64));
+        assert_eq!(r.fetch("1", 200, 260).unwrap(), r.fetch("chr1", 200, 260).unwrap());
+        assert!(r.fetch("chrHLA-A*01:01:01:01", 0, 5).is_ok());
+        assert!(r.fetch("2", 0, 5).is_err());
     }
 
     #[test]

@@ -38,6 +38,12 @@ changes which loci are called):
                           sides annotated. tree_fit still flags gate survivors from
                           <P>.genotypes.csv.gz.
 
+BAM assembly: env PT_ASSEMBLY (GRCh38 default, or GRCh37 for hs37d5 colonies; cluster/pipeline.sh
+exports it into every job). Both bases are GRCh38 files; GRCh37 swaps exactly the assembly-specific
+paths of cluster/config.py.grch37 -- combine genome_2bit + the hs1 chain, and the annotate
+genome_2bit (TSD / EN motif / slippage context). Everything else works in hs1 space or on
+sequence. install.sh check-config proves the swap against a staged BAM before combine runs.
+
 Resource directory: env TPRT_RES (default /lustre/.../jd43/tprt_ab/resources), tmp root: env
 TPRT_ROOT. Missing files are NOT silently dropped here (except the optional remap_index): the
 preflight (cluster/tprt/preflight.sh) checks every path this module produces.
@@ -54,6 +60,20 @@ TPRT_RES = os.environ.get('TPRT_RES', os.path.join(TPRT_ROOT, 'resources'))
 
 BASES = {'A': 'cluster/config.py.grch38', 'B': 'cluster/config.py.grch38.tprt'}
 ANNOTATE_FROM_TPRT = ('rte_library', 'genome_2bit', 'remap_rmsk')
+
+# assembly -> (genome_2bit, hs1 -> assembly chain); hg19 == hs37d5 on 1..22, X, Y
+ASSEMBLIES = {
+    'GRCh38': (os.path.join(_JD, 'hg38.2bit'), os.path.join(_JD, 'hs1.hg38.all.chain.gz')),
+    'GRCh37': (os.path.join(_JD, 'hg19.2bit'), os.path.join(_JD, 'hs1.hg19.all.chain.gz')),
+}
+
+
+def assembly():
+    a = os.environ.get('PT_ASSEMBLY') or 'GRCh38'
+    if a not in ASSEMBLIES:
+        raise ValueError(f"PT_ASSEMBLY must be one of {sorted(ASSEMBLIES)}, got {a!r}")
+    return a
+
 
 RESOURCES = {
     'exon_annotation': os.path.join(TPRT_RES, 'hs1.gene_model.tsv.gz'),
@@ -85,10 +105,14 @@ def build(arm):
         raise ValueError(f"arm must be A or B, got {arm!r}")
     cfg = _load(BASES[arm], f'_pt_base_config_{arm}')
     ann = cfg['annotate']
+    twobit, chain = ASSEMBLIES[assembly()]
+    cfg['combine_insertions']['genome_2bit'] = twobit
+    cfg['combine_insertions']['bowtie2_index2_lo'] = chain
     if arm == 'A':
         tprt_ann = _load(BASES['B'], '_pt_base_config_B_annotate')['annotate']
         for k in ANNOTATE_FROM_TPRT:
             ann[k] = tprt_ann[k]
+    ann['genome_2bit'] = twobit
     # run_ab.sh exports TPRT_ANNOT_TMP=$TPRT_ROOT/tmp/<arm> into each arm's jobs: arm C runs from
     # arm B's checkout (same stub, TPRT_AB_ARM='B') and must not share B's dfam/sam scratch files
     tdir = os.environ.get('TPRT_ANNOT_TMP') or tmp_dir(arm)
@@ -120,11 +144,11 @@ def describe(arm):
     ci, ann = cfg['combine_insertions'], cfg['annotate']
     keys = ['min_independent_fragments', 'indel_aware_consensus', 'count_short_overhang',
             'merge_tolerance_bp', 'slippage_reject', 'far_pair_strict']
-    out = [f"arm {arm}: base {BASES[arm]}",
+    out = [f"arm {arm}: base {BASES[arm]}, assembly {assembly()} (PT_ASSEMBLY)",
            f"  combine genome_2bit={ci['genome_2bit']}",
            f"  combine chain={ci['bowtie2_index2_lo']}",
            "  combine TPRT keys: " + ', '.join(f"{k}={ci.get(k, '(unset)')}" for k in keys),
-           f"  annotate tmp={tmp_dir(arm)}",
+           f"  annotate genome_2bit={ann.get('genome_2bit')} tmp={tmp_dir(arm)}",
            f"  annotate rte_library={ann.get('rte_library')} exon_annotation={ann.get('exon_annotation')}",
            f"  annotate remap_2bit={ann.get('remap_2bit')} remap_index={ann.get('remap_index', '(absent: novel-source locator off)')}"]
     return '\n'.join(out)

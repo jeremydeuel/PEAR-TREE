@@ -75,8 +75,13 @@ GENO_CFG="${GENO_CFG:-$PT_ROOT/cluster/config.genotype.grch38}"
 GENOTYPE_IMPL="${GENOTYPE_IMPL:-v2}"
 GENOTYPE2_BIN="${GENOTYPE2_BIN:-$PT_ROOT/rust/peartree-genotype2/target/release/peartree-genotype2}"
 GENO2_CFG="${GENO2_CFG:-$PT_ROOT/cluster/config.genotype2.grch38}"
-# reference of the BAMs' assembly for the haplotype flanks (same file as config.py's genome_2bit)
-GENOME_2BIT="${GENOME_2BIT:-/lustre/scratch126/casm/teams/team273/users/jd43/hg38.2bit}"
+# BAM assembly: GRCh38 (default) or GRCh37 (hs37d5). Exported into every job: the generated
+# src/config.py (cluster/tprt/arm_config.py) reads it to pick genome_2bit + the hs1 chain.
+PT_ASSEMBLY="${PT_ASSEMBLY:-GRCh38}"
+case "$PT_ASSEMBLY" in GRCh38) _asm_2bit=hg38 ;; GRCh37) _asm_2bit=hg19 ;; *) echo "PT_ASSEMBLY must be GRCh38 or GRCh37, got '$PT_ASSEMBLY'" >&2; exit 1 ;; esac
+# reference of the BAMs' assembly for the haplotype flanks (same file as config.py's genome_2bit;
+# hg19.2bit serves hs37d5 loci: genotype2 toggles the chr prefix)
+GENOME_2BIT="${GENOME_2BIT:-/lustre/scratch126/casm/teams/team273/users/jd43/$_asm_2bit.2bit}"
 # the patient's SNV tree (Newick, tips = colony ids); default: the one file under patients/*/<id>/
 PATIENT_TREE="${PATIENT_TREE:-}"
 SAMTOOLS_MODULE="${SAMTOOLS_MODULE:-samtools-1.19}"
@@ -94,10 +99,13 @@ GENO_ONE_SIDED="${GENO_ONE_SIDED:-}"
 JOINT_ARGS="${JOINT_ARGS:-}"
 # phase 7 (report): tools/phylo/tree_fit.py + cluster/somatic_table.py after annotate; 0 = skip
 PT_REPORT="${PT_REPORT:-1}"
-# per-BAM header gate after staging (empty = off): GRCh38 = @SQ chr1 must be 248956422 bp and
-# @RG DS must say WGS, else the sample is logged and treated as no-data (missing/ marker). For
-# sample lists not built from BAM headers (hsc_run.sh populate's iRODS fallback).
+# per-BAM header gate after staging (empty = off): GRCh38 = @SQ chr1 must be 248956422 bp,
+# GRCh37 = @SQ 1 (hs37d5 naming) must be 249250621 bp; @RG DS must say WGS and the reads must be
+# >= PT_MIN_READLEN (100) bp, else the sample is logged and treated as no-data (missing/ marker).
+# For sample lists not built from BAM headers (hsc_run.sh populate's iRODS fallback, colonies.tsv
+# rows with readlen NA).
 PT_HEADER_GATE="${PT_HEADER_GATE:-}"
+PT_MIN_READLEN="${PT_MIN_READLEN:-100}"
 
 # --- resources (tuned from the PD44579 run) -----------------------------------
 STAGE_THROTTLE="${STAGE_THROTTLE:-20}"   # concurrent stageBam.pl -> bounds iRODS + Lustre I/O
@@ -160,6 +168,7 @@ load_env() {
     : "${PT_RUNDIR:?internal subcommands need PT_RUNDIR}"
     # shellcheck disable=SC1091
     source "$PT_RUNDIR/run.env"
+    export PT_ASSEMBLY="${PT_ASSEMBLY:-GRCh38}"   # read by src/config.py in the python steps
     JOB_PREFIX="${JOB_PREFIX:-$PATIENT_ID}"   # run.env written before the hook existed has none
 }
 
@@ -199,6 +208,8 @@ COMBINE_BIN='$COMBINE_BIN'
 GENO_ONE_SIDED='$GENO_ONE_SIDED'
 JOINT_ARGS='$JOINT_ARGS'
 PT_HEADER_GATE='$PT_HEADER_GATE'
+PT_MIN_READLEN='$PT_MIN_READLEN'
+PT_ASSEMBLY='$PT_ASSEMBLY'
 STAGE_THROTTLE='$STAGE_THROTTLE'
 SD_MEM_T2='$SD_MEM_T2'
 GT_MEM_T2='$GT_MEM_T2'
@@ -424,16 +435,25 @@ cmd_stage_discover() {
         log "$SAMPLE: staged BAM fails samtools quickcheck (truncated?): $BAM -- delete it and rerun"
         exit 1
     fi
-    if [ "${PT_HEADER_GATE:-}" = GRCh38 ]; then
-        local hdr chr1 ds
+    if [ -n "${PT_HEADER_GATE:-}" ]; then
+        # the assembly's chr1 under the name DISC_CFG's allowlist uses, WGS in @RG DS, and reads
+        # long enough for clip discovery (max over the first 20k records; 75 bp releases exist)
+        local hdr chr1 ds rl want_name want_len
+        case "$PT_HEADER_GATE" in
+            GRCh38) want_name=chr1; want_len=248956422 ;;
+            GRCh37) want_name=1;    want_len=249250621 ;;     # hs37d5 (numeric contigs)
+            *) log "PT_HEADER_GATE must be GRCh38 or GRCh37, got '$PT_HEADER_GATE'"; exit 1 ;;
+        esac
         hdr="$(samtools view -H "$BAM")" || { log "$SAMPLE: cannot read the BAM header"; exit 1; }
-        chr1="$(awk -F'\t' '$1=="@SQ" { n=""; l=""; for (i=2;i<=NF;i++) { if ($i ~ /^SN:/) n=substr($i,4); if ($i ~ /^LN:/) l=substr($i,4) } if (n=="chr1" || n=="1") { print l; exit } }' <<<"$hdr")"
+        chr1="$(awk -F'\t' -v want="$want_name" '$1=="@SQ" { n=""; l=""; for (i=2;i<=NF;i++) { if ($i ~ /^SN:/) n=substr($i,4); if ($i ~ /^LN:/) l=substr($i,4) } if (n==want) { print l; exit } }' <<<"$hdr")"
         ds="$(grep '^@RG' <<<"$hdr" | tr '\t' '\n' | sed -n 's/^DS://p' | sort -u | paste -sd, -)"
-        if [ "$chr1" != 248956422 ] || ! grep -q WGS <<<"$ds"; then
-            log "$SAMPLE: HEADER GATE -- chr1 length '${chr1:-none}' (GRCh38 = 248956422), @RG DS '${ds:-none}' (need WGS) -> skipped as no-data"
-            printf 'header_gate\tchr1=%s\tDS=%s\n' "${chr1:-none}" "${ds:-none}" > "$RUNDIR/missing/$SAMPLE"
+        rl="$( { samtools view "$BAM" 2>/dev/null || true; } | head -n 20000 | awk '{ if (length($10) > m) m = length($10) } END { print m + 0 }')"
+        if [ "$chr1" != "$want_len" ] || ! grep -q WGS <<<"$ds" || [ "$rl" -lt "${PT_MIN_READLEN:-100}" ]; then
+            log "$SAMPLE: HEADER GATE -- $want_name length '${chr1:-none}' ($PT_HEADER_GATE = $want_len), @RG DS '${ds:-none}' (need WGS), read length $rl (need >= ${PT_MIN_READLEN:-100}) -> skipped as no-data"
+            printf 'header_gate\t%s=%s\tDS=%s\treadlen=%s\n' "$want_name" "${chr1:-none}" "${ds:-none}" "$rl" > "$RUNDIR/missing/$SAMPLE"
             exit 0
         fi
+        log "$SAMPLE: header gate ok ($PT_HEADER_GATE, DS ${ds}, read length $rl)"
     fi
 
     log "$SAMPLE: discovering"

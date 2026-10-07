@@ -5,11 +5,17 @@
 # The configuration validated on PD37590 (arm C + genotype2 with reference-bias correction),
 # from ONE checkout of branch hsc-deploy:
 #   discovery   config.discovery.grch38.tprt2frag  (>= 2 fragments per junction end IN EACH colony)
+#               (GRCh37 patients: config.discovery.grch37.tprt2frag, same keys, hs37d5 contig names)
 #   combine     Rust peartree-combine, src/config.py = config.py.grch38.tprt (+ tprt/arm_config.py)
 #   genotype    peartree-genotype2, config.genotype2.grch38.refbias, two-sided loci only
 #   joint       --ref-bias auto (global / per kind / per colony), colony zygosity, no NOISE cap
 #   annotate    annotate_v2 + RTE library (tools/rte), locus_class
 #   report      tools/phylo/tree_fit.py + cluster/somatic_table.py -> <P>.somatic.xlsx
+#
+# Assembly: per patient from colonies.tsv (all WGS rows GRCh38, or all hs37d5/GRCh37), override
+# HSC_ASSEMBLY=GRCh38|GRCh37. GRCh37 runs NATIVELY (no remap): discovery allowlist 1..Y,
+# PT_ASSEMBLY=GRCh37 makes src/config.py use hg19.2bit + the hs1->hg19 chain (combine, annotate),
+# genotype2 reads hg19.2bit (chr prefix toggled), and the per-BAM header gate checks hs37d5.
 #
 # Usage (head node, from anywhere):
 #   bash <checkout>/cluster/hsc_run.sh setup              # build binaries, venv link, src/config.py
@@ -20,7 +26,7 @@
 # Layout:  $HSC_ROOT/<P>/<P>/      pipeline run dir (discovery/ insertions/ genotypes/ fit/ logs/ ...)
 #          $HSC_ROOT/tmp/<P>/      annotate scratch
 #          $HOME/results/hsc/<P>/  NFS copies: calls, joint table, annotation, <P>.somatic.xlsx
-# Env overrides: HSC_ROOT, VENV, KEEP_BAMS=1 (skip the staged-BAM cleanup), plus every
+# Env overrides: HSC_ROOT, VENV, HSC_ASSEMBLY, KEEP_BAMS=1 (skip the staged-BAM cleanup), plus every
 # pipeline.sh knob (GT_THROTTLE, CI_MEM, ...).
 # =============================================================================
 set -euo pipefail
@@ -42,6 +48,17 @@ patient_dir() {
     local d; d=$(ls -d "$PT_ROOT"/patients/*/"$1" 2>/dev/null || true)
     [ "$(printf '%s\n' "$d" | grep -c .)" -eq 1 ] || die "expected exactly one patients/*/$1 in $PT_ROOT, found: ${d:-none}"
     echo "$d"
+}
+
+# GRCh38 | GRCh37 for patient dir $1: HSC_ASSEMBLY, else the colonies.tsv assembly of its WGS rows
+patient_assembly() {
+    if [ -n "${HSC_ASSEMBLY:-}" ]; then echo "$HSC_ASSEMBLY"; return; fi
+    local a
+    a="$(awk -F'\t' 'NR>2 && $3 ~ /WGS/ && $7!="" {
+            if ($6=="GRCh38") g38++; else if ($6=="hs37d5_GRCh37" || $6=="GRCh37(hs37d5/hg19)") g37++; else oth++ }
+        END { if (g38 && !g37) print "GRCh38"; else if (g37 && !g38) print "GRCh37";
+              else printf "mixed/unknown (GRCh38=%d GRCh37=%d other=%d)\n", g38, g37, oth }' "$1/colonies.tsv")"
+    case "$a" in GRCh38|GRCh37) echo "$a" ;; *) die "$1/colonies.tsv: assembly $a -- set HSC_ASSEMBLY=GRCh38 or GRCh37" ;; esac
 }
 
 cmd_setup() {
@@ -80,18 +97,20 @@ cmd_populate() {
         ONLY="$org" PAR="${PAR:-4}" bash cluster/populate_colonies_tsv.sh
     else
         note "nst_links not visible on $(hostname) ($nst): tip -> project from iRODS (iquest)"
-        populate_irods "$P" "$d"
+        populate_irods "$P" "$d" "${HSC_ASSEMBLY:-GRCh38}"
     fi
     grep -v '^#' "$d/colonies.tsv" | awk -F'\t' 'NR>1 {n++; a[$6]++} END {printf "%d BAMs:", n; for (k in a) printf " %s=%d", k, a[k]; print ""}'
 }
 
 # iRODS fallback (farm22-head2 lost /nfs/cancer_ref01, 2026-10-06): one iquest for the donor's
 # *.sample.dupmarked.bam objects, matched to the tree tips. Assay and assembly are NOT read here
-# (no header access without nst_links): rows say ds=WGS_unverified / assembly=GRCh38, and
-# `submit` turns on pipeline.sh's per-BAM header gate (PT_HEADER_GATE=GRCh38) after staging.
+# (no header access without nst_links): rows say ds=WGS_unverified / assembly=GRCh38 (or
+# hs37d5_GRCh37 with HSC_ASSEMBLY=GRCh37), and `submit` always runs pipeline.sh's per-BAM header
+# gate (PT_HEADER_GATE=<assembly>) after staging, which also catches a wrong guess here.
 # A tip found in more than one project (WGS + targeted twins, Chapman 2024) is left out.
 populate_irods() {
-    local P="$1" d="$2" tips hits
+    local P="$1" d="$2" label tips hits
+    case "$3" in GRCh38) label=GRCh38 ;; GRCh37) label=hs37d5_GRCh37 ;; *) die "HSC_ASSEMBLY must be GRCh38 or GRCh37, got '$3'" ;; esac
     module load IRODS >/dev/null 2>&1 || true
     command -v iquest >/dev/null || die "iquest not on PATH (module load IRODS)"
     tips="$(mktemp)"; hits="$(mktemp)"
@@ -102,10 +121,10 @@ populate_irods() {
     local tmp="$d/colonies.tsv.tmp.$$"
     {
         printf 'donor\tproj\tds\treadlen\tmapped\tassembly\tsample\n'
-        printf '# populated %s by cluster/hsc_run.sh populate from iRODS (iquest; nst_links not mounted). ds/assembly NOT read from headers: verified per BAM after staging (PT_HEADER_GATE=GRCh38).\n' "$(date +%F)"
-        awk -F'\t' -v donor="$P" 'NR==FNR {tip[$1]=1; next}
+        printf '# populated %s by cluster/hsc_run.sh populate from iRODS (iquest; nst_links not mounted). ds/assembly NOT read from headers: verified per BAM after staging (PT_HEADER_GATE=%s).\n' "$(date +%F)" "$3"
+        awk -F'\t' -v donor="$P" -v asm="$label" 'NR==FNR {tip[$1]=1; next}
             ($1 in tip) {n[$1]++; proj[$1]=$2}
-            END {for (s in n) if (n[s]==1) print donor "\t" proj[s] "\tWGS_unverified\tNA\tNA\tGRCh38\t" s}' "$tips" "$hits" | sort -t$'\t' -k7,7
+            END {for (s in n) if (n[s]==1) print donor "\t" proj[s] "\tWGS_unverified\tNA\tNA\t" asm "\t" s}' "$tips" "$hits" | sort -t$'\t' -k7,7
     } > "$tmp" && mv -f "$tmp" "$d/colonies.tsv"
     awk -F'\t' 'NR==FNR {tip[$1]=1; next} ($1 in tip) {n[$1]++; p[$1]=p[$1] " " $2}
         END {for (s in n) if (n[s]>1) print "  left out (in several projects):" , s, p[s]}' "$tips" "$hits" >&2
@@ -126,15 +145,31 @@ cmd_submit() {
         [ -x "$PT_ROOT/rust/$b/target/release/$b" ] || die "missing $b — run setup"
     done
 
+    local asm disc twobit chain exons
+    asm="$(patient_assembly "$d")"
+    case "$asm" in
+        GRCh38) disc="$PT_ROOT/cluster/config.discovery.grch38.tprt2frag"; twobit="$JD/hg38.2bit"; chain="$JD/hs1.hg38.all.chain.gz" ;;
+        GRCh37) disc="$PT_ROOT/cluster/config.discovery.grch37.tprt2frag"; twobit="$JD/hg19.2bit"; chain="$JD/hs1.hg19.all.chain.gz" ;;
+        *) die "HSC_ASSEMBLY must be GRCh38 or GRCh37, got '$asm'" ;;
+    esac
+    # the assembly-specific files, checked now rather than hours in (discovery exits on a missing
+    # exon track; a missing 2bit/chain would only surface at combine / genotype)
+    exons="$(sed -n 's/^exon_annotation *= *//p' "$disc" | tail -1)"
+    for f in "$disc" "$twobit" "$chain" ${exons:+"$exons"}; do
+        [ -s "$f" ] || die "$asm run needs $f (missing or empty)"
+    done
+
     local W="$HSC_ROOT/$P"
     mkdir -p "$W" "$HSC_ROOT/tmp/$P"
-    PATIENTS_DIR="$PT_ROOT/patients" bash "$PT_ROOT/cluster/fleet.sh" samples "$P" > "$W/samples.tsv"
+    PATIENTS_DIR="$PT_ROOT/patients" SAMPLES_ASSEMBLY="$asm" bash "$PT_ROOT/cluster/fleet.sh" samples "$P" > "$W/samples.tsv"
     local n; n=$(grep -c . "$W/samples.tsv" || true)
-    [ "$n" -gt 0 ] || die "fleet.sh samples $P listed no GRCh38 WGS colonies"
-    note "$P: $n GRCh38 WGS samples -> $W/samples.tsv"
+    [ "$n" -gt 0 ] || die "fleet.sh samples $P listed no $asm WGS colonies"
+    note "$P: $n $asm WGS samples -> $W/samples.tsv"
+    (export PT_ASSEMBLY="$asm"; cd "$PT_ROOT" && "$VENV/bin/python" -c "import sys; sys.path.insert(0, 'cluster/tprt'); \
+import arm_config; print(arm_config.describe('B'))") >&2
 
     env WORKROOT="$W" RESULTS_DIR="$RESULTS_ROOT" VENV="$VENV" \
-        DISC_CFG="$PT_ROOT/cluster/config.discovery.grch38.tprt2frag" \
+        PT_ASSEMBLY="$asm" GENOME_2BIT="$twobit" DISC_CFG="$disc" \
         GENO_CFG="$PT_ROOT/cluster/config.genotype.grch38.tprt" GENO_ONE_SIDED=0 \
         GENOTYPE_IMPL=v2 GENO2_CFG="$PT_ROOT/cluster/config.genotype2.grch38.refbias" \
         JOINT_ARGS="--ref-bias auto" COMBINE_IMPL=rust \
@@ -142,7 +177,7 @@ cmd_submit() {
         GT_THROTTLE="${GT_THROTTLE:-20}" GT_MEM_T1="${GT_MEM_T1:-4000}" GT_MEM_T2="${GT_MEM_T2:-16000}" \
         SD_MEM_T1="${SD_MEM_T1:-4000}" CI_MEM="${CI_MEM:-16000}" CI_CORES="${CI_CORES:-8}" \
         AN_MEM="${AN_MEM:-32000}" AN_CORES="${AN_CORES:-4}" \
-        PT_HEADER_GATE=GRCh38 \
+        PT_HEADER_GATE="$asm" \
         PT_JOB_PREFIX="${P}_hsc" PT_NO_CLEANUP="${KEEP_BAMS:-0}" PT_JOBIDS_FILE="$W/jobids.tsv" \
         bash "$PT_ROOT/cluster/pipeline.sh" submit-list "$P" "$W/samples.tsv"
     note "results will land in $RESULTS_ROOT/$P (final: $P.somatic.xlsx)"
@@ -158,5 +193,5 @@ case "${1:-}" in
     populate) shift; cmd_populate "$@" ;;
     submit)   shift; cmd_submit "$@" ;;
     status)   shift; cmd_status "$@" ;;
-    *) sed -n '2,27p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 1 ;;
+    *) sed -n '2,30p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 1 ;;
 esac

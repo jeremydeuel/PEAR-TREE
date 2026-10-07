@@ -6,6 +6,7 @@
 #   bash cluster/fleet.sh run [PAT...]    # steps 1-9 for all GRCh38 patients (or the named ones)
 #   bash cluster/fleet.sh status          # fleet-wide progress table
 #   bash cluster/fleet.sh samples PAT     # print PAT's GRCh38-WGS sample<TAB>proj list (no side effects)
+#                                          (SAMPLES_ASSEMBLY=GRCh37: the hs37d5 rows instead)
 #
 # Wraps cluster/pipeline.sh (the per-patient stage->discover->combine->genotype->
 # combine_genotypes DAG). fleet.sh adds the pre-flight (clean scratch, capacity),
@@ -52,8 +53,12 @@ die() { echo "ERROR: $*" >&2; exit 1; }
 # The ONE rule for "which colonies of a patient run": colonies.tsv rows with assembly==GRCh38
 # and ds~WGS, as sample<TAB>proj. Shared by build_worklist and `samples` (cluster/tprt/run_ab.sh).
 # colonies.tsv cols: donor proj ds readlen mapped assembly sample
+# Optional 2nd arg GRCh37 selects the hs37d5 rows instead (both labels populate scripts write);
+# only `samples` uses it (cluster/hsc_run.sh, native GRCh37 runs) -- the fleet stays GRCh38.
 grch38_wgs_samples() {
-    awk -F'\t' 'NR>2 && $6=="GRCh38" && $3 ~ /WGS/ && $7!="" && $2!="" {print $7"\t"$2}' "$1" | sort -u
+    awk -F'\t' -v asm="${2:-GRCh38}" '
+        NR>2 && $3 ~ /WGS/ && $7!="" && $2!="" &&
+        ((asm=="GRCh38" && $6=="GRCh38") || (asm=="GRCh37" && ($6=="hs37d5_GRCh37" || $6=="GRCh37(hs37d5/hg19)"))) {print $7"\t"$2}' "$1" | sort -u
 }
 
 patient_colonies_tsv() {   # patient_colonies_tsv <PAT> -> path(s) of patients/<organ>/<PAT>/colonies.tsv
@@ -232,7 +237,7 @@ case "${1:-}" in
         pat="${2:?usage: fleet.sh samples <PATIENT_ID>}"
         mapfile -t cts < <(patient_colonies_tsv "$pat")
         [ "${#cts[@]}" -eq 1 ] || die "expected exactly one patients/*/$pat/colonies.tsv under $PATIENTS_DIR, found ${#cts[@]}"
-        grch38_wgs_samples "${cts[0]}"
+        grch38_wgs_samples "${cts[0]}" "${SAMPLES_ASSEMBLY:-GRCh38}"
         ;;
     status)
         [ -d "$FLEET_DIR" ] || die "no fleet dir $FLEET_DIR — run 'fleet.sh plan' or 'run' first"

@@ -4,7 +4,10 @@
 # `--ref-bias auto` estimates b from germline-het loci (global, per locus kind, per colony) and
 # plugs it into each colony's het likelihood. See rust/peartree-genotype2/README.md "Reference bias".
 include = config.genotype2.grch38
-ref_bias_grid = 0.4,0.5,0.6,0.7,0.8,0.9,1.0
+# The grid's ends CLAMP the joint estimate (joint.rs cell_b / interp_profile): PD51635 measured
+# b = 1.248 (ALT over-captured) and got no correction at all with a grid ending at 1.0, hence
+# 1.1 / 1.25 / 1.5. Nothing here is assembly-specific (GRCh37 runs use this file too).
+ref_bias_grid = 0.4,0.5,0.6,0.7,0.8,0.9,1.0,1.1,1.25,1.5
 # a FIXED correction of the per-colony calls themselves (b, or per kind) would be e.g.
 #   ref_bias = 0.9
 #   ref_bias_kind = L1_MED_DELETION:0.6
