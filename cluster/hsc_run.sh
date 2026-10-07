@@ -138,7 +138,9 @@ cmd_submit() {
     local P="${1:?usage: hsc_run.sh submit <PATIENT_ID>}" d
     d="$(patient_dir "$P")"
     ls "$d"/*.tree >/dev/null 2>&1 || die "no tree in $d"
-    grep -v '^#' "$d/colonies.tsv" | awk 'NR>1' | grep -q . \
+    # one awk, no pipe: `grep -q` quitting early SIGPIPEd the writer, and under pipefail a 722-row
+    # colonies.tsv (PD49229) read as "no rows"
+    awk '!/^#/ && NF && ++n > 1 { found = 1; exit } END { exit !found }' "$d/colonies.tsv" \
         || die "$d/colonies.tsv has no rows — run: bash $PT_ROOT/cluster/hsc_run.sh populate $P"
     [ -s "$PT_ROOT/src/config.py" ] && grep -q TPRT_AB_ARM "$PT_ROOT/src/config.py" \
         || die "no generated src/config.py — run: bash $PT_ROOT/cluster/hsc_run.sh setup"
