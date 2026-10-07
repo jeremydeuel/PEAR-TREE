@@ -75,6 +75,11 @@ def tmp_dir(arm):
     return os.path.join(TPRT_ROOT, 'tmp', arm)
 
 
+def _genotyping_file(sample):
+    unf = f'{sample}.genotypes.unfiltered.csv.gz'
+    return unf if os.path.exists(unf) else f'{sample}.genotypes.csv.gz'
+
+
 def build(arm):
     if arm not in BASES:
         raise ValueError(f"arm must be A or B, got {arm!r}")
@@ -96,7 +101,10 @@ def build(arm):
     cg = cfg['combine_genotypes']
     cg['min_wild-types'] = 1
     cg['write_unfiltered'] = True
-    ann['genotyping_file'] = lambda sample: f'{sample}.genotypes.unfiltered.csv.gz'
+    # the unfiltered matrix comes only from the Python combine_genotypes (GENOTYPE_IMPL=v1); the
+    # genotype2 joint step writes one numeric matrix holding every locus (NOISE rows included),
+    # so annotate falls back to it (PD51635 annotate: unfiltered.csv.gz not found)
+    ann['genotyping_file'] = _genotyping_file
     hb = os.path.join(TPRT_RES, 'hmmer_bin')
     if os.path.exists(hb):
         with open(hb) as f:
