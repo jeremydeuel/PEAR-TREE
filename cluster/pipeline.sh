@@ -299,7 +299,7 @@ submit_dag() {
     jid_gt=$(submit_job -J "${JOB_PREFIX}_gt[1-$N]%$GT_THROTTLE" -w "done($jid_ci)" \
         -o "$RUNDIR/logs/gt.%I.log" -e "$RUNDIR/logs/gt.%I.err" \
         -n 1 -q "$QUEUE" -M "$GT_MEM_T1" -R "select[mem>$GT_MEM_T1] rusage[mem=$GT_MEM_T1] $R" \
-        "$W genotype \$LSB_JOBINDEX")
+        -Q 99 "PT_GT_WATCHDOG=1 $W genotype \$LSB_JOBINDEX")
     log "phase 3 genotype       : $jid_gt  (tier1 ${GT_MEM_T1}MB/$QUEUE)"; record_jobid gt "$jid_gt"
 
     jid_gtr=$(submit_job -J "${JOB_PREFIX}_gtr" -w "ended($jid_gt)" \
@@ -640,23 +640,55 @@ cmd_genotype() {
 
     local CONTRACT; CONTRACT="$(geno_contract)"
     [ -s "$CONTRACT" ] || { log "$SAMPLE: contract $CONTRACT missing (re-run combine)"; exit 1; }
-    local TMP="$OUT.tmp.$$"
+    local TMP="$OUT.tmp.$$" rc=0
     if [ "$GENOTYPE_IMPL" = v2 ]; then
         # realignment genotyper: full junction consensus from combine + reference flanks
         local COMBINED="$RUNDIR/insertions/$PATIENT_ID.combined.txt.gz"
         [ -s "$COMBINED" ] || { log "$SAMPLE: $COMBINED missing (re-run combine)"; exit 1; }
-        if ! "$GENOTYPE2_BIN" --step genotype --bam "$BAM" \
-                --insertions "$CONTRACT" --combined "$COMBINED" --reference "$GENOME_2BIT" \
-                --out "$TMP" --threads 1 --config "$GENO2_CFG"; then
-            log "$SAMPLE: GENOTYPING FAILED"; rm -f "$TMP"; exit 1
-        fi
-    elif ! "$GENOTYPE_BIN" --step genotype --bam "$BAM" \
+        run_genotyper "$GENOTYPE2_BIN" --step genotype --bam "$BAM" \
+            --insertions "$CONTRACT" --combined "$COMBINED" --reference "$GENOME_2BIT" \
+            --out "$TMP" --threads 1 --config "$GENO2_CFG" || rc=$?
+    else
+        run_genotyper "$GENOTYPE_BIN" --step genotype --bam "$BAM" \
             --insertions "$CONTRACT" \
-            --out "$TMP" --threads 1 --config "$GENO_CFG"; then
-        log "$SAMPLE: GENOTYPING FAILED"; rm -f "$TMP"; exit 1
+            --out "$TMP" --threads 1 --config "$GENO_CFG" || rc=$?
     fi
+    if [ "$rc" -eq 99 ]; then rm -f "$TMP"; exit 99; fi    # stalled: LSF requeues (bsub -Q 99)
+    if [ "$rc" -ne 0 ]; then log "$SAMPLE: GENOTYPING FAILED"; rm -f "$TMP"; exit 1; fi
     mv -f "$TMP" "$OUT"
     log "$SAMPLE: genotyped -> $OUT"
+}
+
+# Run a genotyper. In the tier-1 array (PT_GT_WATCHDOG=1, submitted with bsub -Q 99) a run that
+# prints nothing to stderr for GT_STALL_S seconds is killed and returns 99, so LSF requeues the
+# element: same job id (downstream dependencies intact), a fresh slot. The genotypers print a
+# progress line every 1000 loci, which on a normal node comes every 20-80 s (PD51635: 115
+# colonies 311-1611 s for 21,729 loci); two elements on node-14-08 (233 jobs, load 107) slowed
+# ~70x to 1000 loci per 1600 s and would have hit the 12 h wall. At most GT_MAX_REQUEUE stall
+# requeues per sample, then the run goes to the end wherever it is. Elsewhere (tier-2 retry):
+# a plain run.
+run_genotyper() {
+    if [ "${PT_GT_WATCHDOG:-0}" != 1 ]; then "$@"; return; fi
+    local cnt="$RUNDIR/genotypes/.$SAMPLE.requeues" n=0 max="${GT_MAX_REQUEUE:-3}" stall="${GT_STALL_S:-900}"
+    [ -s "$cnt" ] && n="$(cat "$cnt")"
+    if [ "$n" -ge "$max" ]; then
+        log "$SAMPLE: $n stall requeues already -> running without the watchdog"; "$@"; return
+    fi
+    local hb="$RUNDIR/logs/gt.$SAMPLE.progress"
+    : > "$hb"
+    "$@" 2> >(tee -a "$hb" >&2) &
+    local pid=$! age
+    while kill -0 "$pid" 2>/dev/null; do
+        sleep "${GT_WATCH_EVERY_S:-30}"
+        age=$(( $(date +%s) - $(stat -c %Y "$hb") ))
+        if [ "$age" -gt "$stall" ] && kill -0 "$pid" 2>/dev/null; then
+            kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null || true
+            echo $((n + 1)) > "$cnt"
+            log "$SAMPLE: no genotyper progress for ${age}s on $(hostname) -> exit 99, LSF requeue $((n + 1))/$max"
+            return 99
+        fi
+    done
+    wait "$pid"
 }
 
 # per-BAM minimal stats: sample n_reads read_len mean_cov  (idxstats-based, no extra full pass)
