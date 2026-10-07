@@ -66,7 +66,9 @@ max_evidence_reads_per_breakpoint = 200
 # ART_LIGATION_PCR as one-sided poly-A) that combine's independence rule / annotate score.
 max_target_site_deletion = 30      # RIGHT up to 30 bp LEFT of LEFT (negative TSD), name L-R with L > R
 allow_blunt_pairs = true           # TSD 0..1 (EN-independent / blunt joins)
-max_l1_mediated_span = 50000       # polarised (poly-A tail + complex clip) far pairs: L1-mediated del/dup
+# Far (L1-mediated) pairs OFF, as in the GRCh38 tprt configs (PD51635: 41 bp .. 44 kb "TSDs",
+# all mis-pairings); every pair bounded by TSD_MAX = 40 / max_target_site_deletion.
+max_l1_mediated_span = 0
 l1_mediated_min_polya = 10
 one_sided_loci = true              # unpaired poly-A/T-tail junctions -> contig:L-oneside_L / contig:oneside_R-R
 one_sided_min_fragments = 2        # per sample; SPEC-8 reference-tract test always applied
