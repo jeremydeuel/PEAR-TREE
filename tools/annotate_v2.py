@@ -744,6 +744,113 @@ class Insertion:
                 return f"inverted duplication (>= {min(mLrc, mRrc)} bp)"
         return None
 
+    _GENOME = False   # lazily opened discovery genome (CONFIG annotate.genome_2bit); None = unavailable
+
+    def _ref_bases(self, start, end):
+        """Discovery-genome bases [start, end) (0-based half-open) on this locus's contig, or ''
+        when no genome is configured / readable (callers must then stay conservative)."""
+        cls = type(self)
+        if cls._GENOME is False:
+            try:
+                try:
+                    from tools.rte.genome import open_genome
+                except ImportError:            # run as `python tools/annotate_v2.py`
+                    from rte.genome import open_genome
+                cls._GENOME = open_genome(CONFIG['annotate'].get('genome_2bit'))
+            except Exception as exc:           # missing py2bit / file: no reference checks
+                print(f"annotate: no discovery genome for SV checks ({exc})", file=sys.stderr)
+                cls._GENOME = None
+        loc = self._parse_locus()
+        if cls._GENOME is None or loc is None or end <= start:
+            return ''
+        try:
+            return cls._GENOME.fetch(loc[0], start, end).upper()
+        except Exception:
+            return ''
+
+    def _breakpoint_sv_subtype(self):
+        """A plain deletion / tandem duplication, or None: each soft-clip is nothing but the
+        reference on the far side of the PARTNER breakpoint (Jeremy 2026-10-07, PD51635
+        chr2:99670833: a 19 bp deletion whose 21 / 15 bp clips were the two deletion flanks, typed
+        TSD_DELETION / unknown). Read through such a junction = ref[..x] + seam + ref[y..], so the
+        left clip is the reference ending where the right junction's reference ends (then the
+        seam), and the right clip is the seam then the reference starting where the left
+        junction's reference starts. `seam` = a few untemplated bases (NHEJ fill-in; chrX:141289677
+        = 13 bp tandem duplication + `TA`); `microhomology` = ambiguous bases the aligner put on
+        the reference side. Locus L-R: R < L is a deletion of L-R bp, R > L a tandem duplication
+        of R-L bp. An inserted element never matches its own target site on both sides, so this
+        runs before the element logic and the label is exclusive. Reference-free: the junction
+        strings already hold both flanks."""
+        loc = self._parse_locus()
+        if loc is None:
+            return None
+        _, s, e = loc
+        gap = e - s
+        if abs(gap) <= 1:
+            return None                      # clip == the adjacent reference: a mis-clip, no event
+        a = CONFIG['annotate']
+        min_clip = a.get('sv_adj_min_clip', 8)
+        min_total = a.get('sv_adj_min_total', 15)
+        max_mh = a.get('sv_adj_max_microhomology', 10)
+        max_seam = a.get('sv_adj_max_seam', 6)
+        trim = a.get('sv_adj_end_trim', 2)
+        min_ent = a.get('sv_adj_min_entropy', 1.2)
+        li, ri = (x.upper() for x in self._insert_clips())
+        lf, rf = (x.upper() for x in self._flank_uppers())
+
+        def matches(core, flank, at_end):
+            """Microhomology offset at which `core` (minus <= trim read-end bases) sits flush
+            against the flank's junction end, or None."""
+            for t in range(trim + 1):
+                q = core[t:] if at_end else core[:len(core) - t]
+                if len(q) < min_clip:
+                    return None
+                for off in range(max_mh + 1):
+                    if at_end:
+                        j = len(flank) - off
+                        if j - len(q) >= 0 and flank[j - len(q):j] == q:
+                            return off
+                    elif flank[off:off + len(q)] == q:
+                        return off
+            return None
+
+        use_l, use_r = len(li) >= min_clip, len(ri) >= min_clip
+        if not (use_l or use_r) or (use_l and use_r and len(li) + len(ri) < min_total) \
+                or (use_l != use_r and max(len(li), len(ri)) < min_total):
+            return None
+        if (use_l and self._shannon(li) < min_ent) or (use_r and self._shannon(ri) < min_ent):
+            return None                      # homopolymer / poly-A: chance flank match
+        for k in range(max_seam + 1):        # smallest seam first
+            seam = li[len(li) - k:] if use_l else ri[:k]
+            if use_l and use_r and ri[:k] != seam:
+                continue                     # both clips must carry the same seam
+            offs = []
+            if use_l:
+                offs.append(matches(li[:len(li) - k], rf, True))
+            if use_r:
+                offs.append(matches(ri[k:], lf, False))
+            if None in offs:
+                continue
+            notes = ''
+            if k:
+                notes += f", +{k} bp untemplated seam {seam}"
+            if max(offs):
+                notes += f", microhomology {max(offs)} bp"
+            if gap < 0 and k >= -gap:
+                # the "seam" replaces the whole deleted stretch: either it IS those bases (plain
+                # reference, a mis-clip) or their reverse complement -- a micro-inversion inside a
+                # palindrome (PD51635 chr6:70651185 CTATT -> AATAG, chr7:146830027 GAAT -> ATTC).
+                # Only the reference tells them apart; without it, no call.
+                deleted = self._ref_bases(e, s)
+                if deleted and k == -gap and seam == self._rc(deleted):
+                    return (f"SV_INVERSION: {k} bp micro-inversion ({deleted} -> {seam}; clips = "
+                            f"reference across the breakpoint)")
+                return None
+            if gap < 0:
+                return f"SV_DELETION: {-gap} bp deletion (clips = reference across the breakpoint{notes})"
+            return f"SV_DUPLICATION: {gap} bp tandem duplication (clips = reference across the breakpoint{notes})"
+        return None
+
     # ------------------------------------------------------------------- flank-leak Dfam demotion
     def _dfam_is_flank_leak(self, dfam, side):
         """True when a Dfam hit sits on clip sequence that is actually genomic FLANK that leaked
@@ -841,6 +948,9 @@ class Insertion:
         return out
 
     def _conclusion_no_site(self) -> str:
+        sv = self._breakpoint_sv_subtype()
+        if sv is not None:
+            return sv
         base = self._element_conclusion()
         cls = VariantAnnotationContainer.element_class(base)
         if cls in ('ALU', 'LINE1', 'SVA', 'RTE_other'):
@@ -1672,6 +1782,15 @@ class VariantAnnotationContainer:
         # is the SV descriptor — so it still falls through to the non_RTE_SV umbrella below.
         head = conclusion.split(' [SV:', 1)[0].split(' [site:', 1)[0]
         u = head.upper()
+        # plain local SVs (Jeremy 2026-10-07): a deletion / duplication whose clips are only the
+        # locus's own reference is its own class, not an "insertion" of any kind
+        if head.startswith('SV_DELETION'):
+            return 'SV_DELETION'
+        if head.startswith('SV_INVERSION'):
+            return 'SV_INVERSION'
+        if head.startswith('SV_DUPLICATION') or head.startswith('tandem/segmental duplication') \
+                or head.startswith('local duplication'):
+            return 'SV_DUPLICATION'
         if 'PSEUDOGENE' in u:
             return 'processed_pseudogene'
         if head == 'artefact':

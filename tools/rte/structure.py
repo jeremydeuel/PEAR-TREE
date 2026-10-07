@@ -391,7 +391,9 @@ def classify(res, lib, ctx=None, cfg=None, novel_finder=None, premrna=None,
             call.element = "ORPHAN_TD"
         elif call.has_polya_3p and nonpolya_unknown < c["min_unknown_bp"] and not flank3 and not pg_genes:
             call.element = "POLYA_ONLY"
-        elif legacy_class in ("non_RTE_SV", "microsatellite", "templated_insertion"):
+        elif legacy_class in ("non_RTE_SV", "SV_DELETION", "SV_DUPLICATION", "SV_INVERSION",
+                              "microsatellite",
+                              "templated_insertion"):
             call.element = "NON_TPRT"
     if call.element in ("POLYA_ONLY", "ORPHAN_TD", "PSEUDOGENE", "NON_TPRT", "UNKNOWN"):
         if not cls_:

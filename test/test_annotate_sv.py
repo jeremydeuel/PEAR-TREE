@@ -262,7 +262,90 @@ MICROSAT = _make(
 def test_tandem_duplication():
     c = TANDEM_DUP.conclusion()
     assert "tandem/segmental duplication" in c, c
-    assert VAC.element_class(c) == "non_RTE_SV", c
+    assert VAC.element_class(c) == "SV_DUPLICATION", c
+
+
+# --- plain local SVs: both clips are the reference across the partner breakpoint (PD51635) ------
+# Real junction consensus strings from the PD51635 run (2026-10-07).
+
+# chr2:99670833-99670814: a 19 bp deletion (hg38 99670815-99670833 = TTCCTTTTATTGCAAAAAT), typed
+# TSD_DELETION / "unknown" before; microhomology AG.
+SV_DEL = _make(
+    "chr2:99670833-99670814",
+    left_seq="ataaaaattattcattctgtcAGGAAGGTATATTCACATAGGAATTAAATGCAAGAATAAAGGATCTGACCTGTACATTCAT",
+    right_seq="GGTTATAATTATAGGCCAAAGCAGGACAACTTAATGTATAAAAATTATTCATTCTGTCAGgaaggtatattcaca")
+
+# chrX:141289677-141289690: a 13 bp tandem duplication with a 2 bp untemplated seam (TA), which
+# the TPRT score read as a TSD (LIKELY_TPRT).
+SV_DUP_SEAM = _make(
+    "chrX:141289677-141289690",
+    left_seq="ttcctagtcctcagtaTCCTAGTCCTCAGAACTACTGAAGACTGATACAAACTGAATCTTTCACC",
+    right_seq="CCCTAGAACCTACTTTGTCTGTTCCTAGTCCTCAGtatcctagtcctcagaactact")
+
+# A TSD insertion: the clips are an Alu 3' end / poly-A, never the partner flank -> no SV label.
+TSD_ALU = _make(
+    "chr5:1000-1015",
+    left_seq="ggccgggcgcggtggctcacgcctgtaatcccagcaCTTAGGCATCGATCGATGCTTGCACCGATAGC",
+    right_seq="ACGTGACCTTAGCTAGCTGACATGACTGCATTGGCATCGAaaaaaaaaaaaaaaaaaaaaaaa")
+
+# poly-A clips that happen to sit against an A-run in the partner flank: low complexity -> no SV.
+POLYA_CHANCE = _make(
+    "chr5:2000-1990",
+    left_seq="aaaaaaaaaaaaaaaaCTTAGGCATCGATCGATGCTTGCACCG",
+    right_seq="ACGTGACCTTAGCTAGCTGAAAAAAAAAAAAAAAAAAaaaaaaaaaaaaaaaa")
+
+
+# chr6:70651185-70651180: the 5 bp "seam" AATAG replaces hg38 70651181-70651185 = CTATT, its
+# reverse complement -> a micro-inversion inside a palindrome, not a deletion.
+MICRO_INV = _make(
+    "chr6:70651185-70651180",
+    left_seq="cacccttatcaatagGATAAGGGTGGAGCCCTCGTGACTTAATTACTGTCCCAAGG",
+    right_seq="GGCCAATTTTATTACTACCCTTATCaataggataagggtag")
+
+
+class _StubGenome:
+    """hg38 chr6:70651120-70651250 (0-based start), enough for the micro-inversion fixture."""
+    OFF, SEQ = 70651120, ("TCCTCATATGGTCGAAGAGGCTCTCTGCTCCCTTAGGCCAATTTTATTACTACCCTTATCCTATTGATAAGGGTGG"
+                          "AGCCCTCGTGACTTAATTACTGTCCCAAGGGCCCAACTCTATATCACTTCAATG")
+
+    def fetch(self, contig, start, end):
+        assert contig == "chr6"
+        return self.SEQ[start - self.OFF:end - self.OFF]
+
+
+def test_micro_inversion_needs_the_reference():
+    saved = Insertion._GENOME
+    try:
+        Insertion._GENOME = None                   # no genome: seam == deleted length -> no call
+        assert MICRO_INV._breakpoint_sv_subtype() is None
+        Insertion._GENOME = _StubGenome()
+        c = MICRO_INV.conclusion()
+        assert c.startswith("SV_INVERSION: 5 bp micro-inversion (CTATT -> AATAG"), c
+        assert VAC.element_class(c) == "SV_INVERSION", c
+    finally:
+        Insertion._GENOME = saved
+
+
+def test_plain_deletion_is_sv_deletion():
+    c = SV_DEL.conclusion()
+    assert c.startswith("SV_DELETION: 19 bp deletion"), c
+    assert "microhomology 2 bp" in c, c
+    assert VAC.element_class(c) == "SV_DELETION", c
+
+
+def test_tandem_dup_with_seam_is_sv_duplication():
+    c = SV_DUP_SEAM.conclusion()
+    assert c.startswith("SV_DUPLICATION: 13 bp tandem duplication"), c
+    assert "seam TA" in c, c
+    assert VAC.element_class(c) == "SV_DUPLICATION", c
+
+
+def test_tsd_insertion_is_not_sv():
+    assert TSD_ALU._breakpoint_sv_subtype() is None
+
+
+def test_polya_chance_match_is_not_sv():
+    assert POLYA_CHANCE._breakpoint_sv_subtype() is None
 
 
 def test_inverted_duplication():
