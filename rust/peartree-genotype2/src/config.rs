@@ -56,7 +56,23 @@ pub struct Config {
     /// (empty = no columns); the joint step's `--ref-bias auto|<b>` plugs an estimated `b` in
     pub ref_bias_grid: Vec<f64>,
     pub prior: [f64; 3],
-
+    // ---- extra evidence for undiscovered carriers (extra.rs; default off) ----
+    /// collect, at loci this colony shows ALT support for but did not discover, its ALT junction
+    /// reads + discordant anchors and their inside mates into `<out>.extra_reads.fa.gz`
+    /// (needs `--members`); never changes the genotype rows
+    pub gt_extra_reads: bool,
+    /// ALT gate: at least this many reads realigned as Alt (LLR >= `llr_informative`)
+    pub gt_extra_min_alt: usize,
+    /// discordant anchors: last base within this many bp before R / first base after L
+    pub gt_extra_disc_span: i64,
+    /// discordant anchors: MAPQ floor (the anchor sits in the flank; its mate is in the element)
+    pub gt_extra_anchor_mapq: u8,
+    /// per locus: at most this many discordant anchors (and inside-mate fetches)
+    pub gt_extra_max_mates: usize,
+    /// per locus: at most this many ALT junction reads written
+    pub gt_extra_max_reads: usize,
+    /// per colony: at most this many inside-mate fetches (random access; bounds the extra I/O)
+    pub gt_extra_max_mate_fetches: usize,
 }
 
 impl Default for Config {
@@ -96,6 +112,13 @@ impl Default for Config {
             ref_bias_kind: Vec::new(),
             ref_bias_grid: Vec::new(),
             prior: [1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0],
+            gt_extra_reads: false,
+            gt_extra_min_alt: 1,
+            gt_extra_disc_span: 500,
+            gt_extra_anchor_mapq: 20,
+            gt_extra_max_mates: 10,
+            gt_extra_max_reads: 40,
+            gt_extra_max_mate_fetches: 3000,
         }
     }
 }
@@ -201,6 +224,13 @@ impl Config {
             "ref_bias" => self.ref_bias = num(val)?,
             "ref_bias_kind" => self.ref_bias_kind = kind_list(val)?,
             "ref_bias_grid" => self.ref_bias_grid = if val.trim().is_empty() { Vec::new() } else { list(val)? },
+            "gt_extra_reads" => self.gt_extra_reads = boolean(val)?,
+            "gt_extra_min_alt" => self.gt_extra_min_alt = num(val)?,
+            "gt_extra_disc_span" => self.gt_extra_disc_span = num(val)?,
+            "gt_extra_anchor_mapq" => self.gt_extra_anchor_mapq = num(val)?,
+            "gt_extra_max_mates" => self.gt_extra_max_mates = num(val)?,
+            "gt_extra_max_reads" => self.gt_extra_max_reads = num(val)?,
+            "gt_extra_max_mate_fetches" => self.gt_extra_max_mate_fetches = num(val)?,
             "prior" => {
                 let l = list(val)?;
                 if l.len() != 3 {
@@ -238,6 +268,9 @@ impl Config {
         }
         if !(self.clip_prob > 0.0 && self.clip_prob < 1.0) {
             return Err("clip_prob must be in (0, 1)".into());
+        }
+        if self.gt_extra_min_alt == 0 {
+            return Err("gt_extra_min_alt must be >= 1 (the ALT gate)".into());
         }
         if self.flank < 50 {
             return Err("flank must be >= 50".into());

@@ -41,6 +41,11 @@ class RteRecord:
     score_input: object = None      # score.ScoreInput (kept for re-scoring passes)
     covered_seqs: list = field(default_factory=list)
     site: tuple = (None, None, None)   # (contig, L, R) on the discovery genome
+    # genotype2 extra-pass reads (GT_* roles, <P>.insertions.genotype_reads.fa.gz) used in the
+    # assembly, and the calls they changed vs the combine reads alone (annotator.gt_changes);
+    # written as the optional gt_reads / gt_changed columns, never part of COLUMNS
+    gt_reads: int = 0
+    gt_changed: str = ""
 
     COLUMNS = ["element", "structure", "tags", "covered_5p", "covered_3p", "element_identity",
                "nearest_active", "tsd_seq", "tsd_len", "en_motif", "en_mismatches", "polya_len",

@@ -606,6 +606,29 @@ ensure_geno_contract() {   # (combine task only) build the one-sided extension i
     log "contract (+one-sided): $ext ($(zcat "$ext" | grep -c '^>') loci)"
 }
 
+# genotype2 extra pass (`gt_extra_reads`, rust/peartree-genotype2/src/extra.rs): every genotype
+# task needs to know which loci its colony DISCOVERED (= has reads in combine's reads FASTA) so it
+# collects extra reads only at the others. tools/genotype_extra_reads.py condenses the reads
+# FASTA (PD51635: 269 MB) once into <P>.members.tsv.gz. Built by the combine task; a genotype
+# task of an older run builds it under a lock (the others wait for it) when it is missing.
+geno_members() { echo "$RUNDIR/insertions/$PATIENT_ID.members.tsv.gz"; }
+
+ensure_geno_members() {
+    [ "$GENOTYPE_IMPL" = v2 ] || return 0
+    local fa="$RUNDIR/insertions/$PATIENT_ID.insertions.reads.fa.gz" mem lock t=0
+    mem="$(geno_members)"; lock="$mem.lock"
+    [ -s "$fa" ] || return 0                         # no combine reads: no extra pass
+    if [ -s "$mem" ] && [ "$mem" -nt "$fa" ]; then return 0; fi
+    if mkdir "$lock" 2>/dev/null; then
+        "$VENV/bin/python" "$PT_ROOT/tools/genotype_extra_reads.py" members --reads-fa "$fa" --out "$mem" \
+            || log "WARNING: members table failed -> genotyping without the extra pass"
+        rmdir "$lock"
+    else
+        while [ -d "$lock" ] && [ "$t" -lt 900 ]; do sleep 10; t=$((t + 10)); done
+    fi
+    return 0
+}
+
 # =============================================================================
 # phase 2 — combine_insertions over whatever discovery files exist
 # =============================================================================
@@ -613,7 +636,7 @@ cmd_combine() {
     load_env
     cd "$RUNDIR"
     local CONTRACT="insertions/$PATIENT_ID.genotyping.txt.gz"
-    if [ -s "$CONTRACT" ]; then log "contract exists, skipping"; ensure_geno_contract; exit 0; fi
+    if [ -s "$CONTRACT" ]; then log "contract exists, skipping"; ensure_geno_contract; ensure_geno_members; exit 0; fi
 
     shopt -s nullglob
     local files=(discovery/*.txt.gz)
@@ -654,6 +677,7 @@ cmd_combine() {
     [ -s "$CONTRACT" ] || { echo "combine_insertions produced no $CONTRACT" >&2; exit 1; }
     log "contract: $CONTRACT ($(zcat "$CONTRACT" | grep -c '^>') loci)"
     ensure_geno_contract
+    ensure_geno_members
 }
 
 # =============================================================================
@@ -694,16 +718,23 @@ cmd_genotype() {
         # realignment genotyper: full junction consensus from combine + reference flanks
         local COMBINED="$RUNDIR/insertions/$PATIENT_ID.combined.txt.gz"
         [ -s "$COMBINED" ] || { log "$SAMPLE: $COMBINED missing (re-run combine)"; exit 1; }
+        # extra pass (a no-op unless GENO2_CFG sets gt_extra_reads): this colony's discovery
+        # memberships; it writes $TMP.extra_reads.fa.gz next to the output
+        local xargs=()
+        ensure_geno_members
+        [ -s "$(geno_members)" ] && xargs=(--members "$(geno_members)" --sample "$SAMPLE")
         run_genotyper "$GENOTYPE2_BIN" --step genotype --bam "$BAM" \
             --insertions "$CONTRACT" --combined "$COMBINED" --reference "$GENOME_2BIT" \
-            --out "$TMP" --threads 1 --config "$GENO2_CFG" || rc=$?
+            --out "$TMP" --threads 1 --config "$GENO2_CFG" ${xargs[@]+"${xargs[@]}"} || rc=$?
     else
         run_genotyper "$GENOTYPE_BIN" --step genotype --bam "$BAM" \
             --insertions "$CONTRACT" \
             --out "$TMP" --threads 1 --config "$GENO_CFG" || rc=$?
     fi
-    if [ "$rc" -eq 99 ]; then rm -f "$TMP"; exit 99; fi    # stalled: LSF requeues (bsub -Q 99)
-    if [ "$rc" -ne 0 ]; then log "$SAMPLE: GENOTYPING FAILED"; rm -f "$TMP"; exit 1; fi
+    if [ "$rc" -eq 99 ]; then rm -f "$TMP" "$TMP.extra_reads.fa.gz"; exit 99; fi    # stalled: LSF requeues (bsub -Q 99)
+    if [ "$rc" -ne 0 ]; then log "$SAMPLE: GENOTYPING FAILED"; rm -f "$TMP" "$TMP.extra_reads.fa.gz"; exit 1; fi
+    # sidecar first: the output's presence is what marks the sample done
+    [ -e "$TMP.extra_reads.fa.gz" ] && mv -f "$TMP.extra_reads.fa.gz" "$OUT.extra_reads.fa.gz"
     mv -f "$TMP" "$OUT"
     log "$SAMPLE: genotyped -> $OUT"
     drop_bam "$PROJ" "$SAMPLE"
@@ -761,11 +792,24 @@ write_bam_stats() {
 # =============================================================================
 # phase 4 — combine_genotypes
 # =============================================================================
+# genotype2 extra pass: the per-colony sidecars, kept only where the joint step calls the colony a
+# carrier (P >= genotype2_io.P_CARRIER), -> insertions/<P>.insertions.genotype_reads.fa.gz, which
+# annotate_v2 (tools/rte) reads as classification evidence. Never junction evidence: the report's
+# hard rules read insertions.reads.fa.gz only.
+merge_genotype_reads() {
+    local CALLS="$1" out="insertions/$PATIENT_ID.insertions.genotype_reads.fa.gz"
+    [ "$GENOTYPE_IMPL" = v2 ] && [ -s "$CALLS" ] || return 0
+    compgen -G "genotypes/*.extra_reads.fa.gz" >/dev/null || return 0
+    if [ -s "$out" ] && [ "$out" -nt "$CALLS" ]; then return 0; fi
+    "$VENV/bin/python" "$PT_ROOT/tools/genotype_extra_reads.py" merge --genotype-dir genotypes \
+        --matrix "$CALLS" --out "$out" || log "WARNING: genotype reads merge failed (annotate runs without them)"
+}
+
 cmd_combine_genotypes() {
     load_env
     cd "$RUNDIR"
     local CALLS="$PATIENT_ID.genotypes.csv.gz"
-    if [ -s "$CALLS" ]; then log "calls exist, skipping"; exit 0; fi
+    if [ -s "$CALLS" ]; then log "calls exist, skipping"; merge_genotype_reads "$CALLS"; exit 0; fi
 
     shopt -s nullglob
     local files=(genotypes/*.txt.gz)
@@ -789,6 +833,7 @@ cmd_combine_genotypes() {
     fi
 
     [ -s "$CALLS" ] || { echo "phase 4 produced no $CALLS" >&2; exit 1; }
+    merge_genotype_reads "$CALLS"     # before the copy below: it goes to RESULTS_DIR with insertions/
 
     # per-BAM stats summary (step 5/7): one table for the whole patient
     local STATS_SUM="$PATIENT_ID.bam_stats.tsv"

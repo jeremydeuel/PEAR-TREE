@@ -19,8 +19,8 @@ use crate::config::Config;
 use crate::contract::ContractSides;
 use crate::read::{decode_light_into, name, qual_into, seq_into, LightRec};
 use crate::source::{io_counters, is_cram, open_source_buffered, AnyRecord, RegionSource};
-use crate::types::{output_header, Locus, LocusModel, ReadInput, ReadObs, Status};
-use crate::{haplotype, model, output, readlik, refseq};
+use crate::types::{output_header, AltSide, Locus, LocusModel, ReadClass, ReadInput, ReadObs, Status};
+use crate::{extra, haplotype, model, output, readlik, refseq};
 
 use noodles_core::{Position, Region};
 use noodles_sam::Header;
@@ -51,7 +51,9 @@ const WIDE_QUERY_CAP_MIN: usize = 2000;
 /// Genotype `loci` (contract order; the driver sorts internally) against one alignment file,
 /// writing rows to `writer` (header included). `reference_path` is the genome (FASTA/2bit) used
 /// for haplotypes AND for CRAM decoding. `combined` = the per-locus consensus from `--combined`
-/// (None -> contract fallback with one warning).
+/// (None -> contract fallback with one warning). `extra` (only with `gt_extra_reads`): this
+/// colony's discovery memberships + the sidecar writer of the extra pass (extra.rs).
+#[allow(clippy::too_many_arguments)]
 pub fn run<W: Write>(
     loci: &[(Locus, ContractSides)],
     combined: Option<&std::collections::HashMap<String, ContractSides>>,
@@ -60,6 +62,7 @@ pub fn run<W: Write>(
     cfg: &Config,
     threads: usize,
     writer: &mut W,
+    extra: Option<ExtraArgs<'_>>,
 ) -> io::Result<()> {
     // open the alignment first: a bad input (e.g. CRAM with a .2bit reference) fails before the
     // model build
@@ -91,55 +94,143 @@ pub fn run<W: Write>(
     writer.write_all(output_header(&cfg.noise_frac_grid, &cfg.ref_bias_grid).as_bytes())?;
     let t_geno = Instant::now();
     let io0 = io_counters();
+    // the extra pass: per chunk, the members set + an even share of the per-colony mate budget
+    let n_chunks = chunks.len().max(1);
+    let meta = extra.as_ref().map(|e| (e.members, e.sample));
+    let mut xout: Option<&mut dyn Write> = extra.map(|e| e.out);
+    let new_state = || {
+        meta.map(|(members, sample)| ExtraState {
+            members,
+            sample,
+            mate_budget: cfg.gt_extra_max_mate_fetches / n_chunks,
+            stats: extra::ExtraStats::default(),
+            buf: String::new(),
+        })
+    };
+    let mut extra_stats = extra::ExtraStats::default();
 
     if chunks.len() <= 1 {
-        process_chunk(src0.as_mut(), &header, &models, &order, cfg, "", &mut |row, heartbeat| {
-            writer.write_all(row.as_bytes())?;
-            if heartbeat {
-                // sync-flush: the partial .txt.gz on disk decodes up to the last heartbeat
-                writer.flush()?;
-            }
-            Ok(())
-        })?;
+        let mut xs = new_state();
+        process_chunk(
+            src0.as_mut(),
+            &header,
+            &models,
+            &order,
+            cfg,
+            "",
+            xs.as_mut(),
+            &mut |text| match xout.as_mut() {
+                Some(w) => w.write_all(text.as_bytes()),
+                None => Ok(()),
+            },
+            &mut |row, heartbeat| {
+                writer.write_all(row.as_bytes())?;
+                if heartbeat {
+                    // sync-flush: the partial .txt.gz on disk decodes up to the last heartbeat
+                    writer.flush()?;
+                }
+                Ok(())
+            },
+        )?;
+        if let Some(x) = xs {
+            extra_stats.add(&x.stats);
+        }
     } else {
         // Chunk 0 runs on this thread and STREAMS to `writer` (so a killed job still leaves
         // the first chunk's rows); chunks 1.. run on worker threads, each with its own reader,
-        // and are appended in chunk order after the join.
-        let mut collected: Vec<io::Result<String>> = Vec::new();
+        // and are appended in chunk order after the join (their extra reads likewise).
+        type ChunkOut = (String, String, Option<extra::ExtraStats>);
+        let mut collected: Vec<io::Result<ChunkOut>> = Vec::new();
+        let mut xs0 = new_state();
         std::thread::scope(|scope| -> io::Result<()> {
             let mut handles = Vec::with_capacity(chunks.len() - 1);
             for (t, range) in chunks.iter().enumerate().skip(1) {
                 let idx = &order[range.clone()];
                 let models = &models;
                 let tag = format!("[t{t}] ");
-                handles.push(scope.spawn(move || -> io::Result<String> {
+                let mut xs = new_state();
+                handles.push(scope.spawn(move || -> io::Result<ChunkOut> {
                     let mut src = open_source_buffered(input, Some(reference_path), cfg.io_buffer_bytes, cfg.io_fill_bytes)?;
                     let header = src.header().clone();
-                    let mut out = String::new();
-                    process_chunk(src.as_mut(), &header, models, idx, cfg, &tag, &mut |row, _| {
-                        out.push_str(row);
-                        Ok(())
-                    })?;
-                    Ok(out)
+                    let (mut out, mut xtext) = (String::new(), String::new());
+                    process_chunk(
+                        src.as_mut(),
+                        &header,
+                        models,
+                        idx,
+                        cfg,
+                        &tag,
+                        xs.as_mut(),
+                        &mut |text| {
+                            xtext.push_str(text);
+                            Ok(())
+                        },
+                        &mut |row, _| {
+                            out.push_str(row);
+                            Ok(())
+                        },
+                    )?;
+                    Ok((out, xtext, xs.map(|x| x.stats)))
                 }));
             }
-            let first = process_chunk(src0.as_mut(), &header, &models, &order[chunks[0].clone()], cfg, "[t0] ", &mut |row, hb| {
-                writer.write_all(row.as_bytes())?;
-                if hb {
-                    writer.flush()?;
-                }
-                Ok(())
-            });
+            let first = process_chunk(
+                src0.as_mut(),
+                &header,
+                &models,
+                &order[chunks[0].clone()],
+                cfg,
+                "[t0] ",
+                xs0.as_mut(),
+                &mut |text| match xout.as_mut() {
+                    Some(w) => w.write_all(text.as_bytes()),
+                    None => Ok(()),
+                },
+                &mut |row, hb| {
+                    writer.write_all(row.as_bytes())?;
+                    if hb {
+                        writer.flush()?;
+                    }
+                    Ok(())
+                },
+            );
             for h in handles {
                 collected.push(h.join().unwrap_or_else(|_| Err(io::Error::other("genotyping worker thread panicked"))));
             }
             first
         })?;
+        if let Some(x) = xs0 {
+            extra_stats.add(&x.stats);
+        }
         for chunk in collected {
-            writer.write_all(chunk?.as_bytes())?;
+            let (rows, xtext, xstats) = chunk?;
+            writer.write_all(rows.as_bytes())?;
+            if let Some(w) = xout.as_mut() {
+                w.write_all(xtext.as_bytes())?;
+            }
+            if let Some(s) = xstats {
+                extra_stats.add(&s);
+            }
         }
     }
     writer.flush()?;
+    if let (Some(w), Some((_, sample))) = (xout.as_mut(), meta) {
+        w.flush()?;
+        let s = &extra_stats;
+        eprintln!(
+            "extra reads ({sample}): {} undiscovered loci called, {} passed the ALT gate (>= {} Alt read(s)); wrote {} GT_CLIP, \
+             {} GT_POLYA, {} GT_DISC, {} GT_MATE ({} mates not found, {} over the fetch cap); extra pass {:.1}s",
+            s.candidates,
+            s.gated,
+            cfg.gt_extra_min_alt,
+            s.clip,
+            s.polya,
+            s.disc,
+            s.mates,
+            s.mates_missing,
+            s.mates_capped,
+            s.micros as f64 / 1e6
+        );
+    }
     let secs = t_geno.elapsed().as_secs_f64();
     let io1 = io_counters();
     eprintln!(
@@ -279,6 +370,7 @@ pub(crate) fn is_heartbeat(done: usize, total: usize, every: usize) -> bool {
 // chunk / locus processing
 // ------------------------------------------------------------------------------------------
 
+#[allow(clippy::too_many_arguments)]
 fn process_chunk(
     src: &mut dyn RegionSource,
     header: &Header,
@@ -286,6 +378,8 @@ fn process_chunk(
     idx: &[usize],
     cfg: &Config,
     tag: &str,
+    mut extra: Option<&mut ExtraState<'_>>,
+    emit_extra: &mut dyn FnMut(&str) -> io::Result<()>,
     emit: &mut dyn FnMut(&str, bool) -> io::Result<()>,
 ) -> io::Result<()> {
     let total = idx.len();
@@ -293,10 +387,16 @@ fn process_chunk(
     let mut sum = LocusStats::default();
     for (k, &i) in idx.iter().enumerate() {
         let m = &models[i];
-        let (row, stats) = genotype_locus(src, header, m, cfg);
+        let (row, stats) = genotype_locus(src, header, m, cfg, extra.as_deref_mut());
         sum.fetched += stats.fetched;
         sum.gated += stats.gated;
         sum.requeried += stats.requeried;
+        if let Some(x) = extra.as_deref_mut() {
+            if !x.buf.is_empty() {
+                emit_extra(&x.buf)?;
+                x.buf.clear();
+            }
+        }
         let hb = is_heartbeat(k + 1, total, cfg.heartbeat_every);
         emit(&row, hb)?;
         if hb {
@@ -317,18 +417,31 @@ fn process_chunk(
 
 /// One locus -> one output row (+ stream diagnostics). Never fails: I/O errors and panics in
 /// the scorer / model become an `error` row (with the coverage when it is already known).
-fn genotype_locus(src: &mut dyn RegionSource, header: &Header, m: &LocusModel, cfg: &Config) -> (String, LocusStats) {
+///
+/// With `extra` (gt_extra_reads), a locus this colony did not discover keeps its scored reads
+/// and, once the row is made, gets the extra pass if it passes the ALT gate. The row never
+/// depends on it; a failing extra pass only warns and writes nothing for the locus.
+fn genotype_locus(
+    src: &mut dyn RegionSource,
+    header: &Header,
+    m: &LocusModel,
+    cfg: &Config,
+    extra: Option<&mut ExtraState<'_>>,
+) -> (String, LocusStats) {
     let name = m.locus.name.as_str();
     let n_prof = cfg.noise_frac_grid.len() + cfg.ref_bias_grid.len();
     if m.error.is_some() {
         return (output::format_simple_row(name, m.kind, Status::Error, 0, n_prof), LocusStats::default());
     }
+    let extra = extra.filter(|x| is_extra_candidate(x.members, name));
+    let mut kept: Vec<KeptRead> = Vec::new();
     let collected = catch_unwind(AssertUnwindSafe(|| -> io::Result<Outcome> {
         let contig = contig_index(header, &m.locus.chr).ok_or_else(|| {
             io::Error::new(io::ErrorKind::InvalidInput, format!("contig {} not in the alignment header", m.locus.chr))
         })?;
         let mut reads = SourceReads::new(src, header, &m.locus.chr, contig);
-        collect_locus(m, contig, cfg, &mut reads, &mut |r| readlik::score_read(m, r, cfg))
+        let keep = if extra.is_some() { Some(&mut kept) } else { None };
+        collect_locus_keep(m, contig, cfg, &mut reads, &mut |r| readlik::score_read(m, r, cfg), keep)
     }));
     let (coverage, obs, n_disc, stats) = match collected {
         Ok(Ok(Outcome::HighCoverage)) => {
@@ -358,6 +471,34 @@ fn genotype_locus(src: &mut dyn RegionSource, header: &Header, m: &LocusModel, c
             output::format_simple_row(name, m.kind, Status::Error, coverage, n_prof)
         }
     };
+    if let Some(x) = extra {
+        x.stats.candidates += 1;
+        if passes_alt_gate(&obs, cfg) {
+            let t = Instant::now();
+            let mut text = String::new();
+            let mut budget = x.mate_budget;
+            let sample = x.sample;
+            let done = catch_unwind(AssertUnwindSafe(|| -> io::Result<extra::ExtraStats> {
+                let contig = contig_index(header, &m.locus.chr).ok_or_else(|| io::Error::other("contig not in the header"))?;
+                let mut reads = SourceReads::new(&mut *src, header, &m.locus.chr, contig);
+                let (anchors, mut st) = collect_extra(m, contig, cfg, sample, &obs, &kept, &mut reads, &mut text)?;
+                let mut mates = SourceMates { src: &mut *src, header, light: LightRec::default() };
+                fetch_extra_mates(m, sample, &anchors, &mut mates, &mut budget, &mut text, &mut st)?;
+                Ok(st)
+            }));
+            match done {
+                Ok(Ok(st)) => {
+                    x.stats.add(&st);
+                    x.stats.gated += 1;
+                    x.mate_budget = budget;
+                    x.buf.push_str(&text);
+                }
+                Ok(Err(e)) => eprintln!("extra reads failed for {name}: {e}"),
+                Err(_) => eprintln!("extra reads failed for {name}: panic"),
+            }
+            x.stats.micros += t.elapsed().as_micros();
+        }
+    }
     (row, stats)
 }
 
@@ -504,17 +645,21 @@ pub(crate) fn passes_mapq(r: &LightRec, geo: &Geometry, cfg: &Config) -> bool {
 /// `[R - disc_span, R + 5]` or a REVERSE anchor starting in `[L - 5, L + disc_span]` (its mate
 /// points into the insertion). Flag/contig gates are applied by the caller (`gate`).
 pub(crate) fn is_discordant_anchor(r: &LightRec, geo: &Geometry, cfg: &Config) -> bool {
-    if !r.is_paired || r.mapq < cfg.min_mapq {
+    anchor_with(r, geo, cfg.min_mapq, cfg.disc_span, cfg.disc_max_tlen)
+}
+
+/// `is_discordant_anchor` with explicit MAPQ floor / span (the extra pass uses its own).
+pub(crate) fn anchor_with(r: &LightRec, geo: &Geometry, min_mapq: u8, span: i64, max_tlen: i64) -> bool {
+    if !r.is_paired || r.mapq < min_mapq {
         return false;
     }
     let abnormal = r.mate_unmapped
         || r.mate_reference_sequence_id != r.reference_sequence_id
-        || r.tlen.abs() > cfg.disc_max_tlen
+        || r.tlen.abs() > max_tlen
         || r.is_reverse == r.mate_reverse;
     if !abnormal {
         return false;
     }
-    let span = cfg.disc_span;
     if r.is_reverse {
         geo.l_junction.is_some_and(|lp| r.reference_start >= lp - 5 && r.reference_start <= lp + span)
     } else {
@@ -617,12 +762,26 @@ pub(crate) enum Outcome {
 /// to `disc_span` bp before R / start up to `disc_span` after L, without overlapping the
 /// breakpoint) come out of the SAME record stream. Depth counts only records overlapping
 /// `[lo, hi + 1)` (the legacy count window); evidence only records overlapping a breakpoint.
+#[cfg_attr(not(test), allow(dead_code))] // production calls collect_locus_keep
 pub(crate) fn collect_locus(
     model: &LocusModel,
     contig: usize,
     cfg: &Config,
     reads: &mut dyn LocusReads,
     score: &mut dyn FnMut(&ReadInput) -> ReadObs,
+) -> io::Result<Outcome> {
+    collect_locus_keep(model, contig, cfg, reads, score, None)
+}
+
+/// `collect_locus` that also keeps, index-aligned with `obs`, what the extra pass needs of each
+/// scored read (`keep`, only for loci that may get an extra pass; None = the plain path).
+pub(crate) fn collect_locus_keep(
+    model: &LocusModel,
+    contig: usize,
+    cfg: &Config,
+    reads: &mut dyn LocusReads,
+    score: &mut dyn FnMut(&ReadInput) -> ReadObs,
+    mut keep: Option<&mut Vec<KeptRead>>,
 ) -> io::Result<Outcome> {
     let geo = Geometry::new(model, contig);
     let thr = cfg.reads_for_high_coverage;
@@ -676,6 +835,15 @@ pub(crate) fn collect_locus(
                                 reverse: r.is_reverse,
                             };
                             obs.push(score(&input));
+                            if let Some(k) = keep.as_deref_mut() {
+                                k.push(KeptRead {
+                                    qname: rv.qname().to_vec(),
+                                    seq: seq.clone(),
+                                    lead: r.leading_softclip(),
+                                    trail: r.trailing_softclip(),
+                                    is_first: r.is_first,
+                                });
+                            }
                         }
                     }
                     Gate::Discordant => {
@@ -702,6 +870,239 @@ pub(crate) fn collect_locus(
     }
     let n_disc = disc.iter().filter(|q| !dedup.has_name(q)).count() as i64;
     Ok(Outcome::Collected { coverage, obs, n_disc, stats })
+}
+
+// ------------------------------------------------------------------------------------------
+// extra evidence for undiscovered carriers (`gt_extra_reads`, extra.rs)
+// ------------------------------------------------------------------------------------------
+
+/// What the extra pass needs of a scored read (kept index-aligned with `obs`).
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct KeptRead {
+    pub qname: Vec<u8>,
+    /// as stored (reference-forward = site-forward)
+    pub seq: Vec<u8>,
+    pub lead: usize,
+    pub trail: usize,
+    pub is_first: bool,
+}
+
+/// A fetched mate: its stored sequence and strand bit.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct MateRec {
+    pub seq: Vec<u8>,
+    pub is_reverse: bool,
+}
+
+/// Random access to one read of a pair by (contig, 0-based position, qname, which read).
+pub(crate) trait MateSource {
+    fn fetch_mate(&mut self, contig: usize, pos: i64, qname: &[u8], want_first: bool) -> io::Result<Option<MateRec>>;
+}
+
+/// Records scanned at a mate's position before giving up (a pileup there cannot wedge a locus).
+const MATE_SCAN_CAP: usize = 5000;
+
+struct SourceMates<'s> {
+    src: &'s mut dyn RegionSource,
+    header: &'s Header,
+    light: LightRec,
+}
+
+impl MateSource for SourceMates<'_> {
+    fn fetch_mate(&mut self, contig: usize, pos: i64, qname: &[u8], want_first: bool) -> io::Result<Option<MateRec>> {
+        let Some((chr, _)) = self.header.reference_sequences().get_index(contig) else { return Ok(None) };
+        let chr = String::from_utf8_lossy(chr.as_ref()).into_owned();
+        let p = Position::new(pos.max(0) as usize + 1).expect("pos + 1 >= 1");
+        let region = Region::new(chr.as_str(), p..=p);
+        let SourceMates { src, header, light } = self;
+        // raw query, NOT `SourceReads::visit`: an unmapped mate is placed at its anchor's
+        // position with an empty aligned span, which the overlap filter there would drop
+        for (n, rec) in src.query(&region)?.enumerate() {
+            if n >= MATE_SCAN_CAP {
+                break;
+            }
+            let rec = rec?;
+            if name(rec.as_dyn()) != qname {
+                continue;
+            }
+            decode_light_into(rec.as_dyn(), header, light)?;
+            if light.is_secondary || light.is_supplementary || (light.is_paired && light.is_first != want_first) {
+                continue;
+            }
+            let mut seq = Vec::new();
+            seq_into(rec.as_dyn(), &mut seq);
+            return Ok(Some(MateRec { seq, is_reverse: light.is_reverse }));
+        }
+        Ok(None)
+    }
+}
+
+/// What `run` needs for the extra pass: this colony's discovery memberships (loci), its name
+/// in the sidecar headers, and the sidecar writer.
+pub struct ExtraArgs<'a> {
+    pub members: &'a FxHashSet<String>,
+    pub sample: &'a str,
+    pub out: &'a mut dyn Write,
+}
+
+/// Per-chunk state of the extra pass: who we are, which loci we discovered, the per-colony
+/// mate-fetch budget, counters and the pending sidecar text (drained after every locus).
+pub(crate) struct ExtraState<'a> {
+    pub members: &'a FxHashSet<String>,
+    pub sample: &'a str,
+    pub mate_budget: usize,
+    pub stats: extra::ExtraStats,
+    pub buf: String,
+}
+
+/// Side of an Alt read: the junction of its best alt segment; for ALT_FULL (both) the end that
+/// carries the longer soft clip (a leading clip faces L, a trailing one R).
+pub(crate) fn alt_read_side(side: AltSide, lead: usize, trail: usize) -> &'static str {
+    match side {
+        AltSide::Left => "LEFT",
+        AltSide::Right => "RIGHT",
+        _ if trail > lead => "RIGHT",
+        _ => "LEFT",
+    }
+}
+
+/// The membership check: the extra pass is for loci this colony did NOT discover (its own
+/// discovery reads are already in insertions.reads.fa.gz).
+pub(crate) fn is_extra_candidate(members: &FxHashSet<String>, locus: &str) -> bool {
+    !members.contains(locus)
+}
+
+/// The ALT gate: enough reads the realigner assigned to the alt haplotype.
+pub(crate) fn passes_alt_gate(obs: &[ReadObs], cfg: &Config) -> bool {
+    obs.iter().filter(|o| o.class == ReadClass::Alt).count() >= cfg.gt_extra_min_alt
+}
+
+/// A discordant anchor of the extra pass, waiting for its mate fetch.
+#[derive(Clone, Debug)]
+pub(crate) struct ExtraAnchor {
+    qname: Vec<u8>,
+    rec: LightRec,
+    side: &'static str,
+    seq: Vec<u8>,
+    /// the read is already written as GT_CLIP / GT_POLYA (no GT_DISC record; the mate is fetched)
+    written: bool,
+}
+
+/// The extra pass of one gated locus, part 1: the kept Alt reads (GT_CLIP / GT_POLYA), then ONE
+/// query per fetch window widened by `gt_extra_disc_span` for the discordant anchors (at most
+/// `gt_extra_max_mates`, returned for `fetch_extra_mates`). Records go to `out`.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn collect_extra(
+    model: &LocusModel,
+    contig: usize,
+    cfg: &Config,
+    sample: &str,
+    obs: &[ReadObs],
+    kept: &[KeptRead],
+    reads: &mut dyn LocusReads,
+    out: &mut String,
+) -> io::Result<(Vec<ExtraAnchor>, extra::ExtraStats)> {
+    let mut st = extra::ExtraStats::default();
+    let locus = model.locus.name.as_str();
+    let mut written: FxHashSet<Vec<u8>> = FxHashSet::default();
+    for (o, k) in obs.iter().zip(kept) {
+        if o.class != ReadClass::Alt || st.clip + st.polya >= cfg.gt_extra_max_reads {
+            continue;
+        }
+        let side = alt_read_side(o.alt_side, k.lead, k.trail);
+        let n = k.seq.len();
+        let clip: &[u8] = if side == "LEFT" { &k.seq[..k.lead.min(n)] } else { &k.seq[n - k.trail.min(n)..] };
+        let role = if extra::is_pure_polya(clip) {
+            st.polya += 1;
+            extra::ROLE_POLYA
+        } else {
+            st.clip += 1;
+            extra::ROLE_CLIP
+        };
+        extra::push_record(out, locus, side, role, sample, &extra::frag_id(&k.qname), if k.is_first { 1 } else { 2 }, &k.seq);
+        written.insert(k.qname.clone());
+    }
+
+    // discordant anchors: the evidence reads' flag gates, own MAPQ floor and span
+    let geo = Geometry::new(model, contig);
+    let span = cfg.gt_extra_disc_span.max(5);
+    let cap = (cfg.reads_for_high_coverage.max(0) as usize + 1).saturating_mul(WIDE_QUERY_CAP_FACTOR).max(WIDE_QUERY_CAP_MIN);
+    let mut dedup = Dedup::new(cfg.lenient_dedup);
+    let mut anchors: Vec<ExtraAnchor> = Vec::new();
+    let (mut seq, mut qual) = (Vec::new(), Vec::new());
+    for &(lo, hi) in &model.windows {
+        let mut streamed = 0usize;
+        reads.visit(lo - 1 - span, hi + 1 + span, &mut |rv| {
+            streamed += 1;
+            if streamed > cap || anchors.len() >= cfg.gt_extra_max_mates {
+                return Ok(false);
+            }
+            let r = rv.light();
+            if r.is_unmapped || r.is_secondary || r.is_supplementary || r.is_qcfail || r.is_duplicate {
+                return Ok(true);
+            }
+            if r.reference_sequence_id != Some(contig) || !anchor_with(r, &geo, cfg.gt_extra_anchor_mapq, span, cfg.disc_max_tlen) {
+                return Ok(true);
+            }
+            if !dedup.admit(rv.qname(), r) {
+                return Ok(true);
+            }
+            rv.seq_qual(&mut seq, &mut qual)?;
+            let q = rv.qname();
+            anchors.push(ExtraAnchor {
+                qname: q.to_vec(),
+                rec: r.clone(),
+                // a reverse anchor right of L points into the 3' end (LEFT), a forward one left of R
+                side: if r.is_reverse { "LEFT" } else { "RIGHT" },
+                seq: seq.clone(),
+                written: written.contains(q),
+            });
+            Ok(true)
+        })?;
+    }
+    Ok((anchors, st))
+}
+
+/// The extra pass, part 2 (after the anchor stream, so it may reuse the reader): GT_DISC for each
+/// anchor not already written, and its inside mate fetched by random access (GT_MATE), while the
+/// per-colony `budget` lasts.
+pub(crate) fn fetch_extra_mates(
+    model: &LocusModel,
+    sample: &str,
+    anchors: &[ExtraAnchor],
+    mates: &mut dyn MateSource,
+    budget: &mut usize,
+    out: &mut String,
+    st: &mut extra::ExtraStats,
+) -> io::Result<()> {
+    let locus = model.locus.name.as_str();
+    for a in anchors {
+        let frag = extra::frag_id(&a.qname);
+        let r12 = if a.rec.is_first { 1 } else { 2 };
+        if !a.written && !a.seq.is_empty() {
+            extra::push_record(out, locus, a.side, extra::ROLE_DISC, sample, &frag, r12, &a.seq);
+            st.disc += 1;
+        }
+        // an unmapped mate sits at its anchor's position (its mate fields = the anchor's own)
+        let (Some(mc), true) = (a.rec.mate_reference_sequence_id, a.rec.mate_start >= 0) else {
+            st.mates_missing += 1;
+            continue;
+        };
+        if *budget == 0 {
+            st.mates_capped += 1;
+            continue;
+        }
+        *budget -= 1;
+        match mates.fetch_mate(mc, a.rec.mate_start, &a.qname, !a.rec.is_first)? {
+            Some(m) if !m.seq.is_empty() => {
+                let s = extra::mate_site_forward(&m.seq, m.is_reverse, a.rec.is_reverse);
+                extra::push_record(out, locus, a.side, extra::ROLE_MATE, sample, &frag, 3 - r12, &s);
+                st.mates += 1;
+            }
+            _ => st.mates_missing += 1,
+        }
+    }
+    Ok(())
 }
 
 // ------------------------------------------------------------------------------------------
@@ -1192,6 +1593,187 @@ mod tests {
         std::fs::write(dir.join("y.cram.crai"), b"").unwrap();
         assert!(check_input(cram.to_str().unwrap()).is_ok());
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // extra pass (gt_extra_reads)
+    // ---------------------------------------------------------------------------------------
+
+    fn alt_obs(side: AltSide) -> ReadObs {
+        ReadObs { ll_ref: -50.0, ll_alt: -5.0, class: ReadClass::Alt, explained_frac: 1.0, crosses_junction: true, alt_side: side }
+    }
+
+    fn kept(name: &str, seq: &[u8], lead: usize, trail: usize) -> KeptRead {
+        KeptRead { qname: name.as_bytes().to_vec(), seq: seq.to_vec(), lead, trail, is_first: true }
+    }
+
+    /// Mates by (contig, pos, qname, first?) -> (stored seq, reverse); records every request.
+    #[derive(Default)]
+    struct FakeMates {
+        mates: Vec<((usize, i64, Vec<u8>, bool), MateRec)>,
+        asked: Vec<(usize, i64, Vec<u8>, bool)>,
+    }
+    impl MateSource for FakeMates {
+        fn fetch_mate(&mut self, contig: usize, pos: i64, qname: &[u8], want_first: bool) -> io::Result<Option<MateRec>> {
+            let k = (contig, pos, qname.to_vec(), want_first);
+            self.asked.push(k.clone());
+            Ok(self.mates.iter().find(|(m, _)| *m == k).map(|(_, r)| r.clone()))
+        }
+    }
+
+    fn records(text: &str) -> Vec<(String, String)> {
+        let l: Vec<&str> = text.lines().collect();
+        l.chunks(2).map(|c| (c[0].to_string(), c[1].to_string())).collect()
+    }
+
+    #[test]
+    fn extra_membership_and_alt_gate() {
+        let mut members = FxHashSet::default();
+        members.insert("chr1:1000-1015".to_string());
+        assert!(!is_extra_candidate(&members, "chr1:1000-1015"), "a discovery member gets no extra pass");
+        assert!(is_extra_candidate(&members, "chr1:2000-2015"));
+        assert!(is_extra_candidate(&members, "chr1:1000-1016"), "exact locus names only");
+        let cfg = Config::default(); // gt_extra_min_alt 1
+        let mut obs = vec![dummy_obs(), dummy_obs()];
+        assert!(!passes_alt_gate(&obs, &cfg));
+        obs.push(alt_obs(AltSide::Right));
+        assert!(passes_alt_gate(&obs, &cfg));
+        let two = Config { gt_extra_min_alt: 2, ..Config::default() };
+        assert!(!passes_alt_gate(&obs, &two));
+        // an Unexplained / Ref read never opens the gate
+        obs.push(ReadObs { class: ReadClass::Unexplained, ..alt_obs(AltSide::None) });
+        assert!(!passes_alt_gate(&obs, &two));
+        assert!(!Config::default().gt_extra_reads, "the key defaults OFF");
+    }
+
+    #[test]
+    fn collect_keep_is_index_aligned_and_off_by_default() {
+        let cfg = Config::default();
+        let m = model_for("chr1:1000-1015", 300);
+        let mk = || {
+            let mut mate = rec(990, &[(0, 150)], 60);
+            mate.is_reverse = true;
+            VecReads::new(vec![
+                ("a", rec(950, &[(0, 150)], 60)),
+                ("b", rec(900, &[(0, 115), (4, 35)], 60)),
+                ("a", mate), // deduped: not kept either
+            ])
+        };
+        let mut kept = Vec::new();
+        let mut reads = mk();
+        let out = collect_locus_keep(&m, 0, &cfg, &mut reads, &mut |_| dummy_obs(), Some(&mut kept)).unwrap();
+        let Outcome::Collected { obs, .. } = out else { panic!() };
+        assert_eq!(obs.len(), kept.len());
+        assert_eq!(kept.iter().map(|k| k.qname.as_slice()).collect::<Vec<_>>(), vec![b"b".as_slice(), b"a"]);
+        assert_eq!((kept[0].lead, kept[0].trail, kept[0].seq.len()), (0, 35, 150));
+        // without `keep` the outcome is the same
+        let mut reads = mk();
+        let plain = collect_locus(&m, 0, &cfg, &mut reads, &mut |_| dummy_obs()).unwrap();
+        let mut reads = mk();
+        let with = collect_locus_keep(&m, 0, &cfg, &mut reads, &mut |_| dummy_obs(), Some(&mut Vec::new())).unwrap();
+        assert_eq!(format!("{plain:?}"), format!("{with:?}"));
+    }
+
+    #[test]
+    fn extra_reads_sides_roles_and_anchor_gates() {
+        let cfg = Config { gt_extra_max_mates: 3, ..Config::default() }; // span 500, anchor MAPQ 20
+        let m = model_for("chr1:5000-5010", 300); // L = 5000, R = 5010
+        let polya = [b"ACGTACGTAC".as_slice(), &[b'A'; 20]].concat();
+        let obs = vec![alt_obs(AltSide::Right), dummy_obs(), alt_obs(AltSide::Left), alt_obs(AltSide::Both)];
+        let kept = vec![
+            kept("r1", b"CCCCCCCCCCGGGGG", 0, 5), // trailing clip at R -> RIGHT, GT_CLIP
+            kept("ref", b"ACGT", 0, 0),          // not Alt: skipped
+            kept("l1", &polya, 20, 0),           // leading clip half A: LEFT, GT_CLIP (not a pure tail)
+            kept("f1", b"TTTTTTTTTTTTGGG", 12, 3), // ALT_FULL, longer leading clip -> LEFT, poly-T -> GT_POLYA
+        ];
+        // anchors: forward ending 450 bp before R (inside span 500, outside the genotyper's 300),
+        // MAPQ 25 (>= 20, < min_mapq 60), mate unmapped; a duplicate; a low-MAPQ one; a reverse
+        // one right of L with its mate on chr3; a normal pair; one beyond the span
+        let fwd = |end_excl: i64, mapq: u8| {
+            let mut r = rec(end_excl - 100, &[(0, 100)], mapq);
+            r.mate_unmapped = true;
+            r.mate_start = end_excl - 100; // placed at the anchor
+            r
+        };
+        let mut rev = rec(5200, &[(0, 100)], 60);
+        rev.is_reverse = true;
+        rev.mate_reverse = false;
+        rev.mate_reference_sequence_id = Some(3);
+        rev.mate_start = 777;
+        rev.tlen = 0;
+        rev.is_first = false;
+        let mut dup = fwd(4700, 60);
+        dup.is_duplicate = true;
+        let mut reads = VecReads::new(vec![
+            ("d1", fwd(5010 - 450, 25)),
+            ("dup", dup),
+            ("low", fwd(4800, 19)),
+            ("rv", rev),
+            ("normal", rec(4800, &[(0, 100)], 60)),
+            ("far", fwd(5010 - 520, 60)),
+            ("r1", fwd(5000, 60)), // also written as GT_CLIP: no GT_DISC, mate still fetched
+        ]);
+        let mut out = String::new();
+        let (anchors, mut st) = collect_extra(&m, 0, &cfg, "S9", &obs, &kept, &mut reads, &mut out).unwrap();
+        assert_eq!(reads.queries, vec![(5000 - 1 - 500, 5010 + 1 + 500)], "one widened query per window");
+        let names: Vec<&[u8]> = anchors.iter().map(|a| a.qname.as_slice()).collect();
+        assert_eq!(names, vec![b"d1".as_slice(), b"r1", b"rv"], "dup / low MAPQ / normal / beyond-span skipped");
+        assert_eq!(anchors.iter().map(|a| a.side).collect::<Vec<_>>(), vec!["RIGHT", "RIGHT", "LEFT"]);
+        let mut mates = FakeMates::default();
+        mates.mates.push(((0, 4460, b"d1".to_vec(), false), MateRec { seq: b"AACCGT".to_vec(), is_reverse: false }));
+        mates.mates.push(((3, 777, b"rv".to_vec(), true), MateRec { seq: b"AACCGT".to_vec(), is_reverse: false }));
+        let mut budget = 100;
+        fetch_extra_mates(&m, "S9", &anchors, &mut mates, &mut budget, &mut out, &mut st).unwrap();
+        assert_eq!(budget, 97);
+        let recs = records(&out);
+        let heads: Vec<&str> = recs.iter().map(|(h, _)| h.as_str()).collect();
+        let f = |q: &[u8]| extra::frag_id(q);
+        assert_eq!(
+            heads,
+            vec![
+                format!(">chr1:5000-5010|RIGHT|GT_CLIP|S9|{}|1", f(b"r1")),
+                format!(">chr1:5000-5010|LEFT|GT_CLIP|S9|{}|1", f(b"l1")),
+                format!(">chr1:5000-5010|LEFT|GT_POLYA|S9|{}|1", f(b"f1")),
+                format!(">chr1:5000-5010|RIGHT|GT_DISC|S9|{}|1", f(b"d1")),
+                format!(">chr1:5000-5010|RIGHT|GT_MATE|S9|{}|2", f(b"d1")),
+                format!(">chr1:5000-5010|LEFT|GT_DISC|S9|{}|2", f(b"rv")),
+                format!(">chr1:5000-5010|LEFT|GT_MATE|S9|{}|1", f(b"rv")),
+            ]
+        );
+        // orientation: forward anchor + unmapped (0x10 clear) mate -> reverse-complemented;
+        // reverse anchor + forward-stored mate -> kept as stored
+        assert_eq!(recs[4].1, "ACGGTT");
+        assert_eq!(recs[6].1, "AACCGT");
+        assert_eq!(recs[0].1, "CCCCCCCCCCGGGGG", "junction reads as stored (site-forward)");
+        // r1's mate was requested (no record: not in the fake) and counted missing
+        assert!(mates.asked.contains(&(0, 4900, b"r1".to_vec(), false)));
+        assert_eq!((st.clip, st.polya, st.disc, st.mates, st.mates_missing), (2, 1, 2, 2, 1));
+    }
+
+    #[test]
+    fn extra_caps_per_locus_and_per_colony() {
+        let cfg = Config { gt_extra_max_mates: 2, gt_extra_max_reads: 1, ..Config::default() };
+        let m = model_for("chr1:5000-5010", 300);
+        let v: Vec<(String, LightRec)> = (0..6)
+            .map(|i| {
+                let mut r = rec(4800 + i, &[(0, 100)], 60);
+                r.mate_unmapped = true;
+                r.mate_start = 4800 + i;
+                (format!("a{i}"), r)
+            })
+            .collect();
+        let mut reads = VecReads::new(v.iter().map(|(n, r)| (n.as_str(), r.clone())).collect());
+        let obs = vec![alt_obs(AltSide::Right), alt_obs(AltSide::Right)];
+        let kept = vec![kept("x", b"ACGTACGTAC", 0, 4), kept("y", b"ACGTACGTAC", 0, 4)];
+        let mut out = String::new();
+        let (anchors, mut st) = collect_extra(&m, 0, &cfg, "S", &obs, &kept, &mut reads, &mut out).unwrap();
+        assert_eq!(anchors.len(), 2, "gt_extra_max_mates anchors per locus");
+        assert_eq!(st.clip, 1, "gt_extra_max_reads junction reads per locus");
+        let mut mates = FakeMates::default();
+        let mut budget = 1; // the per-colony fetch budget runs out after one mate
+        fetch_extra_mates(&m, "S", &anchors, &mut mates, &mut budget, &mut out, &mut st).unwrap();
+        assert_eq!(mates.asked.len(), 1);
+        assert_eq!((budget, st.mates_capped, st.disc), (0, 1, 2));
     }
 
     // ---------------------------------------------------------------------------------------

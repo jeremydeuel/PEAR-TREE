@@ -5,6 +5,13 @@ Activation (all under CONFIG['annotate']):
     rte_evidence_file  callable(sample)->path or path; default: insertions_file with
                        `.combined.txt.gz` -> `.insertions.evidence.tsv.gz` (optional file)
     rte_reads_file     same, `.insertions.reads.fa.gz` (optional file)
+    rte_gt_reads_file  same, `.insertions.genotype_reads.fa.gz` (optional file): reads genotype2's
+                       extra pass found in joint carriers that did not discover the locus
+                       (roles GT_CLIP / GT_POLYA / GT_DISC / GT_MATE). Pooled with the combine
+                       reads for the assembly; the record notes how many were used (`gt_reads`)
+                       and which calls differ from a combine-reads-only run (`gt_changed`)
+    rte_gt_compare     (True) run that combine-reads-only comparison (doubles the cost of the
+                       loci with genotype reads only)
     genome_2bit        discovery genome (GRCh38/hg19/hs1) for TSD / EN motif / slippage /
                        templated / pre-mRNA (optional; without it TSD falls back to the flanks)
     remap_2bit         remap genome (hs1) for exon-junction cores and novel-source identity
@@ -109,6 +116,29 @@ def default_sidecars(insertions_file):
     return base + ".insertions.evidence.tsv.gz", base + ".insertions.reads.fa.gz"
 
 
+def default_gt_reads(insertions_file):
+    """`<P>.insertions.genotype_reads.fa.gz` next to the combine sidecars (pipeline phase 4)."""
+    return default_sidecars(insertions_file)[1].replace(".insertions.reads.fa.gz",
+                                                        ".insertions.genotype_reads.fa.gz")
+
+
+GT_ROLE_PREFIX = "GT_"
+
+
+def gt_changes(base, rec):
+    """What the genotype reads changed: `field:old>new` items joined by ',' (tags as +added /
+    -removed); '' when the calls are the same."""
+    out = []
+    for f in ("element", "structure", "consensus", "covered_5p", "covered_3p", "tprt_call"):
+        a, b = getattr(base, f), getattr(rec, f)
+        if a != b:
+            out.append(f"{f}:{'.' if a in (None, '') else a}>{'.' if b in (None, '') else b}")
+    ta, tb = set(base.tags), set(rec.tags)
+    if ta != tb:
+        out.append("tags:" + "/".join([f"+{t}" for t in sorted(tb - ta)] + [f"-{t}" for t in sorted(ta - tb)]))
+    return ",".join(out).replace(";", " ").replace("=", ":")
+
+
 class RteAnnotator:
     def __init__(self, cfg: dict, genome=None, remap_genome=None, locator=None, rmsk=None,
                  exons_by_gene=None, gene_model=None, cohort_l1=None):
@@ -131,15 +161,39 @@ class RteAnnotator:
                                             strands)
         self.gene_model = gene_model
         self.evidence = {}
+        self.gt_reads = {}          # insertion id -> [EvidenceRead] (GT_* roles), kept apart
+        self.has_gt_reads = False   # a genotype_reads file was loaded (adds the gt_* columns)
 
     # ------------------------------------------------------------------ inputs
-    def load_evidence(self, evidence_path=None, reads_path=None, wanted=None):
+    def load_evidence(self, evidence_path=None, reads_path=None, wanted=None, gt_reads_path=None):
         if evidence_path and os.path.exists(evidence_path):
             read_evidence_tsv(evidence_path, self.evidence)
             print(f"[rte] read junction evidence for {len(self.evidence)} insertions from {evidence_path}")
         if reads_path and os.path.exists(reads_path):
             read_reads_fa(reads_path, self.evidence, wanted)
             print(f"[rte] read pooled reads from {reads_path}")
+        if gt_reads_path and os.path.exists(gt_reads_path):
+            store = read_reads_fa(gt_reads_path, {}, wanted)
+            # only GT_* roles: this file must never smuggle combine roles into the assembly
+            self.gt_reads = {k: [r for r in ev.reads if r.role.startswith(GT_ROLE_PREFIX)]
+                             for k, ev in store.items()}
+            self.has_gt_reads = True
+            print(f"[rte] read genotype reads for {len(self.gt_reads)} insertions "
+                  f"({sum(map(len, self.gt_reads.values()))} reads) from {gt_reads_path}")
+
+    def _annotate_key(self, key, inp):
+        """annotate() with the combine evidence, pooled with the genotype reads when the locus has
+        any (then `gt_reads` / `gt_changed` on the record)."""
+        ev = self.evidence.get(key)
+        gt = self.gt_reads.get(key)
+        if not gt:
+            return self.annotate(inp, ev)
+        base_ev = ev or InsertionEvidence(key)
+        pooled = InsertionEvidence(key, junctions=base_ev.junctions, reads=list(base_ev.reads) + list(gt))
+        rec = self.annotate(inp, pooled)
+        if self.cfg.get("rte_gt_compare", True):
+            rec.gt_changed = gt_changes(self.annotate(inp, ev), rec)
+        return rec
 
     # ------------------------------------------------------------------ pre-mRNA helper
     def _premrna_fn(self, site):
@@ -208,6 +262,7 @@ class RteAnnotator:
         if right_str:
             junction_seqs["RIGHT"] = (right_str, (0, len(rf)))
         reads = self._cap_reads(ev.reads, int(self.cfg.get("rte_max_reads", 400)))
+        rec.gt_reads = sum(1 for r in reads if r.role.startswith(GT_ROLE_PREFIX))
         hint = (pa.strand, pa.source) if pa.strand else None
         asm = self.assembler.assemble(ctx, junction_seqs, reads, hint)
         strand = asm.strand
@@ -445,7 +500,7 @@ class RteAnnotator:
         out = {}
         for key, inp in inputs.items():
             try:
-                out[key] = self.annotate(inp, self.evidence.get(key))
+                out[key] = self._annotate_key(key, inp)
             except Exception as e:      # never let one locus kill the table
                 rec = RteRecord(key)
                 rec.detail["error"] = f"{type(e).__name__}: {e}"[:200]
@@ -474,7 +529,7 @@ class RteAnnotator:
         self.novel.cohort_l1 = l1
         for k in redo:
             try:
-                records[k] = self.annotate(inputs[k], self.evidence.get(k))
+                records[k] = self._annotate_key(k, inputs[k])
             except Exception:
                 pass
 

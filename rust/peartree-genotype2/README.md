@@ -148,6 +148,27 @@ Python consumers read both formats through `tools/genotype2_io.py` (auto-detecti
 `<P>.joint.tsv` sits beside the matrix they add `joint_*` columns. `src/combine_genotypes.py`
 refuses numeric files (the joint step replaces it).
 
+### Extra reads of undiscovered carriers (`gt_extra_reads`)
+
+Discovery reports a colony for a locus only when its clip evidence clears the discovery gates; the
+joint step calls many more carriers, whose BAMs hold further junction reads and discordant pairs
+(inside mates = more of the element: 5' truncation, inversion, transduction). With
+`gt_extra_reads = true` and `--members <P.members.tsv.gz | P.insertions.reads.fa.gz> --sample <id>`
+(src/extra.rs), every locus the colony is NOT a discovery member of (no reads of `<id>` in
+combine's reads FASTA) and where it passes the ALT gate (>= `gt_extra_min_alt` evidence reads
+realigned as `Alt`) gets an extra pass AFTER its row is made, so the rows are byte-identical with
+the key on or off: the Alt reads (`GT_CLIP`, `GT_POLYA` for a pure poly-A/T junction-facing
+clip), one query widened by `gt_extra_disc_span` (500) for discordant anchors (`GT_DISC`: primary,
+not 0x400, MAPQ >= `gt_extra_anchor_mapq` 20, <= `gt_extra_max_mates` 10 per locus) and each
+anchor's mate fetched through the index (`GT_MATE`, site-forward like combine's
+`allele_forward_seq`; <= `gt_extra_max_mate_fetches` 3000 per colony). Output
+`<out>.extra_reads.fa.gz` in the insertions.reads.fa.gz layout (`>locus|SIDE|ROLE|sample|frag|r12`).
+Phase 4 (`tools/genotype_extra_reads.py merge`) keeps each colony's reads of a locus only when the
+joint matrix calls it a carrier (P >= 0.9) -> `insertions/<P>.insertions.genotype_reads.fa.gz`,
+which annotate_v2's RTE plug-in pools with the combine reads (`gt_reads` / `gt_changed`
+columns). They are never junction evidence (cluster/somatic_table.py reads only the combine
+roles). e2e_phylo (10 colonies, 283 loci): 50-100 gated loci per colony, ~0.1-0.2 s extra.
+
 ## Cluster
 
 `cluster/pipeline.sh` uses it by default (`GENOTYPE_IMPL=v2`): phase 3 runs it per colony with

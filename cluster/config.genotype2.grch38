@@ -42,3 +42,16 @@ disc_weight_nats = 0
 # apart in a 100 GB BAM, so a fixed 4 MiB fill read 31 GB per colony on Lustre (PD37590, 12 min/colony).
 io_buffer_bytes = 4194304
 io_fill_bytes = 262144
+
+# Extra evidence for carriers that did not discover a locus (src/extra.rs): at loci with >= 1 read
+# realigned to ALT in this colony and no discovery reads from it (--members, pipeline.sh), write its
+# ALT junction reads, discordant anchors (flank, <= 500 bp, MAPQ >= 20) and their inside mates to
+# <colony>.txt.gz.extra_reads.fa.gz. The genotype rows are unchanged; phase 4 keeps the joint
+# carriers' reads for annotate (insertions/<P>.insertions.genotype_reads.fa.gz).
+gt_extra_reads = true
+gt_extra_min_alt = 1
+gt_extra_disc_span = 500
+gt_extra_anchor_mapq = 20
+gt_extra_max_mates = 10
+gt_extra_max_reads = 40
+gt_extra_max_mate_fetches = 3000

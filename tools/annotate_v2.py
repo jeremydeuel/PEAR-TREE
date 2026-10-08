@@ -1315,7 +1315,9 @@ class VariantAnnotationContainer:
         if getattr(self, 'evidence', None) is not None:    # parsed once by read_evidence_clips()
             ann.evidence = self.evidence
             ev_path = None
-        ann.load_evidence(ev_path, rd_path, wanted=set(self.insertions))
+        ann.load_evidence(ev_path, rd_path, wanted=set(self.insertions), gt_reads_path=self.gt_reads_path())
+        # optional gt_reads / gt_changed columns, only when a genotype_reads file was read
+        self.rte_gt = ann.has_gt_reads
         inputs = {k: InsertionInput.from_legacy(ins, self.element_class(ins.conclusion()))
                   for k, ins in self.insertions.items()}
         records = ann.annotate_all(inputs)
@@ -1325,6 +1327,9 @@ class VariantAnnotationContainer:
                 ins.exon_junction_proven = 'EXON_JUNCTION' in rec.tags
         print(f"[rte] annotated {len(records)} insertions "
               f"({sum(1 for r in records.values() if r.tprt_call == 'TPRT')} TPRT)")
+        if self.rte_gt:
+            print(f"[rte] genotype reads used at {sum(1 for r in records.values() if r.gt_reads)} insertions, "
+                  f"changing a call at {sum(1 for r in records.values() if r.gt_changed)}")
         return records
 
     def read_gene_model(self):
@@ -1408,6 +1413,17 @@ class VariantAnnotationContainer:
         ev_path = ev_path(self.sample) if callable(ev_path) else ev_path
         rd_path = rd_path(self.sample) if callable(rd_path) else rd_path
         return ev_path, rd_path
+
+    def gt_reads_path(self):
+        """genotype2's carrier-filtered extra reads (`<P>.insertions.genotype_reads.fa.gz`,
+        tools/genotype_extra_reads.py merge): CONFIG override, else the insertions file's sibling.
+        May not exist (no extra pass) -> the RTE annotation is unchanged."""
+        try:
+            from tools.rte.annotator import default_gt_reads
+        except ImportError:                       # run as `python tools/annotate_v2.py`
+            from rte.annotator import default_gt_reads
+        p = CONFIG['annotate'].get('rte_gt_reads_file') or default_gt_reads(self.insertions_file)
+        return p(self.sample) if callable(p) else p
 
     def read_evidence_clips(self):
         """Attach the evidence sidecar's per-junction clip_consensus to each Insertion
@@ -1940,6 +1956,12 @@ class VariantAnnotationContainer:
             # tools/rte columns (plans/tprt_hallmarks/SPEC.md), from the structured RteRecord
             rte_cols = next(iter(rte.values())).COLUMNS
             cols = cols + rte_cols
+        # genotyping-read support (genotype2 extra pass), only when that file was read: GT_*
+        # reads used in the RTE assembly and the calls they changed (classification evidence,
+        # never junction evidence)
+        gt = bool(rte) and bool(getattr(self, 'rte_gt', False))
+        if gt:
+            cols = cols + ['gt_reads', 'gt_changed']
         # genotype2 joint verdict, only when <patient>.joint.tsv was read (numeric matrix input)
         joint = bool(getattr(self, 'joint', None))
         if joint:
@@ -1963,6 +1985,10 @@ class VariantAnnotationContainer:
                 if rte:
                     rec = rte.get(key)
                     row += rec.row() if rec is not None else ['.'] * len(rte_cols)
+                if gt:
+                    rec = rte.get(key)
+                    row += [str(rec.gt_reads) if rec is not None else '0',
+                            (rec.gt_changed or '.') if rec is not None else '.']
                 if joint:
                     row += [(getattr(ins, 'joint', None) or {}).get(c, '') or '.' for c in self.JOINT_COLUMNS]
                 fh.write('\t'.join(row) + '\n')
