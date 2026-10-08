@@ -85,9 +85,13 @@ Parity check (`tests/golden_foundation.rs::e2e_stream_and_cap_match_python`): fo
 python `annotate` calls of the e2e_phylo run (90 pooled with GT reads), the store's pooled list
 equals python's read for read and `cap_reads` yields python's capped reads in order.
 
-Not covered here (integration): annotate_v2 itself still parses the whole evidence TSV
-(`read_evidence_clips`) and loads every GT read (`_read_gt_fasta` in `read_gt_core`) — both
-smaller than the reads FASTA, but worth streaming when switching over.
+annotate_v2's own whole-file loads (integration): with the Rust engine `read_evidence_clips`
+streams the evidence TSV and keeps only the two clip strings of the called insertions (the
+parsed sidecar is only built for the python engine), and `read_gt_core` streams the
+genotype_reads FASTA (`_iter_gt_fasta`) keeping per locus only the `4 * gt_core_max_queries`
+smallest distinct query candidates -- provably the same selection as `gt_query_seqs` over all
+reads (one sequence has at most 4 keys: GT_MATE-or-not x side; test
+`test_streamed_bounded_selection_equals_gt_query_seqs`).
 
 ## 4. Interface (annotate_v2 ↔ binary)
 
@@ -97,8 +101,18 @@ peartree-rte annotate --config CFG.json --inputs IN.jsonl[.gz] --out OUT.tsv[.gz
     [--gt-reads P.insertions.genotype_reads.fa.gz] [--tmp-dir DIR] [--threads N] [--chunk N]
 peartree-rte scan --reads FA [--gt] [--tmp-dir DIR]      # grouping / memory diagnostics
 ```
-Missing sidecar paths are skipped like python. Python helpers (not wired yet):
-`tools/rte/rust_bridge.py` — `write_inputs`, `write_config`, `read_records`.
+Missing sidecar paths are skipped like python. Python side: `tools/rte/rust_bridge.py` —
+`write_inputs`, `write_config`, `read_records` (a `RustRecord` per row: `row()`, element,
+structure, tags, tprt_call/score/points, consensus, strand, site, detail, gt_reads, gt_changed).
+
+**annotate_v2 switch** (`VariantAnnotationContainer.rte_engine()` / `_run_rte_rust`):
+`CONFIG['annotate']['rte_engine']` = `auto` (default: rust when the binary exists, else python
+with a loud warning) | `rust` (missing binary = error) | `python`; `rte_binary` = binary path
+(default `rust/peartree-rte/target/release/peartree-rte` of the checkout); `rte_threads`
+(default `AN_CORES` / `LSB_DJOB_NUMPROC` / the CPU count, bounded by the CPUs available).
+Scratch: `mkdtemp` under `TPRT_ANNOT_TMP` (else the run directory) for the inputs JSONL, config
+JSON, output TSV and the reads spill (unlinked at creation); removed after a successful run,
+kept on failure. A non-zero exit raises (the annotate job fails) -- never a python fallback.
 
 **Input JSONL** (one object per insertion, annotate_v2 order; duplicates are an error):
 `{"locus", "left_seq", "right_seq", "pseudogene_genes": [...], "legacy_class": str|null,
@@ -139,9 +153,13 @@ writing `gt_reads/gt_changed` only when the genotype_reads file exists (it knows
 * `regex` only for a configured `young_consensus_regex` (the default needs a lookahead → coded
   by hand); `serde_json` (`preserve_order`: python dict order matters in golden data), `rayon`,
   `flate2`, `rustc-hash`, `tikv-jemallocator` (default feature).
-* Build: like the other crates — `cluster/build.sh` (now builds this crate, failure = warning)
-  fetches from crates.io on the head node; `Cargo.lock` committed; rust 1.87 (`rust-version`).
-  The C/C++ parts need a C compiler + zlib headers (as peartree-combine already does on farm22).
+* Build: `cluster/build.sh` builds this crate as a REQUIRED binary (`hsc_run.sh setup` /
+  `submit` check it); crates from crates.io on the head node, or `PT_CARGO_OFFLINE=1` from the
+  crates already in CARGO_HOME; `Cargo.lock` committed. Compiles with rustc 1.87.0 (the farm22
+  `rust/1.87.0` module; highest dependency `rust-version` is 1.85: hashbrown / indexmap).
+  Needs a C and C++ compiler (`cc`: minimap2 2.30 C sources of minimap2-sys, vendored edlib
+  C++) and zlib (libz-sys links the system zlib via pkg-config, else builds its bundled copy) --
+  the same toolchain peartree-combine already builds with on farm22.
 
 ## 6. Ordering and determinism
 
@@ -192,3 +210,32 @@ raw/sense layouts) · `classify` 109 (assembly by `assembly_ref`, every callback
 4. `max`/`most_common` tie order, dict order, Neumaier `sum` — §6.
 5. Floats compared exactly in the golden tests; identities are `mlen/blen` or `1 - ed/len` with
    the same operands → expected bit-identical.
+
+## 9. Integration results (WP-INT)
+
+Parity:
+* `tests/golden_annotate.rs`: all 445 python `annotate` events (109 pytest + 336 e2e_phylo)
+  reproduced record-for-record (every field incl. score_input, detail order, row()); classify's
+  novel-source / pre-mRNA answers replayed from the recording.
+* `golden_e2e_binary`: the binary over the e2e_phylo sidecars (+ genotype_reads) == python's
+  final rows + gt_reads / gt_changed (246 loci, 90 with GT reads, 16 calls changed by them).
+* annotate_v2 end to end on e2e_phylo, `rte_engine` rust vs python: the annotated table AND the
+  verbose stdout report are byte-identical (paths aside), with and without the genotype_reads
+  file; the table also equals the golden run's (`e2e.annotated.tsv`, python at eaa2718).
+* Real data, PD51635 (hg38, every 17th of the 8,729 annotated loci = 514, python
+  `annotate_all` vs the binary on the same inputs/sidecars): 0 differing rows.
+
+Memory / time, PD51635 (local M-series Mac; reads FASTA 269 MB gz, the 8,729 loci of the farm's
+annotated table hold 6,629,225 reads; config = config.py.grch38.tprt annotate block, local
+hg38.2bit + hs1 rmsk):
+
+| engine | peak RSS | time |
+|---|---|---|
+| python tools/rte | **4.15 GB** (3.85 GB after `load_evidence`) | 0.90 s/locus wall (514 loci: 461 s) -> ~2.2 h single-threaded for 8,729 (extrapolated) |
+| peartree-rte, 1 thread | 0.45 GB (514 loci) | 0.63 s/locus |
+| peartree-rte, 8 threads | **0.48 GB** (all 8,729 loci) | 919 s wall, 5,775 s CPU (0.66 s/locus); 10 s indexing |
+
+Python's memory grows with the patient's reads (PD49229: > 32 GB); the binary's is bounded by
+the index (~ loci x runs) + the reads of the loci in flight (`--chunk` 64 x <= 400 capped reads).
+Time is edlib-bound (`Assembler::layout` rescue, ~70% of samples) like python; the gain is
+threads (`AN_CORES`).

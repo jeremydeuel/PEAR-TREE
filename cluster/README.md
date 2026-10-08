@@ -37,8 +37,17 @@ Use `which samtools` / `which bowtie2` after loading to get the absolute paths f
 git clone -b PEAR-TREE2 git@github.com:limebutterfly/PEAR-TREE.git
 cd PEAR-TREE
 module load rust/1.87.0        # farm22: provides cargo 1.87 (see `module avail rust`)
-bash cluster/build.sh          # -> peartree-discovery + peartree-genotype release binaries
+bash cluster/build.sh          # -> peartree-discovery / -genotype / -genotype2 / -combine / -rte release binaries
 ```
+
+> **Build requirements:** a C and C++ compiler on PATH (`cc`/`c++`: the minimap2 C sources in
+> peartree-combine / peartree-rte and the vendored edlib C++) and zlib (system zlib via
+> pkg-config, else libz-sys builds its bundled copy). `peartree-rte` (annotate's TPRT-hallmark
+> step, the Rust port of tools/rte) is REQUIRED: annotate_v2 uses it by default
+> (`CONFIG['annotate']['rte_engine']`: `auto` = rust when built | `rust` | `python`); the python
+> tools/rte holds every read of the patient in memory (PD49229: killed at 32 GB). Crates are
+> fetched online once (head node); afterwards `PT_CARGO_OFFLINE=1 bash cluster/build.sh` builds
+> from the cache.
 
 > **CARGO_HOME trap (farm22):** the `rust/1.87.0` module sets `CARGO_HOME` to its own
 > **read-only** install dir, so `cargo build` fails with `Permission denied` /

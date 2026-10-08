@@ -32,11 +32,11 @@ Branch `rte-rust`. Python reference: `tools/rte/*.py` at `eaa2718`. Contract: [S
 | file | python | owner | status |
 |---|---|---|---|
 | align.rs, pyfmt.rs, packed.rs, sequtil.rs, mm.rs, genome.rs, config.rs, inputs.rs, stream.rs, record.rs, library.rs, io.rs, golden.rs, main.rs, lib.rs | inputs, record, sequtil, genome, library (+ edlib/mappy/py2bit) | FOUNDATION | done, tested |
-| hallmarks.rs, score.rs | hallmarks, score | **WP-HALL** | stub |
-| assembly.rs | assembly | **WP-ASM** | types done, algorithms stub |
-| structure.rs | structure | **WP-STRUCT** | types done, classify stub |
-| transduction.rs (L1Rmsk, cons_identity, NovelSourceFinder), pseudogene.rs, genemodel.rs | transduction, pseudogene, annotate_v2.GeneModel subset | **WP-TD** | known_source + MappyLocator done, rest stub |
-| annotator.rs (+ main.rs wiring, annotate_v2 switch) | annotator | **WP-INT** (after the four) | helpers done |
+| hallmarks.rs, score.rs | hallmarks, score | **WP-HALL** | done (golden) |
+| assembly.rs | assembly | **WP-ASM** | done (golden) |
+| structure.rs | structure | **WP-STRUCT** | done (golden) |
+| transduction.rs (L1Rmsk, cons_identity, NovelSourceFinder), pseudogene.rs, genemodel.rs | transduction, pseudogene, annotate_v2.GeneModel subset | **WP-TD** | done (golden) |
+| annotator.rs (+ main.rs wiring, annotate_v2 switch) | annotator | **WP-INT** | done: golden_annotate (445 events), golden_e2e_binary, annotate_v2 table byte-identical rust vs python (e2e, with/without GT reads) |
 | — | locus_class.py, calibrate.py | stay python | — |
 
 The four packages WP-HALL, WP-ASM, WP-STRUCT, WP-TD are independent (they only use foundation
