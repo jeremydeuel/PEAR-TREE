@@ -58,6 +58,16 @@ min_evidence_fragments_per_sample = 2
 # mate start each within 5 bp = one molecule, R1/R2 ignored) -- e.g. PD51635 chr16:72393518,
 # whose LEFT junction was "2 fragments" = one PCR molecule shifted 3/1 bp with R1/R2 swapped.
 dedup_coord_tolerance = 5
+# A junction with exactly ONE independent clip molecule still makes the floor of 2 when a
+# DISCORDANT pair of another molecule agrees on the insert (Jeremy 2026-10-08): its anchor sits
+# in the flank within disc_agree_span bp pointing at the junction, and its inside mate shares
+# >= 25 bp at >= 90 % identity (one diagonal, site-forward) with the clip's soft-clipped sequence
+# -- the cluster/somatic_table.py `agrees` rule, now applied at discovery. A discordant pair
+# alone never counts and never makes a junction; a lenient duplicate of the clip molecule
+# (same qname, or outer end + mate start within dedup_coord_tolerance) is not a second one.
+disc_agree_second_fragment = true
+disc_agree_span = 500
+disc_agree_max_anchors = 16
 max_mates_per_breakpoint = 50
 max_evidence_reads_per_breakpoint = 200
 

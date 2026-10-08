@@ -23,7 +23,7 @@ use crate::evidence::{
 use crate::exons::GeneModel;
 use crate::filters::{both_clips_slippage, clean_clipped_seq, is_adapter, is_low_complexity, is_slippage_clip, longest_homopolymer_run, mean_kmer_diversity};
 use crate::intervals::IntervalIndex;
-use crate::model::{count_fragments, join, Breakpoint};
+use crate::model::{agrees, count_fragments, join, mate_site_forward, Breakpoint};
 use crate::polya::PolyABreakpoint;
 use crate::qseq::{revcomp_bytes, QualitySeq};
 use crate::read::BamRead;
@@ -189,6 +189,15 @@ fn one_sided_ok(c: &DiscoveryConfig, b: &Breakpoint) -> bool {
         return false;
     }
     !is_low_complexity(&b.unclipped.seq, 0.8)
+}
+
+/// disc_agree: a pending junction waiting for the inside mate of one of its anchors.
+#[derive(Clone, Copy)]
+struct AgreeWait {
+    left: bool,
+    idx: usize,
+    anchor_read1: bool,
+    anchor_reverse: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -546,12 +555,15 @@ impl Discovery {
 
     /// OBS-1 reject-counter sidecar, serialised as JSON.
     pub fn stats_json(&self) -> String {
-        if self.config.polya_rescue_min_fragments == 0 {
+        if self.config.polya_rescue_min_fragments == 0 && !self.config.disc_agree_active() {
             return self.stats.to_json();
         }
         let mut st = self.stats.clone();
-        st.polya_floor_on = true;
-        st.pa_pair_floor_rejected = self.pa_pair_floor_rejected.get();
+        if self.config.polya_rescue_min_fragments != 0 {
+            st.polya_floor_on = true;
+            st.pa_pair_floor_rejected = self.pa_pair_floor_rejected.get();
+        }
+        st.disc_agree_on = self.config.disc_agree_active();
         st.to_json()
     }
 
@@ -820,6 +832,17 @@ impl Discovery {
                 };
                 match join(g, &self.config, floor, &mut self.stats) {
                     Some(joined) => {
+                        // a pending single-molecule junction is below the normal floor: it
+                        // stays a Feature A missing-junction candidate as in the legacy path
+                        if joined.agree.is_some() {
+                            if let Some(s) = sub {
+                                if out {
+                                    self.subfloor_left_breakpoints.push(s);
+                                } else {
+                                    self.subfloor_right_breakpoints.push(s);
+                                }
+                            }
+                        }
                         if out {
                             self.final_left_breakpoints.push(joined);
                         } else {
@@ -842,6 +865,21 @@ impl Discovery {
         }
         // TPRT sidecar: attach this contig's discordant anchors to its new breakpoints.
         let disc = std::mem::take(&mut self.sc_disc_tmp);
+        // disc_agree: give this contig's pending junctions their candidate anchors; drop the
+        // ones without any (they can never reach 2 fragments)
+        if self.config.disc_agree_active() {
+            let (span, cap, tol) = (self.config.disc_agree_span, self.config.disc_agree_max_anchors, self.config.dedup_coord_tolerance);
+            for (v, start, left) in [(&mut self.final_left_breakpoints, l0, true), (&mut self.final_right_breakpoints, r0, false)] {
+                if v[start..].iter().any(|b| b.agree.is_some()) {
+                    let mut tail = v.split_off(start);
+                    let before = tail.len();
+                    select_agree_anchors(&mut tail, &disc, left, span, cap, tol);
+                    tail.retain(|b| b.agree.as_ref().map_or(true, |a| !a.anchors.is_empty()));
+                    self.stats.disc_agree_no_anchor += (before - tail.len()) as u64;
+                    v.append(&mut tail);
+                }
+            }
+        }
         if self.config.evidence_sidecar && !disc.is_empty() {
             let span = self.config.sidecar_disc_span;
             let cap = self.config.max_evidence_reads_per_breakpoint;
@@ -1011,7 +1049,8 @@ impl Discovery {
         // TPRT sidecar: compact discordant-anchor observation (mate unmapped, on another
         // contig, far away, or same strand) from a primary high-MAPQ read. Attached to a
         // nearby final breakpoint in cleanup(); sequence fetched in the mate pass.
-        if self.config.evidence_sidecar
+        // `disc_agree_second_fragment` uses the same per-contig anchors (no sequence kept).
+        if (self.config.evidence_sidecar || self.config.disc_agree_active())
             && read.flag & FLAG_PAIRED != 0
             && !read.is_proper_pair
             && !read.is_supplementary
@@ -1231,6 +1270,8 @@ impl Discovery {
                 map_bytes as f64 / 1048576.0,
             );
         }
+        // disc_agree: anchor qname hash -> the pending junctions waiting for its inside mate
+        let agree_map = self.agree_mate_map();
         // Feature B: only pay for mate-destination capture when a consumer is enabled.
         let capture_dests = self.config.splice_hallmark || self.config.discordant_anchor;
         let min_mapq = self.config.min_mapq;
@@ -1241,7 +1282,7 @@ impl Discovery {
             for result in reader.records(&header) {
                 let rec = result?;
                 let read = BamRead::from_record(&rec, &header)?;
-                self.apply_mate_record(&read, &read1_mates, &read2_mates, &qmap, capture_dests, min_mapq);
+                self.apply_mate_record(&read, &read1_mates, &read2_mates, &qmap, &agree_map, capture_dests, min_mapq);
             }
         } else {
             let mut reader = open_bam(&self.filepath, self.bam_threads)?;
@@ -1249,7 +1290,7 @@ impl Discovery {
             let mut record = bam::Record::default();
             while reader.read_record(&mut record)? != 0 {
                 let read = BamRead::from_record(&record, &header)?;
-                self.apply_mate_record(&read, &read1_mates, &read2_mates, &qmap, capture_dests, min_mapq);
+                self.apply_mate_record(&read, &read1_mates, &read2_mates, &qmap, &agree_map, capture_dests, min_mapq);
             }
         }
         Ok(())
@@ -1728,11 +1769,33 @@ impl Discovery {
         read1_mates: &FxHashSet<String>,
         read2_mates: &FxHashSet<String>,
         qmap: &FxHashMap<String, BpRef>,
+        agree_map: &FxHashMap<u64, Vec<AgreeWait>>,
         capture_dests: bool,
         min_mapq: u8,
     ) {
         if drop_read(read, self.config.ignore_dup_flag) {
             return;
+        }
+        // disc_agree: the primary inside mate of a candidate anchor -> does it agree with the
+        // pending junction's insert? (decided here; no sequence is kept)
+        if !agree_map.is_empty() && !read.is_supplementary {
+            if let Some(waits) = agree_map.get(&frag_hash(read.name_bytes())) {
+                let stored = read.seq();
+                for w in waits {
+                    if read.is_read1 == w.anchor_read1 {
+                        continue; // the anchor record itself
+                    }
+                    let bp = if w.left { &mut self.final_left_breakpoints[w.idx] } else { &mut self.final_right_breakpoints[w.idx] };
+                    let Some(ag) = bp.agree.as_mut() else { continue };
+                    if ag.promoted {
+                        continue;
+                    }
+                    let mate = mate_site_forward(&stored, read.is_reverse, w.anchor_reverse);
+                    if ag.inserts.iter().any(|ins| agrees(&mate, ins)) {
+                        ag.promoted = true;
+                    }
+                }
+            }
         }
         // query_name is needed for every read (membership check), so decode it here.
         let qname = read.query_name();
@@ -1771,6 +1834,63 @@ impl Discovery {
         }
     }
 
+    /// disc_agree: anchor qname hash -> pending junctions whose candidate anchor it is.
+    /// Empty (no allocation in the scan) unless the key is on and something is pending.
+    fn agree_mate_map(&self) -> FxHashMap<u64, Vec<AgreeWait>> {
+        let mut m: FxHashMap<u64, Vec<AgreeWait>> = FxHashMap::default();
+        if !self.config.disc_agree_active() {
+            return m;
+        }
+        for (v, left) in [(&self.final_left_breakpoints, true), (&self.final_right_breakpoints, false)] {
+            for (idx, bp) in v.iter().enumerate() {
+                let Some(ag) = bp.agree.as_ref() else { continue };
+                for d in &ag.anchors {
+                    m.entry(d.frag).or_default().push(AgreeWait {
+                        left,
+                        idx,
+                        anchor_read1: d.flag & 0x40 != 0,
+                        anchor_reverse: d.is_reverse(),
+                    });
+                }
+            }
+        }
+        m
+    }
+
+    /// disc_agree: right after the mate pass, promote every pending junction whose anchor
+    /// mate agreed (2 independent fragments) and drop the rest, so the sidecar pass, output
+    /// and every later step see only final breakpoints. Order is preserved.
+    fn resolve_disc_agree(&mut self) {
+        if !self.config.disc_agree_active() {
+            return;
+        }
+        let (mut promoted, mut rejected) = (0u64, 0u64);
+        for (v, side) in [(&mut self.final_left_breakpoints, CLIP_LEFT), (&mut self.final_right_breakpoints, CLIP_RIGHT)] {
+            let (mut passed, mut dropped) = (0u64, 0u64);
+            v.retain_mut(|b| match b.agree.take() {
+                None => true,
+                Some(a) if a.promoted => {
+                    b.n_frags = b.n_frags.max(2);
+                    passed += 1;
+                    true
+                }
+                Some(_) => {
+                    dropped += 1;
+                    false
+                }
+            });
+            self.stats.side_mut(side).passed += passed;
+            promoted += passed;
+            rejected += dropped;
+        }
+        self.stats.disc_agree_promoted += promoted;
+        self.stats.disc_agree_rejected += rejected;
+        eprintln!(
+            "disc-agree second fragment: {} single-molecule junction(s) pending, {} without a candidate anchor, {} promoted (anchor mate agrees), {} rejected",
+            self.stats.disc_agree_pending, self.stats.disc_agree_no_anchor, promoted, rejected
+        );
+    }
+
     pub fn discovery(&mut self) -> io::Result<()> {
         // SPD-3 per-contig parallelism uses indexed BAM fetch; CRAM and un-indexed BAM
         // fall back to the single-threaded scan (which still gets N-way BGZF decode via
@@ -1786,6 +1906,7 @@ impl Discovery {
             self.mem_report("after extract (single-threaded)", &[]);
         }
         self.find_mates()?;
+        self.resolve_disc_agree();
         // extend_mates() is a no-op in the Python (operates on the already-emptied
         // temporary_breakpoints); intentionally omitted.
         self.cluster_discordant();
@@ -1950,6 +2071,7 @@ impl Discovery {
             self.mem_report("parent after merge", &[]);
         }
         self.find_mates()?;
+        self.resolve_disc_agree();
         if crate::mem::enabled() {
             self.mem_report("parent after find_mates", &[]);
         }
@@ -2486,6 +2608,36 @@ fn attach_disc(bps: &mut [Breakpoint], disc: &[DiscLite], left: bool, span: i64,
         }
         let room = cap.saturating_sub(ev.clip_lite.len());
         ev.disc_lite = select_lowest(sel, room, |d| (d.frag, d.flag));
+    }
+}
+
+/// `disc_agree_second_fragment`: candidate discordant anchors (one contig, start-sorted) for
+/// that contig's PENDING junctions. Same geometry as `attach_disc`: a LEFT junction at B (insert
+/// to the left of B, reference continues to the right) takes a REVERSE anchor starting at/after
+/// B - 5 whose far end is within `span` of B -- it points left, at the junction, so its mate
+/// reads into the insert; a RIGHT junction takes a FORWARD anchor ending at/before B + 5 and
+/// starting within `span`. Anchors of the clip molecule itself (same qname, or a lenient
+/// duplicate within `tol`) are skipped; at most `cap` kept (lowest qname hash).
+fn select_agree_anchors(bps: &mut [Breakpoint], disc: &[DiscLite], left: bool, span: i64, cap: usize, tol: i64) {
+    for bp in bps.iter_mut() {
+        let b = bp.breakpoint;
+        let Some(ag) = bp.agree.as_mut() else { continue };
+        let lo = disc.partition_point(|d| d.start < b - span);
+        let mut sel: Vec<DiscLite> = Vec::new();
+        for d in &disc[lo..] {
+            if d.start > b + span {
+                break;
+            }
+            let ok = if left {
+                d.is_reverse() && d.start >= b - 5 && d.end - b <= span
+            } else {
+                !d.is_reverse() && d.end <= b + 5 && b - d.start <= span
+            };
+            if ok && !ag.same_molecule(d, tol) {
+                sel.push(*d);
+            }
+        }
+        ag.anchors = select_lowest(sel, cap, |d| (d.frag, d.flag));
     }
 }
 
@@ -3238,5 +3390,213 @@ mod tests {
         let mut reqs = Vec::new();
         build_short_requests(l[0].ev.as_ref().unwrap(), Target::Left, 3, false, 40, &mut reqs);
         assert_eq!(reqs.iter().filter(|q| q.kind == ReqKind::Mate).count(), 0);
+    }
+
+    // ---- disc_agree_second_fragment (end to end through handle_record / cleanup / mate pass) ----
+
+    mod disc_agree {
+        use super::super::*;
+        use noodles_core::Position;
+        use noodles_sam::alignment::record::cigar::op::{Kind, Op};
+        use noodles_sam::alignment::record::Flags;
+        use noodles_sam::alignment::record_buf::RecordBuf;
+        use noodles_sam::header::record::value::{map::ReferenceSequence, Map};
+
+        fn dna(seed: u64, n: usize) -> Vec<u8> {
+            let mut x = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            (0..n)
+                .map(|_| {
+                    x = x.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                    b"ACGT"[(x >> 33) as usize % 4]
+                })
+                .collect()
+        }
+
+        fn header() -> Header {
+            Header::builder()
+                .add_reference_sequence("chr1", Map::<ReferenceSequence>::new(NonZeroUsize::new(100_000).unwrap()))
+                .build()
+        }
+
+        /// one record; `start0` 0-based, `mate0` 0-based mate start on chr1
+        fn rec(name: &str, flags: u16, start0: usize, cigar: Vec<Op>, seq: Vec<u8>, mate0: usize) -> RecordBuf {
+            let n = seq.len();
+            RecordBuf::builder()
+                .set_name(name)
+                .set_flags(Flags::from_bits_truncate(flags))
+                .set_reference_sequence_id(0)
+                .set_alignment_start(Position::new(start0 + 1).unwrap())
+                .set_cigar(cigar.into())
+                .set_mate_reference_sequence_id(0)
+                .set_mate_alignment_start(Position::new(mate0 + 1).unwrap())
+                .set_sequence(seq.into())
+                .set_quality_scores(vec![30u8; n].into())
+                .build()
+        }
+
+        fn m(n: usize) -> Op {
+            Op::new(Kind::Match, n)
+        }
+        fn sc(n: usize) -> Op {
+            Op::new(Kind::SoftClip, n)
+        }
+
+        fn cfg(on: bool) -> DiscoveryConfig {
+            DiscoveryConfig {
+                min_evidence_fragments_per_sample: Some(2),
+                dedup_coord_tolerance: 5,
+                disc_agree_second_fragment: on,
+                ..DiscoveryConfig::default()
+            }
+        }
+
+        const P: usize = 1000; // the junction (0-based reference coordinate)
+
+        /// Allele = flankL (ref [600,1000)) + INSERT (200 bp) + flankR (ref [1000,1400)).
+        struct World {
+            fl: Vec<u8>,
+            fr: Vec<u8>,
+            ins: Vec<u8>,
+        }
+        fn world() -> World {
+            World { fl: dna(1, 400), fr: dna(2, 400), ins: dna(3, 200) }
+        }
+
+        enum Anchor {
+            /// a different molecule, pointing at the junction
+            Good,
+            /// a lenient duplicate of the clip molecule (outer end + mate start within 5 bp)
+            Dup,
+            /// no discordant pair at all
+            None,
+        }
+
+        /// Feed (clip read, anchor) through handle_record + cleanup, then the anchor's inside
+        /// mate (`mate_stored`, `mate_rev`) through the mate pass, then resolve.
+        /// left = LEFT junction (insert to the left of P), else RIGHT.
+        fn run(on: bool, left: bool, anchor: Anchor, mate_stored: Vec<u8>, mate_rev: bool) -> (Discovery, usize) {
+            let w = world();
+            let h = header();
+            let mut d = Discovery::new("unused.bam".into(), 1, cfg(on), None, None);
+            let mut cur = None;
+            let mut recs: Vec<RecordBuf> = Vec::new();
+            if left {
+                // reverse read: 40 bp of the insert's end + 110 bp of flankR, aligned at P; its
+                // own mate sits far away (inside the insert, mapped elsewhere)
+                let mut s = w.ins[160..].to_vec();
+                s.extend_from_slice(&w.fr[..110]);
+                recs.push(rec("clipmol", 0x1 | 0x10 | 0x80, P, vec![sc(40), m(110)], s, 50_000));
+                match anchor {
+                    Anchor::Good => recs.push(rec("discmol", 0x1 | 0x10 | 0x40, P + 60, vec![m(150)], w.fr[60..210].to_vec(), 70_000)),
+                    Anchor::Dup => recs.push(rec("dupmol", 0x1 | 0x10 | 0x40, P, vec![m(110)], w.fr[..110].to_vec(), 50_002)),
+                    Anchor::None => {}
+                }
+            } else {
+                // forward read: 110 bp of flankL + the insert's first 40 bp, ending at P
+                let mut s = w.fl[290..].to_vec();
+                s.extend_from_slice(&w.ins[..40]);
+                match anchor {
+                    Anchor::Good => recs.push(rec("discmol", 0x1 | 0x40, P - 210, vec![m(150)], w.fl[190..340].to_vec(), 70_000)),
+                    Anchor::Dup => recs.push(rec("dupmol", 0x1 | 0x40, P - 110, vec![m(110)], w.fl[290..].to_vec(), 50_002)),
+                    Anchor::None => {}
+                }
+                recs.push(rec("clipmol", 0x1 | 0x40, P - 110, vec![m(110), sc(40)], s, 50_000));
+                recs.sort_by_key(|r| r.alignment_start().map(usize::from));
+            }
+            for r in &recs {
+                d.handle_record(r, &h, 60, false, &mut cur).unwrap();
+            }
+            d.cleanup();
+            let after_cleanup = d.final_left_breakpoints.len() + d.final_right_breakpoints.len();
+            if on {
+                // the clip read itself is discordant too: never its own second fragment
+                for b in d.final_left_breakpoints.iter().chain(&d.final_right_breakpoints) {
+                    let a = b.agree.as_ref().expect("pending");
+                    assert!(a.anchors.iter().all(|x| x.frag != frag_hash(b"clipmol")));
+                }
+            }
+            // the anchor's inside mate, mapped (elsewhere) on chr1 at 70000
+            let mflag = 0x1 | 0x80 | if mate_rev { 0x10 } else { 0 } | if left { 0x20 } else { 0 };
+            let n = mate_stored.len();
+            let mrec = rec("discmol", mflag, 70_000, vec![m(n)], mate_stored, 0);
+            let read = BamRead::from_record(&mrec, &h).unwrap();
+            let am = d.agree_mate_map();
+            d.apply_mate_record(&read, &FxHashSet::default(), &FxHashSet::default(), &FxHashMap::default(), &am, false, 60);
+            d.resolve_disc_agree();
+            (d, after_cleanup)
+        }
+
+        fn rc(s: &[u8]) -> Vec<u8> {
+            revcomp_bytes(s)
+        }
+
+        #[test]
+        fn left_junction_one_clip_plus_agreeing_disc_passes() {
+            let w = world();
+            // FR pair: the anchor is reverse, so its mate reads the insert forward (site-forward
+            // = as sequenced); mapped reverse on another copy it is STORED reverse-complemented
+            let (d, _) = run(true, true, Anchor::Good, rc(&w.ins[100..190]), true);
+            assert_eq!(d.final_left_breakpoints.len(), 1);
+            let b = &d.final_left_breakpoints[0];
+            assert_eq!((b.breakpoint, b.n_frags, b.agree.is_none()), (P as i64, 2, true));
+            assert_eq!((d.stats.disc_agree_pending, d.stats.disc_agree_promoted), (1, 1));
+            assert_eq!(d.stats.left.passed, 1);
+            // the same mate stored forward (mapped forward elsewhere) is the same sequence
+            let (d, _) = run(true, true, Anchor::Good, w.ins[100..190].to_vec(), false);
+            assert_eq!(d.final_left_breakpoints.len(), 1);
+        }
+
+        #[test]
+        fn right_junction_one_clip_plus_agreeing_disc_passes() {
+            let w = world();
+            // the anchor is forward (left of P); its mate reads the insert reverse
+            let (d, _) = run(true, false, Anchor::Good, rc(&w.ins[10..100]), false);
+            assert_eq!(d.final_right_breakpoints.len(), 1);
+            assert_eq!(d.final_right_breakpoints[0].n_frags, 2);
+            let (d, _) = run(true, false, Anchor::Good, w.ins[10..100].to_vec(), true);
+            assert_eq!(d.final_right_breakpoints.len(), 1);
+        }
+
+        #[test]
+        fn disc_whose_mate_does_not_share_the_insert_is_rejected() {
+            let w = world();
+            let (d, n) = run(true, true, Anchor::Good, dna(99, 90), true);
+            assert_eq!((n, d.final_left_breakpoints.len()), (1, 0), "pending, then dropped");
+            assert_eq!((d.stats.disc_agree_rejected, d.stats.disc_agree_promoted), (1, 0));
+            // the right sequence in the WRONG orientation does not agree either
+            let (d, _) = run(true, true, Anchor::Good, w.ins[100..190].to_vec(), true);
+            assert_eq!(d.final_left_breakpoints.len(), 0);
+            let (d, _) = run(true, false, Anchor::Good, w.ins[10..100].to_vec(), false);
+            assert_eq!(d.final_right_breakpoints.len(), 0);
+            // a mate overlapping the clip insert by < 25 bp does not count (here 20 bp)
+            let (d, _) = run(true, true, Anchor::Good, rc(&w.ins[90..180]), true);
+            assert_eq!(d.final_left_breakpoints.len(), 0);
+        }
+
+        #[test]
+        fn disc_that_duplicates_the_clip_molecule_is_rejected() {
+            let w = world();
+            for left in [true, false] {
+                let mate = if left { rc(&w.ins[100..190]) } else { rc(&w.ins[10..100]) };
+                let (d, n) = run(true, left, Anchor::Dup, mate, left);
+                assert_eq!(n, 0, "no candidate anchor: dropped at cleanup");
+                assert_eq!((d.stats.disc_agree_pending, d.stats.disc_agree_no_anchor), (1, 1));
+                assert_eq!(d.final_left_breakpoints.len() + d.final_right_breakpoints.len(), 0);
+            }
+            // no discordant pair at all: a lone clip molecule never passes
+            let (d, n) = run(true, true, Anchor::None, rc(&w.ins[100..190]), true);
+            assert_eq!((n, d.final_left_breakpoints.len()), (0, 0));
+        }
+
+        #[test]
+        fn feature_off_keeps_the_legacy_floor() {
+            let w = world();
+            let (d, n) = run(false, true, Anchor::Good, rc(&w.ins[100..190]), true);
+            assert_eq!((n, d.final_left_breakpoints.len()), (0, 0));
+            assert!(d.sc_disc_tmp.is_empty());
+            assert!(!d.stats_json().contains("disc_agree"));
+            let (d, _) = run(true, true, Anchor::Good, rc(&w.ins[100..190]), true);
+            assert!(d.stats_json().contains("\"disc_agree\": {\"pending\": 1, \"no_anchor\": 0, \"promoted\": 1, \"rejected\": 0}"));
+        }
     }
 }

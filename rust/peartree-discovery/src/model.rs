@@ -1,7 +1,7 @@
 //! Port of src/breakpoint.py (Breakpoint + Breakpoint.join).
 
 use crate::config::*;
-use crate::evidence::{frag_hash, select_lowest, ClipLite, EvExtra};
+use crate::evidence::{frag_hash, select_lowest, ClipLite, DiscLite, EvExtra};
 use crate::filters::{clean_clipped_seq, find_consensus};
 use crate::qseq::QualitySeq;
 use crate::stats::Stats;
@@ -45,6 +45,10 @@ pub struct Breakpoint {
     /// distinct fragments whose clip spans the whole poly-A tail into structured sequence
     /// (`spans_polya`); computed only when `one_sided_min_spanning_fragments` > 0
     pub n_frags_span_polya: usize,
+    /// `disc_agree_second_fragment`: Some = a single-molecule junction held PENDING until the
+    /// mate pass decides whether a discordant pair agrees on its insert (see `AgreePending`).
+    /// Always None after `Discovery::resolve_disc_agree` and when the key is off.
+    pub agree: Option<Box<AgreePending>>,
 }
 
 impl Breakpoint {
@@ -84,7 +88,106 @@ impl Breakpoint {
             mref: -1,
             mpos: -1,
             n_frags_span_polya: 0,
+            agree: None,
         }
+    }
+}
+
+/// `disc_agree_second_fragment` agreement thresholds -- identical to cluster/somatic_table.py
+/// AGREE_MIN_BP / AGREE_MIN_ID (and its k = 12 seed).
+pub const AGREE_MIN_BP: usize = 25;
+pub const AGREE_MIN_ID: f64 = 0.9;
+const AGREE_SEED_K: usize = 12;
+/// raw clip sequences kept per pending junction (distinct, longest first)
+const AGREE_MAX_INSERTS: usize = 4;
+/// clip reads kept per pending junction for the anchor duplicate check
+const AGREE_MAX_CLIPS: usize = 32;
+
+/// A clip read of a pending junction, for the "different molecule" check of a discordant
+/// anchor: fragment (qname hash), the read's 5' outer (unclipped) end and its mate placement.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ClipMol {
+    pub frag: u64,
+    pub outer5: i64,
+    pub mref: i32,
+    pub mpos: i64,
+}
+
+/// Payload of a PENDING single-molecule junction (`disc_agree_second_fragment`).
+#[derive(Clone, Debug, Default)]
+pub struct AgreePending {
+    /// raw inserted (soft-clipped) sequences of the supporting clip reads, site-forward
+    /// (= BAM SEQ orientation of a read aligned at the site), each >= AGREE_MIN_BP
+    pub inserts: Vec<Vec<u8>>,
+    /// every clip read of the cluster (capped), for the duplicate check
+    pub clips: Vec<ClipMol>,
+    /// candidate discordant anchors (filled in `Discovery::cleanup`)
+    pub anchors: Vec<DiscLite>,
+    /// an anchor's inside mate agreed with an insert (set in the mate pass)
+    pub promoted: bool,
+}
+
+impl AgreePending {
+    /// True when the anchor `d` is (by the lenient rule) the same molecule as one of the clip
+    /// reads: same qname, or (tol > 0) 5' outer end AND mate start each within `tol` bp
+    /// (both mates unplaced: the outer end alone decides) -- the `count_frag_keys` rule.
+    pub fn same_molecule(&self, d: &DiscLite, tol: i64) -> bool {
+        let outer5 = if d.is_reverse() { d.end } else { d.start };
+        self.clips.iter().any(|c| {
+            c.frag == d.frag
+                || (tol > 0
+                    && (c.outer5 - outer5).abs() <= tol
+                    && if c.mref >= 0 && d.mref >= 0 {
+                        c.mref == d.mref && (c.mpos - d.mpos).abs() <= tol
+                    } else {
+                        c.mref < 0 && d.mref < 0
+                    })
+        })
+    }
+}
+
+/// `mate` and `insert` share >= AGREE_MIN_BP bases on one diagonal at >= AGREE_MIN_ID identity
+/// over their whole overlap on that diagonal (both site-forward): they agree on what was
+/// inserted. Port of cluster/somatic_table.py `agrees` (k = 12 seeds, each diagonal tried once).
+pub fn agrees(mate: &[u8], insert: &[u8]) -> bool {
+    let k = AGREE_SEED_K;
+    if mate.is_empty() || insert.len() < AGREE_MIN_BP || insert.len() < k || mate.len() < k {
+        return false;
+    }
+    let mut seeds: rustc_hash::FxHashMap<&[u8], Vec<usize>> = rustc_hash::FxHashMap::default();
+    for i in 0..=(insert.len() - k) {
+        seeds.entry(&insert[i..i + k]).or_default().push(i);
+    }
+    let mut tried: rustc_hash::FxHashSet<i64> = rustc_hash::FxHashSet::default();
+    for j in 0..=(mate.len() - k) {
+        let Some(is) = seeds.get(&mate[j..j + k]) else { continue };
+        for &i in is {
+            let d = j as i64 - i as i64;
+            if !tried.insert(d) {
+                continue;
+            }
+            let lo = 0i64.max(-d);
+            let hi = (insert.len() as i64).min(mate.len() as i64 - d);
+            let n = hi - lo;
+            if n >= AGREE_MIN_BP as i64 {
+                let same = (lo..hi).filter(|&x| insert[x as usize] == mate[(x + d) as usize]).count();
+                if same as f64 >= AGREE_MIN_ID * n as f64 {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+/// Site-forward sequence of a discordant anchor's inside mate: in an FR pair the mate lies
+/// opposite to its anchor, so its stored (BAM) SEQ is site-forward when (mate 0x10) !=
+/// (anchor 0x10), else the reverse complement (= combine's `allele_forward_seq`).
+pub fn mate_site_forward(stored: &[u8], mate_reverse: bool, anchor_reverse: bool) -> Vec<u8> {
+    if mate_reverse != anchor_reverse {
+        stored.to_vec()
+    } else {
+        crate::qseq::revcomp_bytes(stored)
     }
 }
 
@@ -303,7 +406,16 @@ pub fn join(mut breakpoints: Vec<Breakpoint>, cfg: &DiscoveryConfig, evidence_fl
     // TPRT fragment mode: the floor counts distinct fragments, and a single-fragment
     // cluster takes the normal consensus path when the floor admits it.
     let frag_mode = cfg.min_evidence_fragments_per_sample.is_some();
-    if breakpoints.len() < 2 && !(frag_mode && evidence_floor <= 1) {
+    // disc_agree_second_fragment: a junction with ONE clip molecule against a floor of 2 may be
+    // held pending (see `AgreePending`)
+    let agree_ok = frag_mode && cfg.disc_agree_second_fragment && evidence_floor == 2;
+    // a lone clip read takes the consensus path (and may go pending) only when the legacy
+    // lone-read path would emit nothing and its clip is long enough to compare
+    let lone_agree = agree_ok
+        && breakpoints.len() == 1
+        && breakpoints[0].clipped.len() >= AGREE_MIN_BP
+        && !(cfg.polya_rescue_min_fragments <= 1 && matches!(rescue_polya(breakpoints[0].clone()), Rescue::Rescued(_)));
+    if breakpoints.len() < 2 && !(frag_mode && evidence_floor <= 1) && !lone_agree {
         let solo_ev = merge_ev(&breakpoints, cfg);
         let bp = breakpoints.pop().unwrap();
         let side = bp.side;
@@ -351,9 +463,30 @@ pub fn join(mut breakpoints: Vec<Breakpoint>, cfg: &DiscoveryConfig, evidence_fl
     // fragment identities from the RAW clips (before cleaning shortens them)
     let tol = cfg.dedup_coord_tolerance;
     let raw_keys: Vec<FragKey> = breakpoints.iter().map(frag_key).collect();
+    // disc_agree: keep the raw (site-forward) clips and clip-read identities
+    let agree_raw: Vec<(Vec<u8>, ClipMol)> = if agree_ok {
+        breakpoints
+            .iter()
+            .map(|bp| {
+                let (clen, ulen) = (bp.clipped.len() as i64, bp.unclipped.len() as i64);
+                let fwd = bp.is_forward != Some(false);
+                let outer5 = match (bp.side == CLIP_LEFT, fwd) {
+                    (true, true) => bp.breakpoint - clen,
+                    (true, false) => bp.breakpoint + ulen,
+                    (false, true) => bp.breakpoint - ulen,
+                    (false, false) => bp.breakpoint + clen,
+                };
+                (bp.clipped.seq.clone(), ClipMol { frag: bp_frag(bp), outer5, mref: bp.mref, mpos: bp.mpos })
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
     // clean/orient clipped sequences and collect qc-passing precise positions
     let mut bps: Vec<i64> = Vec::new();
     let mut frags: Vec<FragKey> = Vec::new();
+    // index (into `breakpoints`) of each entry of `bps`
+    let mut bps_idx: Vec<usize> = Vec::new();
     for (bi, bp) in breakpoints.iter_mut().enumerate() {
         if side == CLIP_LEFT {
             // left clipped is reverse complemented from now on
@@ -370,6 +503,7 @@ pub fn join(mut breakpoints: Vec<Breakpoint>, cfg: &DiscoveryConfig, evidence_fl
         if bp.bp_precise && bp.clipped.len() >= cfg.min_good_bases {
             bps.push(bp.breakpoint);
             frags.push(raw_keys[bi]);
+            bps_idx.push(bi);
         }
     }
     if bps.is_empty() {
@@ -395,20 +529,33 @@ pub fn join(mut breakpoints: Vec<Breakpoint>, cfg: &DiscoveryConfig, evidence_fl
         exact_n
     };
 
-    if n < evidence_floor {
+    let in_support = |b: i64| if cfg.evidence_window > 0 { (b - best_bp).abs() <= cfg.evidence_window } else { b == best_bp };
+    // disc_agree: one clip molecule, floor 2, and a supporting clip long enough to compare
+    let mut pending = agree_ok
+        && n == 1
+        && bps.iter().zip(&bps_idx).any(|(&b, &bi)| in_support(b) && agree_raw[bi].0.len() >= AGREE_MIN_BP);
+    let is_pa = |bp: &Breakpoint| {
+        (bp.side == CLIP_LEFT && bp.clipped.pyslice(Some(-8), None).eq_bytes(b"AAAAAAAA"))
+            || (bp.side == CLIP_RIGHT && bp.clipped.pyslice(None, Some(8)).eq_bytes(b"TTTTTTTT"))
+    };
+    // poly-A rescue fragment floor: distinct fragments among the cluster's poly-A reads
+    // (the reads the rescued breakpoint stands for)
+    let pa_frags_ok = n >= evidence_floor || cfg.polya_rescue_min_fragments == 0 || {
+        let f: Vec<FragKey> =
+            breakpoints.iter().zip(&raw_keys).filter(|(bp, _)| is_pa(bp)).map(|(_, &k)| k).collect();
+        count_frag_keys(&f, tol) >= cfg.polya_rescue_min_fragments
+    };
+    if pending {
+        // the legacy outcome wins when it emits something: a successful poly-A rescue
+        if let Some(bp) = breakpoints.iter().find(|bp| is_pa(bp)) {
+            if pa_frags_ok && matches!(rescue_polya(bp.clone()), Rescue::Rescued(_)) {
+                pending = false;
+            }
+        }
+    }
+    if n < evidence_floor && !pending {
         // the sidecar keeps every read of the cluster on the rescued breakpoint
         let group_ev = merge_ev(&breakpoints, cfg);
-        let is_pa = |bp: &Breakpoint| {
-            (bp.side == CLIP_LEFT && bp.clipped.pyslice(Some(-8), None).eq_bytes(b"AAAAAAAA"))
-                || (bp.side == CLIP_RIGHT && bp.clipped.pyslice(None, Some(8)).eq_bytes(b"TTTTTTTT"))
-        };
-        // poly-A rescue fragment floor: distinct fragments among the cluster's poly-A reads
-        // (the reads the rescued breakpoint stands for)
-        let pa_frags_ok = cfg.polya_rescue_min_fragments == 0 || {
-            let f: Vec<FragKey> =
-                breakpoints.iter().zip(&raw_keys).filter(|(bp, _)| is_pa(bp)).map(|(_, &k)| k).collect();
-            count_frag_keys(&f, tol) >= cfg.polya_rescue_min_fragments
-        };
         // try polyA rescue on the individual breakpoints; first hit wins
         for bp in breakpoints.into_iter() {
             if is_pa(&bp) {
@@ -563,6 +710,22 @@ pub fn join(mut breakpoints: Vec<Breakpoint>, cfg: &DiscoveryConfig, evidence_fl
     // rescue (off by default), so the legacy value is kept unless in fragment mode.
     b.n_reads = if frag_mode { n_used } else { clipped.len() };
     b.ev = merge_ev(&breakpoints, cfg);
+    if pending {
+        // held until the mate pass; `passed` is counted on promotion
+        let mut inserts: Vec<Vec<u8>> = Vec::new();
+        for (&x, &bi) in bps.iter().zip(&bps_idx) {
+            let ins = &agree_raw[bi].0;
+            if in_support(x) && ins.len() >= AGREE_MIN_BP && !inserts.contains(ins) {
+                inserts.push(ins.clone());
+            }
+        }
+        inserts.sort_by(|a, c| c.len().cmp(&a.len()).then_with(|| a.cmp(c)));
+        inserts.truncate(AGREE_MAX_INSERTS);
+        let clips: Vec<ClipMol> = agree_raw.iter().take(AGREE_MAX_CLIPS).map(|(_, m)| *m).collect();
+        b.agree = Some(Box::new(AgreePending { inserts, clips, ..Default::default() }));
+        stats.disc_agree_pending += 1;
+        return Some(b);
+    }
     stats.side_mut(side).passed += 1;
     Some(b)
 }
@@ -758,6 +921,96 @@ mod tests {
         assert_eq!(join(g.clone(), &cfg(None), 2, &mut st).unwrap().n_reads, 4); // legacy x2
         assert_eq!(join(g, &cfg(Some(2)), 2, &mut st).unwrap().n_reads, 2);
     }
+
+    fn cfg_agree(on: bool) -> DiscoveryConfig {
+        DiscoveryConfig { disc_agree_second_fragment: on, ..cfg_dedup(2, 5) }
+    }
+
+    #[test]
+    fn agrees_mirrors_somatic_table() {
+        let ins = dna(5, 60);
+        // exact overlap of 30 bp (mate starts inside the insert)
+        let mut mate = ins[30..].to_vec();
+        mate.extend(dna(6, 60));
+        assert!(agrees(&mate, &ins));
+        // 24 bp overlap: too short
+        let mut mate = ins[36..].to_vec();
+        mate.extend(dna(6, 60));
+        assert!(!agrees(&mate, &ins));
+        // 2 mismatches over a 30 bp overlap (93 %) agree; 4 (87 %) do not
+        let mut mate = ins[30..].to_vec();
+        for i in [3usize, 20] {
+            mate[i] = if mate[i] == b'A' { b'C' } else { b'A' };
+        }
+        assert!(agrees(&mate, &ins));
+        for i in [8usize, 27] {
+            mate[i] = if mate[i] == b'A' { b'C' } else { b'A' };
+        }
+        assert!(!agrees(&mate, &ins));
+        // reverse complement: different orientation, no agreement
+        assert!(!agrees(&crate::qseq::revcomp_bytes(&ins), &ins));
+        // an insert shorter than 25 bp never agrees
+        assert!(!agrees(&ins, &ins[..24]));
+        assert!(agrees(&ins, &ins[..25]));
+    }
+
+    #[test]
+    fn mate_site_forward_follows_the_fr_pair() {
+        let s = b"AACCGT".to_vec();
+        assert_eq!(mate_site_forward(&s, true, false), s);
+        assert_eq!(mate_site_forward(&s, false, true), s);
+        assert_eq!(mate_site_forward(&s, true, true), b"ACGGTT".to_vec());
+        assert_eq!(mate_site_forward(&s, false, false), b"ACGGTT".to_vec());
+    }
+
+    #[test]
+    fn one_clip_molecule_goes_pending_only_with_the_key() {
+        let mut st = Stats::default();
+        // one molecule = one template with a duplicate shifted 3/1 bp (lenient collapse)
+        let g = vec![left_read("A", false, 1000, 30, 1140), left_read("B", true, 1000, 33, 1141)];
+        assert!(join(g.clone(), &cfg_agree(false), 2, &mut st).is_none());
+        let b = join(g.clone(), &cfg_agree(true), 2, &mut st).expect("pending");
+        let a = b.agree.as_ref().unwrap();
+        assert_eq!(b.n_frags, 1);
+        // raw clips, site-forward (NOT the reverse-complemented LEFT consensus), distinct
+        assert_eq!(a.inserts.len(), 2);
+        assert!(a.inserts.iter().all(|i| dna(7, 60).ends_with(i)));
+        assert_eq!(a.clips.len(), 2);
+        assert_eq!((st.disc_agree_pending, st.left.passed), (1, 0));
+        // a lone clip read (single record) goes pending as well
+        let b = join(vec![left_read("A", true, 1000, 30, 1140)], &cfg_agree(true), 2, &mut st).unwrap();
+        assert!(b.agree.is_some());
+        // a clip too short to ever agree (< 25 bp) is not held
+        assert!(join(vec![left_read("A", true, 1000, 20, 1140)], &cfg_agree(true), 2, &mut st).is_none());
+        // only against a floor of exactly 2
+        assert!(join(g, &cfg_agree(true), 3, &mut st).is_none());
+    }
+
+    #[test]
+    fn two_clip_molecules_unaffected_by_the_key() {
+        let g = vec![left_read("A", true, 1000, 12, 1140), left_read("B", true, 1000, 40, 1340)];
+        let (mut s0, mut s1) = (Stats::default(), Stats::default());
+        let off = join(g.clone(), &cfg_agree(false), 2, &mut s0).unwrap();
+        let on = join(g, &cfg_agree(true), 2, &mut s1).unwrap();
+        assert!(on.agree.is_none());
+        assert_eq!((off.n_frags, on.n_frags), (2, 2));
+        assert_eq!((off.breakpoint, off.clipped.seq.clone(), off.unclipped.seq.clone()), (on.breakpoint, on.clipped.seq, on.unclipped.seq));
+        assert_eq!((s0.left.passed, s1.left.passed, s1.disc_agree_pending), (1, 1, 0));
+    }
+
+    #[test]
+    fn anchor_duplicate_rule() {
+        let a = AgreePending {
+            clips: vec![ClipMol { frag: 1, outer5: 1110, mref: 0, mpos: 50_000 }],
+            ..Default::default()
+        };
+        let d = |frag, flag: u16, start, end, mref, mpos| DiscLite { frag, flag, ref_id: 0, start, end, mref, mpos };
+        assert!(a.same_molecule(&d(1, 0x10, 5000, 5100, 3, 9), 5), "same qname");
+        assert!(a.same_molecule(&d(2, 0x10, 1000, 1113, 0, 49_996), 5), "reverse: end + mate within 5");
+        assert!(!a.same_molecule(&d(2, 0x10, 1000, 1113, 0, 49_990), 5), "mate 10 bp away");
+        assert!(!a.same_molecule(&d(2, 0x10, 1000, 1120, 0, 50_000), 5), "outer end 10 bp away");
+        assert!(a.same_molecule(&d(2, 0x0, 1110, 1200, 0, 50_000), 5), "forward: start is the 5' end -> 1110 matches");
+    }
 }
 
 #[cfg(test)]
@@ -779,4 +1032,5 @@ mod span_tests {
         // no poly-T start
         assert!(!spans_polya(b"GCATTGACCTAGGCTTTTTTTTTTTTT", 10, 10));
     }
+
 }

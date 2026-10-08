@@ -41,6 +41,17 @@ pub struct Stats {
     pub pa_pair_floor_rejected: u64,
     /// Feature A anchor/partner candidates skipped: < N fragments
     pub disc_floor_rejected: u64,
+    // `disc_agree_second_fragment` counters (global). Serialised only when the key is active
+    // (`disc_agree_on`), so the default stats sidecar is unchanged.
+    pub disc_agree_on: bool,
+    /// single-molecule junctions that passed every consensus gate and were held pending
+    pub disc_agree_pending: u64,
+    /// ... dropped at once: no candidate discordant anchor (other molecule, right side/strand)
+    pub disc_agree_no_anchor: u64,
+    /// ... promoted to 2 fragments: an anchor's inside mate agrees with the clip's insert
+    pub disc_agree_promoted: u64,
+    /// ... dropped after the mate pass: anchors present, none of their mates agrees
+    pub disc_agree_rejected: u64,
 }
 
 impl Stats {
@@ -72,6 +83,10 @@ impl Stats {
         self.pa_rescue_floor_rejected += other.pa_rescue_floor_rejected;
         self.pa_pair_floor_rejected += other.pa_pair_floor_rejected;
         self.disc_floor_rejected += other.disc_floor_rejected;
+        self.disc_agree_pending += other.disc_agree_pending;
+        self.disc_agree_no_anchor += other.disc_agree_no_anchor;
+        self.disc_agree_promoted += other.disc_agree_promoted;
+        self.disc_agree_rejected += other.disc_agree_rejected;
     }
 
     /// Serialise to JSON. The `left`/`right` field names match the Python keys
@@ -86,12 +101,21 @@ impl Stats {
         } else {
             String::new()
         };
+        let agree = if self.disc_agree_on {
+            format!(
+                ",\n  \"disc_agree\": {{\"pending\": {}, \"no_anchor\": {}, \"promoted\": {}, \"rejected\": {}}}",
+                self.disc_agree_pending, self.disc_agree_no_anchor, self.disc_agree_promoted, self.disc_agree_rejected
+            )
+        } else {
+            String::new()
+        };
         format!(
-            "{{\n  \"left\": {},\n  \"right\": {},\n  \"discordant\": {}{}\n}}\n",
+            "{{\n  \"left\": {},\n  \"right\": {},\n  \"discordant\": {}{}{}\n}}\n",
             side_json(&self.left),
             side_json(&self.right),
             self.discordant_json(),
-            floor
+            floor,
+            agree
         )
     }
 

@@ -269,6 +269,23 @@ fn main() -> io::Result<()> {
         } else {
             eprintln!("evidence floor: lenient duplicate collapse OFF (distinct qnames; markdup-missed duplicates count)");
         }
+        if config.disc_agree_second_fragment {
+            eprintln!(
+                "evidence floor: disc-agree second fragment ON (floor 2: 1 clip molecule + a discordant pair of another molecule whose inside mate shares >= {} bp at >= {:.0}% with the clip insert; anchor within {} bp, <= {} anchors per junction)",
+                model::AGREE_MIN_BP,
+                model::AGREE_MIN_ID * 100.0,
+                config.disc_agree_span,
+                config.disc_agree_max_anchors
+            );
+            if n != 2 && !config.adaptive_evidence {
+                eprintln!("warning: disc_agree_second_fragment acts only on a per-junction floor of exactly 2 (min_evidence_fragments_per_sample = {n})");
+            }
+            if config.discordant_anchor {
+                eprintln!("warning: disc_agree_second_fragment with discordant_anchor: a promoted junction also stays a Feature A sub-floor candidate (untested combination)");
+            }
+        }
+    } else if config.disc_agree_second_fragment {
+        eprintln!("warning: disc_agree_second_fragment has no effect without min_evidence_fragments_per_sample (fragment mode)");
     }
     if config.drop_dup_in_polya_path {
         eprintln!("dup flag: also dropped in the low-MAPQ poly-A path");

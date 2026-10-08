@@ -300,6 +300,20 @@ pub struct DiscoveryConfig {
     /// Sidecar DISC rows: a non-proper high-MAPQ anchor (mate unmapped / other contig /
     /// far / same strand) pointing at the junction from within this many bp.
     pub sidecar_disc_span: i64,
+    /// Fragment mode with a floor of exactly 2 only: a junction with ONE independent clip
+    /// molecule still passes when a DISCORDANT pair of a different molecule agrees on what was
+    /// inserted -- the anchor read sits in the flank on the junction's side within
+    /// `disc_agree_span` bp, pointing at the junction, and its mate (inside the insert) shares
+    /// >= 25 bp on one diagonal at >= 90 % identity with the clip's inserted sequence, both in
+    /// site-forward orientation (= cluster/somatic_table.py `agrees`). The presence of a
+    /// discordant pair alone never counts, and a discordant pair alone never makes a junction.
+    /// Single-molecule junctions are kept PENDING only when such an anchor exists, then promoted
+    /// (n_frags = 2) or dropped right after the mate pass. Off = byte-identical.
+    pub disc_agree_second_fragment: bool,
+    /// `disc_agree_second_fragment`: max distance (bp) from the junction to the anchor's far end.
+    pub disc_agree_span: i64,
+    /// `disc_agree_second_fragment`: candidate anchors per pending junction (lowest qname hash).
+    pub disc_agree_max_anchors: usize,
     // --- TPRT pairing modes (all off by default => output byte-identical) ---
     /// Drop 0x400 duplicates also in the low-MAPQ poly-A path (`find_polya`), which
     /// historically never checked the flag. Off = legacy (byte-identical).
@@ -434,6 +448,9 @@ impl Default for DiscoveryConfig {
             max_mates_per_breakpoint: 50,
             max_evidence_reads_per_breakpoint: 200,
             sidecar_disc_span: 500,
+            disc_agree_second_fragment: false,
+            disc_agree_span: 500,
+            disc_agree_max_anchors: 16,
             drop_dup_in_polya_path: false,
             max_target_site_deletion: 0,
             allow_blunt_pairs: false,
@@ -474,6 +491,12 @@ impl DiscoveryConfig {
     /// is enabled. Off = the legacy pairing only.
     pub fn extra_pairing(&self) -> bool {
         self.max_target_site_deletion > 0 || self.allow_blunt_pairs || self.max_l1_mediated_span > 0 || self.one_sided_loci
+    }
+
+    /// True when `disc_agree_second_fragment` can act: fragment mode is on (the per-junction
+    /// floor itself is checked per cluster: it must be exactly 2).
+    pub fn disc_agree_active(&self) -> bool {
+        self.disc_agree_second_fragment && self.min_evidence_fragments_per_sample.is_some()
     }
 
     /// Build config: start from defaults, overlay a `key = value` file (if given),
@@ -598,6 +621,9 @@ impl DiscoveryConfig {
             "max_mates_per_breakpoint" => self.max_mates_per_breakpoint = parse_num(val)?,
             "max_evidence_reads_per_breakpoint" => self.max_evidence_reads_per_breakpoint = parse_num(val)?,
             "sidecar_disc_span" => self.sidecar_disc_span = parse_num(val)?,
+            "disc_agree_second_fragment" => self.disc_agree_second_fragment = parse_bool(val)?,
+            "disc_agree_span" => self.disc_agree_span = parse_num(val)?,
+            "disc_agree_max_anchors" => self.disc_agree_max_anchors = parse_num(val)?,
             "drop_dup_in_polya_path" => self.drop_dup_in_polya_path = parse_bool(val)?,
             "max_target_site_deletion" => self.max_target_site_deletion = parse_num(val)?,
             "allow_blunt_pairs" => self.allow_blunt_pairs = parse_bool(val)?,
