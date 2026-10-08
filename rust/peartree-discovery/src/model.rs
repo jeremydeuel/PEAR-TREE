@@ -98,6 +98,12 @@ impl Breakpoint {
 pub const AGREE_MIN_BP: usize = 25;
 pub const AGREE_MIN_ID: f64 = 0.9;
 const AGREE_SEED_K: usize = 12;
+/// low-complexity mask: a base is masked when any AGREE_LC_WINDOW-bp window covering it has
+/// <= AGREE_LC_MAX_TRIMERS distinct 3-mers (poly-A/T even with an error, di-/tri-nucleotide
+/// repeats). Masked bases never count toward AGREE_MIN_BP: a shared poly-A is no agreement
+/// (Jeremy 2026-10-08). Identical to cluster/somatic_table.py `low_complexity_mask`.
+const AGREE_LC_WINDOW: usize = 12;
+const AGREE_LC_MAX_TRIMERS: usize = 4;
 /// raw clip sequences kept per pending junction (distinct, longest first)
 const AGREE_MAX_INSERTS: usize = 4;
 /// clip reads kept per pending junction for the anchor duplicate check
@@ -149,9 +155,37 @@ impl AgreePending {
 /// `mate` and `insert` share >= AGREE_MIN_BP bases on one diagonal at >= AGREE_MIN_ID identity
 /// over their whole overlap on that diagonal (both site-forward): they agree on what was
 /// inserted. Port of cluster/somatic_table.py `agrees` (k = 12 seeds, each diagonal tried once).
+/// At least AGREE_MIN_BP of the matching bases must lie outside low-complexity sequence.
+pub fn low_complexity_mask(s: &[u8]) -> Vec<bool> {
+    let mut mask = vec![false; s.len()];
+    let w = AGREE_LC_WINDOW.min(s.len());
+    if w < 3 {
+        return vec![true; s.len()];
+    }
+    for start in 0..=(s.len() - w) {
+        let win = &s[start..start + w];
+        let mut tri: Vec<&[u8]> = win.windows(3).collect();
+        tri.sort_unstable();
+        tri.dedup();
+        if tri.len() <= AGREE_LC_MAX_TRIMERS {
+            mask[start..start + w].iter_mut().for_each(|m| *m = true);
+        }
+    }
+    mask
+}
+
+/// bases of `s` outside low-complexity sequence (`low_complexity_mask`)
+pub fn complex_bp(s: &[u8]) -> usize {
+    low_complexity_mask(s).iter().filter(|&&m| !m).count()
+}
+
 pub fn agrees(mate: &[u8], insert: &[u8]) -> bool {
     let k = AGREE_SEED_K;
     if mate.is_empty() || insert.len() < AGREE_MIN_BP || insert.len() < k || mate.len() < k {
+        return false;
+    }
+    let lc = low_complexity_mask(insert);
+    if lc.iter().filter(|&&m| !m).count() < AGREE_MIN_BP {
         return false;
     }
     let mut seeds: rustc_hash::FxHashMap<&[u8], Vec<usize>> = rustc_hash::FxHashMap::default();
@@ -171,7 +205,8 @@ pub fn agrees(mate: &[u8], insert: &[u8]) -> bool {
             let n = hi - lo;
             if n >= AGREE_MIN_BP as i64 {
                 let same = (lo..hi).filter(|&x| insert[x as usize] == mate[(x + d) as usize]).count();
-                if same as f64 >= AGREE_MIN_ID * n as f64 {
+                let informative = (lo..hi).filter(|&x| !lc[x as usize] && insert[x as usize] == mate[(x + d) as usize]).count();
+                if same as f64 >= AGREE_MIN_ID * n as f64 && informative >= AGREE_MIN_BP {
                     return true;
                 }
             }
@@ -414,6 +449,7 @@ pub fn join(mut breakpoints: Vec<Breakpoint>, cfg: &DiscoveryConfig, evidence_fl
     let lone_agree = agree_ok
         && breakpoints.len() == 1
         && breakpoints[0].clipped.len() >= AGREE_MIN_BP
+        && complex_bp(&breakpoints[0].clipped.seq) >= AGREE_MIN_BP
         && !(cfg.polya_rescue_min_fragments <= 1 && matches!(rescue_polya(breakpoints[0].clone()), Rescue::Rescued(_)));
     if breakpoints.len() < 2 && !(frag_mode && evidence_floor <= 1) && !lone_agree {
         let solo_ev = merge_ev(&breakpoints, cfg);
@@ -533,7 +569,7 @@ pub fn join(mut breakpoints: Vec<Breakpoint>, cfg: &DiscoveryConfig, evidence_fl
     // disc_agree: one clip molecule, floor 2, and a supporting clip long enough to compare
     let mut pending = agree_ok
         && n == 1
-        && bps.iter().zip(&bps_idx).any(|(&b, &bi)| in_support(b) && agree_raw[bi].0.len() >= AGREE_MIN_BP);
+        && bps.iter().zip(&bps_idx).any(|(&b, &bi)| in_support(b) && complex_bp(&agree_raw[bi].0) >= AGREE_MIN_BP);
     let is_pa = |bp: &Breakpoint| {
         (bp.side == CLIP_LEFT && bp.clipped.pyslice(Some(-8), None).eq_bytes(b"AAAAAAAA"))
             || (bp.side == CLIP_RIGHT && bp.clipped.pyslice(None, Some(8)).eq_bytes(b"TTTTTTTT"))
@@ -715,7 +751,7 @@ pub fn join(mut breakpoints: Vec<Breakpoint>, cfg: &DiscoveryConfig, evidence_fl
         let mut inserts: Vec<Vec<u8>> = Vec::new();
         for (&x, &bi) in bps.iter().zip(&bps_idx) {
             let ins = &agree_raw[bi].0;
-            if in_support(x) && ins.len() >= AGREE_MIN_BP && !inserts.contains(ins) {
+            if in_support(x) && complex_bp(ins) >= AGREE_MIN_BP && !inserts.contains(ins) {
                 inserts.push(ins.clone());
             }
         }
@@ -924,6 +960,28 @@ mod tests {
 
     fn cfg_agree(on: bool) -> DiscoveryConfig {
         DiscoveryConfig { disc_agree_second_fragment: on, ..cfg_dedup(2, 5) }
+    }
+
+    #[test]
+    fn poly_a_and_repeats_are_no_agreement() {
+        // a shared poly-A (with a sequencing error) is never agreement
+        let mut pa = vec![b'A'; 40];
+        pa[17] = b'G';
+        let mut ins = dna(7, 30);
+        ins.extend(&pa);
+        let mut mate = pa.clone();
+        mate.extend(dna(8, 60));
+        assert!(!agrees(&mate, &ins));
+        // nor a shared dinucleotide repeat
+        let ca: Vec<u8> = b"CA".iter().cycle().take(40).copied().collect();
+        assert!(!agrees(&ca, &ca));
+        assert_eq!(complex_bp(&pa), 0);
+        // >= 25 complex bp shared next to the poly-A: agreement
+        let u = dna(9, 40);
+        let mut ins = u.clone();
+        ins.extend(&pa);
+        assert!(agrees(&ins, &ins));
+        assert!(complex_bp(&u) >= 25);
     }
 
     #[test]

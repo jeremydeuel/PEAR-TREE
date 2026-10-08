@@ -80,6 +80,8 @@ DUP_SHIFT = 5                 # bp: read and mate both within this shift = one m
 JUNCTION_ROLES = ("CLIP", "POLYA")
 AGREE_MIN_BP = 25             # a DISC mate must share >= this many bp of a clip's insert ...
 AGREE_MIN_ID = 0.9            # ... at >= this identity to count as a second fragment
+AGREE_LC_WINDOW = 12          # low complexity: a base in any 12-bp window with <= 4 distinct 3-mers
+AGREE_LC_MAX_TRIMERS = 4      # (poly-A/T, di-/tri-nucleotide repeats) never counts toward AGREE_MIN_BP
 
 
 def site_gap(loc):
@@ -143,10 +145,27 @@ def insert_part(read, side, record):
     return clip
 
 
+def low_complexity_mask(s):
+    """True per base inside low-complexity sequence (= discovery model.rs `low_complexity_mask`)"""
+    w = min(AGREE_LC_WINDOW, len(s))
+    if w < 3:
+        return [True] * len(s)
+    mask = [False] * len(s)
+    for st in range(len(s) - w + 1):
+        win = s[st:st + w]
+        if len({win[i:i + 3] for i in range(w - 2)}) <= AGREE_LC_MAX_TRIMERS:
+            mask[st:st + w] = [True] * w
+    return mask
+
+
 def agrees(mate, insert, k=12):
     """mate and insert share >= AGREE_MIN_BP on one diagonal at >= AGREE_MIN_ID (same orientation:
-    both allele-forward), i.e. they agree on what was inserted"""
+    both allele-forward), i.e. they agree on what was inserted; >= AGREE_MIN_BP of the matching
+    bases must lie outside low-complexity sequence (a shared poly-A is no agreement)"""
     if not mate or len(insert) < AGREE_MIN_BP:
+        return False
+    lc = low_complexity_mask(insert)
+    if lc.count(False) < AGREE_MIN_BP:
         return False
     seeds = collections.defaultdict(list)
     for i in range(len(insert) - k + 1):
@@ -160,7 +179,10 @@ def agrees(mate, insert, k=12):
             tried.add(d)
             lo, hi = max(0, -d), min(len(insert), len(mate) - d)
             n = hi - lo
-            if n >= AGREE_MIN_BP and sum(insert[x] == mate[x + d] for x in range(lo, hi)) >= AGREE_MIN_ID * n:
+            if n < AGREE_MIN_BP:
+                continue
+            hit = [x for x in range(lo, hi) if insert[x] == mate[x + d]]
+            if len(hit) >= AGREE_MIN_ID * n and sum(not lc[x] for x in hit) >= AGREE_MIN_BP:
                 return True
     return False
 
@@ -673,7 +695,7 @@ def main():
               ["rows", len(rows)]] + [[f"tier {t}", f"{tier_n.get(t, 0)}  -  {d}"] for t, d in TIERS.items()] + [
               ["excluded", f"{len(excluded)}  -  hard rules: |TSD/deletion| <= {MAX_SITE_GAP} bp; >= {MIN_JUNCTION_FRAGMENTS} "
                            "independent fragments (CLIP/POLYA; beside a clip also SHORT, and DISC pairs whose inside mate "
-                           f"agrees with the clip's insert over >= {AGREE_MIN_BP} bp at >= {int(AGREE_MIN_ID * 100)} %; "
+                           f"agrees with the clip's insert over >= {AGREE_MIN_BP} bp at >= {int(AGREE_MIN_ID * 100)} % (poly-A / simple repeats never count); "
                            f"read+mate within {DUP_SHIFT} bp = one PCR molecule) on BOTH ends in one colony"
                            + ("" if a.insertions_dir else "  [fragment rule NOT checked: no --insertions-dir]")],
               ["", ""],
