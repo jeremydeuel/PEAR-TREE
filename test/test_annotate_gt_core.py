@@ -156,3 +156,14 @@ def test_read_gt_fasta_keeps_gt_roles_only(tmp_path):
                  ">chr9:1-2|LEFT|GT_CLIP|S2|h|1\nGGGG\n")
     got = VAC._read_gt_fasta(str(p), {"chr1:1000-1015"})
     assert got == {"chr1:1000-1015": [("RIGHT", "GT_MATE", "ACGT")]}
+
+
+def test_alu_vote_blocked_by_any_sva_hit():
+    # an SVA's Alu-like segment makes its GT reads vote ALU; any SVA hit blocks ALU adoption
+    ins = _ins()
+    base = ins.conclusion()
+    ins.gt_queries = 3
+    ins.gt_dfams = [("right", 0, _dfam("AluY", 30)), ("right", 1, _dfam("AluSx", 25)),
+                    ("right", 2, _dfam("SVA_F", 20))]
+    assert ins.conclusion() == base
+    assert ins.gt_core.startswith("unresolved") and "SVA hits" in ins.gt_core

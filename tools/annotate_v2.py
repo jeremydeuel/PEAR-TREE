@@ -1123,6 +1123,12 @@ class Insertion:
                 finally:
                     self.left_dfams, self.right_dfams, self.left_maps, self.right_maps = saved
                 ncls = VariantAnnotationContainer.element_class(new)
+                # an SVA carries an Alu-like segment: Alu-best GT reads of an SVA would vote ALU,
+                # so ALU is never adopted while any GT read has an SVA hit at all
+                sva_seen = any(self._dfam_family(m.model) == 'SVA' for _, _, m in self.gt_dfams)
+                if ncls == 'ALU' and sva_seen:
+                    self.gt_core = f"unresolved {cls} (ALU vote but SVA hits: {hits} in {nq} gt reads){tail}"
+                    return base
                 if ncls == dom:
                     self.gt_core = f"resolved {cls}->{ncls} ({n}/{nq} gt reads; {hits}){tail}"
                     return f"{new} [gt: +{ncls} from {n} genotyping reads]"
