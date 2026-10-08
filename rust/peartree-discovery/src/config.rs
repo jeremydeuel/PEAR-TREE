@@ -283,6 +283,13 @@ pub struct DiscoveryConfig {
     /// is <= 1. `adaptive_evidence` scales this base like the read floor. `None` = the
     /// legacy read floor `min_evidence_reads_per_breakpoint`.
     pub min_evidence_fragments_per_sample: Option<usize>,
+    /// Fragment mode only: collapse PCR/optical duplicates that markdup missed before counting
+    /// fragments against the floor. Two clip reads of DIFFERENT templates are one molecule when
+    /// their clip-side outer end (breakpoint -/+ raw clip length) AND their mate's start
+    /// (RNEXT/PNEXT, same contig) both agree within this many bp, R1/R2 ignored (a strand-swapped
+    /// duplicate counts once). Both mates unplaced: the clip-side end alone decides. 0 = off
+    /// (qname-distinct counting, byte-identical legacy). Mirrors combine's `dup_coord_tolerance`.
+    pub dedup_coord_tolerance: i64,
     /// Sidecar caps per breakpoint side; deterministic subset (lowest fragment hash).
     pub max_mates_per_breakpoint: usize,
     pub max_evidence_reads_per_breakpoint: usize,
@@ -419,6 +426,7 @@ impl Default for DiscoveryConfig {
             fetch_all_mates: false,
             ignore_dup_flag: false,
             min_evidence_fragments_per_sample: None,
+            dedup_coord_tolerance: 0,
             max_mates_per_breakpoint: 50,
             max_evidence_reads_per_breakpoint: 200,
             sidecar_disc_span: 500,
@@ -562,6 +570,7 @@ impl DiscoveryConfig {
             "fetch_all_mates" => self.fetch_all_mates = parse_bool(val)?,
             "ignore_dup_flag" => self.ignore_dup_flag = parse_bool(val)?,
             "min_evidence_fragments_per_sample" => self.min_evidence_fragments_per_sample = Some(parse_num(val)?),
+            "dedup_coord_tolerance" => self.dedup_coord_tolerance = parse_num(val)?,
             "max_mates_per_breakpoint" => self.max_mates_per_breakpoint = parse_num(val)?,
             "max_evidence_reads_per_breakpoint" => self.max_evidence_reads_per_breakpoint = parse_num(val)?,
             "sidecar_disc_span" => self.sidecar_disc_span = parse_num(val)?,

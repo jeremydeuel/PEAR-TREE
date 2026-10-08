@@ -43,6 +43,10 @@ fetch_all_mates = true
 ignore_dup_flag = false
 drop_dup_in_polya_path = true
 min_evidence_fragments_per_sample = 2
+# >= 2 INDEPENDENT fragments: also collapse duplicates markdup missed (clip-side outer end and
+# mate start each within 5 bp = one molecule, R1/R2 ignored) -- e.g. PD51635 chr16:72393518,
+# whose LEFT junction was "2 fragments" = one PCR molecule shifted 3/1 bp with R1/R2 swapped.
+dedup_coord_tolerance = 5
 max_mates_per_breakpoint = 50
 max_evidence_reads_per_breakpoint = 200
 

@@ -215,6 +215,65 @@ fn bp_frag(bp: &Breakpoint) -> u64 {
     frag_hash(bp.query_name.as_deref().unwrap_or("").as_bytes())
 }
 
+/// A supporting clip read's fragment identity for the lenient duplicate collapse:
+/// qname hash, clip-side outer end (breakpoint -/+ RAW clip length, taken before cleaning)
+/// and the mate's placement (RNEXT/PNEXT; -1 when unplaced).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FragKey {
+    pub frag: u64,
+    pub end: i64,
+    pub mref: i32,
+    pub mpos: i64,
+}
+
+fn frag_key(bp: &Breakpoint) -> FragKey {
+    let clen = bp.clipped.len() as i64;
+    let end = if bp.side == CLIP_LEFT { bp.breakpoint - clen } else { bp.breakpoint + clen };
+    FragKey { frag: bp_frag(bp), end, mref: bp.mref, mpos: bp.mpos }
+}
+
+/// Independent fragments among `keys`: distinct qnames, then (tol > 0) templates whose
+/// clip-side end and mate start both agree within `tol` bp are merged (single linkage) as
+/// one molecule -- PCR/optical duplicates markdup missed (shifted ends, R1/R2 swapped).
+/// tol <= 0 = distinct qnames only (legacy).
+pub fn count_frag_keys(keys: &[FragKey], tol: i64) -> usize {
+    let mut v: Vec<FragKey> = Vec::with_capacity(keys.len());
+    for k in keys {
+        if !v.iter().any(|x| x.frag == k.frag) {
+            v.push(*k);
+        }
+    }
+    if tol <= 0 || v.len() < 2 {
+        return v.len();
+    }
+    let n = v.len();
+    let mut parent: Vec<usize> = (0..n).collect();
+    fn root(p: &mut [usize], mut i: usize) -> usize {
+        while p[i] != i {
+            p[i] = p[p[i]];
+            i = p[i];
+        }
+        i
+    }
+    let dup = |a: &FragKey, b: &FragKey| {
+        (a.end - b.end).abs() <= tol
+            && if a.mref >= 0 && b.mref >= 0 {
+                a.mref == b.mref && (a.mpos - b.mpos).abs() <= tol
+            } else {
+                a.mref < 0 && b.mref < 0
+            }
+    };
+    for i in 0..n {
+        for j in (i + 1)..n {
+            if dup(&v[i], &v[j]) {
+                let (ri, rj) = (root(&mut parent, i), root(&mut parent, j));
+                parent[ri.max(rj)] = ri.min(rj);
+            }
+        }
+    }
+    (0..n).filter(|&i| root(&mut parent, i) == i).count()
+}
+
 /// Number of distinct fragments in `frags`.
 pub fn count_fragments(frags: &[u64]) -> usize {
     let mut v = frags.to_vec();
@@ -289,10 +348,13 @@ pub fn join(mut breakpoints: Vec<Breakpoint>, cfg: &DiscoveryConfig, evidence_fl
         }
     }
 
+    // fragment identities from the RAW clips (before cleaning shortens them)
+    let tol = cfg.dedup_coord_tolerance;
+    let raw_keys: Vec<FragKey> = breakpoints.iter().map(frag_key).collect();
     // clean/orient clipped sequences and collect qc-passing precise positions
     let mut bps: Vec<i64> = Vec::new();
-    let mut frags: Vec<u64> = Vec::new();
-    for bp in breakpoints.iter_mut() {
+    let mut frags: Vec<FragKey> = Vec::new();
+    for (bi, bp) in breakpoints.iter_mut().enumerate() {
         if side == CLIP_LEFT {
             // left clipped is reverse complemented from now on
             bp.clipped = clean_clipped_seq(&bp.clipped.revcomp());
@@ -307,7 +369,7 @@ pub fn join(mut breakpoints: Vec<Breakpoint>, cfg: &DiscoveryConfig, evidence_fl
         }
         if bp.bp_precise && bp.clipped.len() >= cfg.min_good_bases {
             bps.push(bp.breakpoint);
-            frags.push(bp_frag(bp));
+            frags.push(raw_keys[bi]);
         }
     }
     if bps.is_empty() {
@@ -320,13 +382,13 @@ pub fn join(mut breakpoints: Vec<Breakpoint>, cfg: &DiscoveryConfig, evidence_fl
     // at the exact modal position. 0 = exact (legacy, byte-identical).
     let n = if frag_mode {
         // distinct fragments among the supporting reads (window or exact mode)
-        let support: Vec<u64> = bps
+        let support: Vec<FragKey> = bps
             .iter()
             .zip(&frags)
             .filter(|(&b, _)| if cfg.evidence_window > 0 { (b - best_bp).abs() <= cfg.evidence_window } else { b == best_bp })
             .map(|(_, &f)| f)
             .collect();
-        count_fragments(&support)
+        count_frag_keys(&support, tol)
     } else if cfg.evidence_window > 0 {
         bps.iter().filter(|&&b| (b - best_bp).abs() <= cfg.evidence_window).count()
     } else {
@@ -343,8 +405,9 @@ pub fn join(mut breakpoints: Vec<Breakpoint>, cfg: &DiscoveryConfig, evidence_fl
         // poly-A rescue fragment floor: distinct fragments among the cluster's poly-A reads
         // (the reads the rescued breakpoint stands for)
         let pa_frags_ok = cfg.polya_rescue_min_fragments == 0 || {
-            let f: Vec<u64> = breakpoints.iter().filter(|bp| is_pa(bp)).map(bp_frag).collect();
-            count_fragments(&f) >= cfg.polya_rescue_min_fragments
+            let f: Vec<FragKey> =
+                breakpoints.iter().zip(&raw_keys).filter(|(bp, _)| is_pa(bp)).map(|(_, &k)| k).collect();
+            count_frag_keys(&f, tol) >= cfg.polya_rescue_min_fragments
         };
         // try polyA rescue on the individual breakpoints; first hit wins
         for bp in breakpoints.into_iter() {
@@ -473,27 +536,28 @@ pub fn join(mut breakpoints: Vec<Breakpoint>, cfg: &DiscoveryConfig, evidence_fl
     );
     b.mates = mates;
     b.n_frags = {
-        let support: Vec<u64> = bps
+        let support: Vec<FragKey> = bps
             .iter()
             .zip(&frags)
             .filter(|(&x, _)| if cfg.evidence_window > 0 { (x - best_bp).abs() <= cfg.evidence_window } else { x == best_bp })
             .map(|(_, &f)| f)
             .collect();
-        count_fragments(&support)
+        count_frag_keys(&support, tol)
     };
     if cfg.one_sided_loci && cfg.one_sided_min_spanning_fragments > 0 {
         // one-sided gate input: fragments whose (oriented, junction-outward) clip runs through
         // the entire poly-A tail into the element, among the reads supporting the consensus
-        let span: Vec<u64> = breakpoints
+        let span: Vec<FragKey> = breakpoints
             .iter()
-            .filter(|bp| {
+            .zip(&raw_keys)
+            .filter(|(bp, _)| {
                 bp.bp_precise
                     && (if cfg.evidence_window > 0 { (bp.breakpoint - best_bp).abs() <= cfg.evidence_window } else { bp.breakpoint == best_bp })
                     && spans_polya(&bp.clipped.seq, cfg.one_sided_min_polya, cfg.one_sided_span_beyond)
             })
-            .map(bp_frag)
+            .map(|(_, &k)| k)
             .collect();
-        b.n_frags_span_polya = count_fragments(&span);
+        b.n_frags_span_polya = count_frag_keys(&span, tol);
     }
     // legacy n_reads double-counts LEFT reads at delta 0; it only feeds the Feature A
     // rescue (off by default), so the legacy value is kept unless in fragment mode.
@@ -542,6 +606,68 @@ mod tests {
 
     fn cfg(frag: Option<usize>) -> DiscoveryConfig {
         DiscoveryConfig { min_evidence_fragments_per_sample: frag, ..DiscoveryConfig::default() }
+    }
+
+    /// LEFT-clipped read at `pos` with a clip of `clen` bases and its mate at chr0:`mpos`.
+    fn left_read(qname: &str, read1: bool, pos: i64, clen: usize, mpos: i64) -> Breakpoint {
+        let clip = dna(7, 60)[60 - clen..].to_vec();
+        let mut b = Breakpoint::new(
+            CLIP_LEFT,
+            "chr1".into(),
+            pos,
+            Some(qname.into()),
+            QualitySeq::new(clip, vec![30; clen]),
+            QualitySeq::new(dna(11, 120), vec![30; 120]),
+            Some(read1),
+            Some(true),
+            false,
+            60,
+        );
+        b.mref = 0;
+        b.mpos = mpos;
+        b
+    }
+
+    fn cfg_dedup(frag: usize, tol: i64) -> DiscoveryConfig {
+        DiscoveryConfig { min_evidence_fragments_per_sample: Some(frag), dedup_coord_tolerance: tol, ..DiscoveryConfig::default() }
+    }
+
+    /// PD51635 chr16:72393518 LEFT junction: two templates, clip 12 vs 15 bp (outer end 3 bp
+    /// apart), mates 1 bp apart, R1/R2 swapped -- one PCR molecule markdup missed.
+    #[test]
+    fn shifted_strand_swapped_duplicate_counts_once() {
+        let mut st = Stats::default();
+        let g = vec![left_read("A", false, 1000, 12, 1140), left_read("B", true, 1000, 15, 1141)];
+        assert!(join(g.clone(), &cfg_dedup(2, 0), 2, &mut st).is_some(), "legacy qname count passes");
+        assert!(join(g.clone(), &cfg_dedup(2, 5), 2, &mut st).is_none(), "lenient dedup rejects");
+        assert_eq!(join(g, &cfg_dedup(1, 5), 1, &mut st).unwrap().n_frags, 1);
+    }
+
+    #[test]
+    fn distinct_molecules_still_count_twice() {
+        let mut st = Stats::default();
+        // same junction, different outer ends (clip 12 vs 40) and mates 200 bp apart
+        let g = vec![left_read("A", true, 1000, 12, 1140), left_read("B", true, 1000, 40, 1340)];
+        assert_eq!(join(g.clone(), &cfg_dedup(2, 5), 2, &mut st).unwrap().n_frags, 2);
+        // identical clip end but mates far apart: two molecules
+        let g = vec![left_read("A", true, 1000, 30, 1140), left_read("B", true, 1000, 30, 1300)];
+        assert_eq!(join(g, &cfg_dedup(2, 5), 2, &mut st).unwrap().n_frags, 2);
+    }
+
+    #[test]
+    fn count_frag_keys_rules() {
+        let k = |frag, end, mref, mpos| FragKey { frag, end, mref, mpos };
+        // same qname (both mates of one template) counts once even when far apart
+        assert_eq!(count_frag_keys(&[k(1, 0, 0, 100), k(1, 500, 0, 9)], 5), 1);
+        // chain A~B~C within tol each -> one molecule (single linkage)
+        assert_eq!(count_frag_keys(&[k(1, 0, 0, 100), k(2, 4, 0, 104), k(3, 8, 0, 108)], 5), 1);
+        // mates on different contigs: never merged
+        assert_eq!(count_frag_keys(&[k(1, 0, 0, 100), k(2, 0, 3, 100)], 5), 2);
+        // both mates unplaced: the clip end decides; one placed, one not: kept apart
+        assert_eq!(count_frag_keys(&[k(1, 0, -1, -1), k(2, 2, -1, -1)], 5), 1);
+        assert_eq!(count_frag_keys(&[k(1, 0, -1, -1), k(2, 2, 0, 100)], 5), 2);
+        // tol 0 = legacy distinct qnames
+        assert_eq!(count_frag_keys(&[k(1, 0, 0, 100), k(2, 0, 0, 100)], 0), 2);
     }
 
     #[test]

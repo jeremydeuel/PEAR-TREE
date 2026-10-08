@@ -261,6 +261,14 @@ fn main() -> io::Result<()> {
     }
     if let Some(n) = config.min_evidence_fragments_per_sample {
         eprintln!("evidence floor: {n} distinct fragment(s) per breakpoint (fragment mode)");
+        if config.dedup_coord_tolerance > 0 {
+            eprintln!(
+                "evidence floor: lenient duplicate collapse ON (clip end + mate start within {} bp = one molecule, R1/R2 ignored)",
+                config.dedup_coord_tolerance
+            );
+        } else {
+            eprintln!("evidence floor: lenient duplicate collapse OFF (distinct qnames; markdup-missed duplicates count)");
+        }
     }
     if config.drop_dup_in_polya_path {
         eprintln!("dup flag: also dropped in the low-MAPQ poly-A path");
