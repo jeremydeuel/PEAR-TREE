@@ -21,7 +21,7 @@ flate2 = "1.0"
 # hash maps are for lookup only -- never iterated for output (see SPEC.md "Ordering")
 rustc-hash = "2"
 # config (JSON), the per-insertion input (JSONL), the rte_detail_json output column, golden tests
-serde_json = { version = "1", features = ["preserve_order"] }
+serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
 # mappy (minimap2 python binding) equivalent: the minimap2 C library through its FFI, replicating
 # mappy's Aligner/map call sequence (src/mm.rs). Bundles minimap2 2.30; the reference venvs have
 # mappy 2.31 -- the same pair peartree-combine validated hit-for-hit (its SPEC.md §8).
