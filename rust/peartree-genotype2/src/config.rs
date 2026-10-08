@@ -63,6 +63,9 @@ pub struct Config {
     pub gt_extra_reads: bool,
     /// ALT gate: at least this many reads realigned as Alt (LLR >= `llr_informative`)
     pub gt_extra_min_alt: usize,
+    /// germline skip: no extra pass at a locus discovered in MORE than this fraction of the
+    /// patient's colonies (`#colonies N` of the members table)
+    pub gt_extra_max_member_frac: f64,
     /// discordant anchors: last base within this many bp before R / first base after L
     pub gt_extra_disc_span: i64,
     /// discordant anchors: MAPQ floor (the anchor sits in the flank; its mate is in the element)
@@ -114,6 +117,7 @@ impl Default for Config {
             prior: [1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0],
             gt_extra_reads: false,
             gt_extra_min_alt: 1,
+            gt_extra_max_member_frac: 0.5,
             gt_extra_disc_span: 500,
             gt_extra_anchor_mapq: 20,
             gt_extra_max_mates: 10,
@@ -226,6 +230,7 @@ impl Config {
             "ref_bias_grid" => self.ref_bias_grid = if val.trim().is_empty() { Vec::new() } else { list(val)? },
             "gt_extra_reads" => self.gt_extra_reads = boolean(val)?,
             "gt_extra_min_alt" => self.gt_extra_min_alt = num(val)?,
+            "gt_extra_max_member_frac" => self.gt_extra_max_member_frac = num(val)?,
             "gt_extra_disc_span" => self.gt_extra_disc_span = num(val)?,
             "gt_extra_anchor_mapq" => self.gt_extra_anchor_mapq = num(val)?,
             "gt_extra_max_mates" => self.gt_extra_max_mates = num(val)?,
@@ -271,6 +276,9 @@ impl Config {
         }
         if self.gt_extra_min_alt == 0 {
             return Err("gt_extra_min_alt must be >= 1 (the ALT gate)".into());
+        }
+        if !(self.gt_extra_max_member_frac > 0.0 && self.gt_extra_max_member_frac <= 1.0) {
+            return Err("gt_extra_max_member_frac must be in (0, 1] (1 = no germline skip)".into());
         }
         if self.flank < 50 {
             return Err("flank must be >= 50".into());

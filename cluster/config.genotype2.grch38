@@ -50,6 +50,8 @@ io_fill_bytes = 262144
 # carriers' reads for annotate (insertions/<P>.insertions.genotype_reads.fa.gz).
 gt_extra_reads = true
 gt_extra_min_alt = 1
+# germline skip: no extra pass where > this fraction of ALL colonies (discovery files) discovered the locus
+gt_extra_max_member_frac = 0.5
 gt_extra_disc_span = 500
 gt_extra_anchor_mapq = 20
 gt_extra_max_mates = 10

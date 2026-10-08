@@ -217,8 +217,10 @@ pub fn run<W: Write>(
         w.flush()?;
         let s = &extra_stats;
         eprintln!(
-            "extra reads ({sample}): {} undiscovered loci called, {} passed the ALT gate (>= {} Alt read(s)); wrote {} GT_CLIP, \
+            "extra reads ({sample}): {} undiscovered loci skipped as germline (> {} of the colonies discovered them), {} undiscovered loci called, {} passed the ALT gate (>= {} Alt read(s)); wrote {} GT_CLIP, \
              {} GT_POLYA, {} GT_DISC, {} GT_MATE ({} mates not found, {} over the fetch cap); extra pass {:.1}s",
+            s.germline_skipped,
+            cfg.gt_extra_max_member_frac,
             s.candidates,
             s.gated,
             cfg.gt_extra_min_alt,
@@ -433,7 +435,14 @@ fn genotype_locus(
     if m.error.is_some() {
         return (output::format_simple_row(name, m.kind, Status::Error, 0, n_prof), LocusStats::default());
     }
-    let extra = extra.filter(|x| is_extra_candidate(x.members, name));
+    let extra = extra.and_then(|x| match x.members.candidate(name) {
+        extra::Candidate::Yes => Some(x),
+        extra::Candidate::Member => None,
+        extra::Candidate::Germline => {
+            x.stats.germline_skipped += 1;
+            None
+        }
+    });
     let mut kept: Vec<KeptRead> = Vec::new();
     let collected = catch_unwind(AssertUnwindSafe(|| -> io::Result<Outcome> {
         let contig = contig_index(header, &m.locus.chr).ok_or_else(|| {
@@ -940,7 +949,7 @@ impl MateSource for SourceMates<'_> {
 /// What `run` needs for the extra pass: this colony's discovery memberships (loci), its name
 /// in the sidecar headers, and the sidecar writer.
 pub struct ExtraArgs<'a> {
-    pub members: &'a FxHashSet<String>,
+    pub members: &'a extra::Members,
     pub sample: &'a str,
     pub out: &'a mut dyn Write,
 }
@@ -948,7 +957,7 @@ pub struct ExtraArgs<'a> {
 /// Per-chunk state of the extra pass: who we are, which loci we discovered, the per-colony
 /// mate-fetch budget, counters and the pending sidecar text (drained after every locus).
 pub(crate) struct ExtraState<'a> {
-    pub members: &'a FxHashSet<String>,
+    pub members: &'a extra::Members,
     pub sample: &'a str,
     pub mate_budget: usize,
     pub stats: extra::ExtraStats,
@@ -964,12 +973,6 @@ pub(crate) fn alt_read_side(side: AltSide, lead: usize, trail: usize) -> &'stati
         _ if trail > lead => "RIGHT",
         _ => "LEFT",
     }
-}
-
-/// The membership check: the extra pass is for loci this colony did NOT discover (its own
-/// discovery reads are already in insertions.reads.fa.gz).
-pub(crate) fn is_extra_candidate(members: &FxHashSet<String>, locus: &str) -> bool {
-    !members.contains(locus)
 }
 
 /// The ALT gate: enough reads the realigner assigned to the alt haplotype.
@@ -1628,11 +1631,14 @@ mod tests {
 
     #[test]
     fn extra_membership_and_alt_gate() {
-        let mut members = FxHashSet::default();
-        members.insert("chr1:1000-1015".to_string());
-        assert!(!is_extra_candidate(&members, "chr1:1000-1015"), "a discovery member gets no extra pass");
-        assert!(is_extra_candidate(&members, "chr1:2000-2015"));
-        assert!(is_extra_candidate(&members, "chr1:1000-1016"), "exact locus names only");
+        use crate::extra::{Candidate, Members};
+        let mut members = Members::default();
+        members.mine.insert("chr1:1000-1015".to_string());
+        members.germline.insert("chr1:3000-3015".to_string());
+        assert_eq!(members.candidate("chr1:1000-1015"), Candidate::Member, "a discovery member gets no extra pass");
+        assert_eq!(members.candidate("chr1:3000-3015"), Candidate::Germline, "nor a germline locus");
+        assert_eq!(members.candidate("chr1:2000-2015"), Candidate::Yes);
+        assert_eq!(members.candidate("chr1:1000-1016"), Candidate::Yes, "exact locus names only");
         let cfg = Config::default(); // gt_extra_min_alt 1
         let mut obs = vec![dummy_obs(), dummy_obs()];
         assert!(!passes_alt_gate(&obs, &cfg));

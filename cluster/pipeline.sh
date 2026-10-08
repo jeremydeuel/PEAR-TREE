@@ -618,10 +618,19 @@ ensure_geno_members() {
     local fa="$RUNDIR/insertions/$PATIENT_ID.insertions.reads.fa.gz" mem lock t=0
     mem="$(geno_members)"; lock="$mem.lock"
     [ -s "$fa" ] || return 0                         # no combine reads: no extra pass
-    if [ -s "$mem" ] && [ "$mem" -nt "$fa" ]; then return 0; fi
+    # current = newer than the reads FASTA and carries the colony count (older tables lack it)
+    if [ -s "$mem" ] && [ "$mem" -nt "$fa" ] \
+            && { gzip -dc "$mem" 2>/dev/null || true; } | head -n 1 | grep -q '^#colonies'; then
+        return 0
+    fi
+    # germline-skip denominator = ALL colonies of the run: the discovery files combine read (=
+    # the colonies genotyped: a sample without a BAM has a missing/ marker and no discovery
+    # file), not only those with reads at some locus
+    local n_col
+    n_col="$(find "$RUNDIR/discovery" -maxdepth 1 -name '*.txt.gz' 2>/dev/null | wc -l | tr -d ' ')"
     if mkdir "$lock" 2>/dev/null; then
         "$VENV/bin/python" "$PT_ROOT/tools/genotype_extra_reads.py" members --reads-fa "$fa" --out "$mem" \
-            || log "WARNING: members table failed -> genotyping without the extra pass"
+            --n-colonies "$n_col" || log "WARNING: members table failed -> genotyping without the extra pass"
         rmdir "$lock"
     else
         while [ -d "$lock" ] && [ "$t" -lt 900 ]; do sleep 10; t=$((t + 10)); done
@@ -800,9 +809,10 @@ merge_genotype_reads() {
     local CALLS="$1" out="insertions/$PATIENT_ID.insertions.genotype_reads.fa.gz"
     [ "$GENOTYPE_IMPL" = v2 ] && [ -s "$CALLS" ] || return 0
     compgen -G "genotypes/*.extra_reads.fa.gz" >/dev/null || return 0
-    if [ -s "$out" ] && [ "$out" -nt "$CALLS" ]; then return 0; fi
+    if [ -s "$out" ] && [ "$out" -nt "$CALLS" ] && { [ ! -e "$(geno_members)" ] || [ "$out" -nt "$(geno_members)" ]; }; then return 0; fi
     "$VENV/bin/python" "$PT_ROOT/tools/genotype_extra_reads.py" merge --genotype-dir genotypes \
-        --matrix "$CALLS" --out "$out" || log "WARNING: genotype reads merge failed (annotate runs without them)"
+        --matrix "$CALLS" --out "$out" --members "$(geno_members)" \
+        || log "WARNING: genotype reads merge failed (annotate runs without them)"
 }
 
 cmd_combine_genotypes() {

@@ -71,14 +71,22 @@ fn genotype_to_file(
     match members {
         None => driver::run(loci, combined, input, reference, cfg, threads, &mut writer, None)?,
         Some((path, sample)) => {
-            let set = extra::load_members(path, sample)?;
-            let in_contract = loci.iter().filter(|(l, _)| set.contains(&l.name)).count();
+            let set = extra::load_members(path, sample, cfg.gt_extra_max_member_frac)?;
+            let in_contract = loci.iter().filter(|(l, _)| set.mine.contains(&l.name)).count();
+            let germ = loci.iter().filter(|(l, _)| set.germline.contains(&l.name)).count();
             let side = extra::sidecar_path(output);
             eprintln!(
                 "extra reads: {sample} is a discovery member of {in_contract}/{} contract loci ({path}); the others with \
                  ALT support -> {side}",
                 loci.len()
             );
+            match set.n_colonies {
+                Some(n) => eprintln!(
+                    "extra reads: {germ} contract loci discovered in > {} of the {n} colonies are skipped as germline",
+                    cfg.gt_extra_max_member_frac
+                ),
+                None => eprintln!("WARNING: {path} has no '#colonies N' line: no germline skip in the extra pass"),
+            }
             let xenc = GzEncoder::new(BufWriter::new(File::create(&side)?), Compression::default());
             let mut xw = BufWriter::new(xenc);
             let args = driver::ExtraArgs { members: &set, sample, out: &mut xw };

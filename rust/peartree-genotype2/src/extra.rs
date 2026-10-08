@@ -4,7 +4,11 @@
 //! gates; the joint step later calls many more colonies carriers. Their BAMs hold further
 //! junction reads and discordant pairs whose inside mates show more of the inserted element
 //! (5' truncation point, inversion, transduction). For every locus where this colony
-//!   (1) is NOT a discovery member (`--members`: the samples combine kept reads from), and
+//!   (1) is NOT a discovery member (`--members`: the samples combine kept reads from),
+//!   (1b) is NOT germline: discovered in at most `gt_extra_max_member_frac` (0.5) of the patient's
+//!       colonies (`#colonies N` of the members table = discovery files of the run); a locus
+//!       most colonies discovered is already well sampled, and its carriers would only spend
+//!       the mate budget, and
 //!   (2) passes the ALT gate: >= `gt_extra_min_alt` evidence reads realigned as `Alt` (the
 //!       genotyper's own read assignment: LLR >= `llr_informative`, explained >=
 //!       `min_explained_frac`),
@@ -44,37 +48,93 @@ pub fn sample_from_out(out: &str) -> String {
     s.strip_suffix(".txt").or_else(|| s.strip_suffix(".tsv")).unwrap_or(s).to_string()
 }
 
-/// The loci `sample` is a discovery member of. `path` is either the members table
-/// (`locus<TAB>sample,sample,...`, built once per patient by tools/genotype_extra_reads.py) or
-/// combine's `insertions.reads.fa.gz` itself (headers `locus|SIDE|ROLE|sample|frag|r12`; a
-/// locus name containing `|` keeps the last five fields as the tail). Gzip or plain.
-pub fn load_members(path: &str, sample: &str) -> io::Result<FxHashSet<String>> {
-    let f = File::open(path).map_err(|e| io::Error::new(e.kind(), format!("cannot open {path}: {e}")))?;
-    let r: Box<dyn Read> = if path.ends_with(".gz") { Box::new(MultiGzDecoder::new(f)) } else { Box::new(f) };
-    members_from(BufReader::with_capacity(1 << 20, r), sample)
+/// Discovery memberships as the extra pass needs them.
+#[derive(Clone, Debug, Default)]
+pub struct Members {
+    /// loci this colony is a discovery member of (its reads are in insertions.reads.fa.gz)
+    pub mine: FxHashSet<String>,
+    /// loci discovered in more than `gt_extra_max_member_frac` of the patient's colonies
+    /// (germline / near-clonal: their structure is already well sampled; empty without
+    /// `#colonies`)
+    pub germline: FxHashSet<String>,
+    /// the patient's colony count (`#colonies N` header of the members table)
+    pub n_colonies: Option<usize>,
 }
 
-pub(crate) fn members_from<R: BufRead>(reader: R, sample: &str) -> io::Result<FxHashSet<String>> {
-    let mut out = FxHashSet::default();
+/// Why a locus gets (or does not get) the extra pass.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Candidate {
+    Yes,
+    /// this colony discovered it
+    Member,
+    /// discovered in > max_member_frac of all colonies
+    Germline,
+}
+
+impl Members {
+    pub fn candidate(&self, locus: &str) -> Candidate {
+        if self.mine.contains(locus) {
+            Candidate::Member
+        } else if self.germline.contains(locus) {
+            Candidate::Germline
+        } else {
+            Candidate::Yes
+        }
+    }
+}
+
+/// `n_members / n_colonies > max_frac` (strict).
+pub fn is_germline(n_members: usize, n_colonies: usize, max_frac: f64) -> bool {
+    n_colonies > 0 && n_members as f64 > max_frac * n_colonies as f64
+}
+
+/// The discovery memberships of `sample`. `path` is either the members table built once per
+/// patient by tools/genotype_extra_reads.py (`#colonies N` = colonies in the run, then
+/// `locus<TAB>sample,sample,...`), or combine's `insertions.reads.fa.gz` itself (headers
+/// `locus|SIDE|ROLE|sample|frag|r12`; a locus name containing `|` keeps the last five fields as
+/// the tail; no colony count there, so no germline filter). Gzip or plain.
+pub fn load_members(path: &str, sample: &str, max_member_frac: f64) -> io::Result<Members> {
+    let f = File::open(path).map_err(|e| io::Error::new(e.kind(), format!("cannot open {path}: {e}")))?;
+    let r: Box<dyn Read> = if path.ends_with(".gz") { Box::new(MultiGzDecoder::new(f)) } else { Box::new(f) };
+    members_from(BufReader::with_capacity(1 << 20, r), sample, max_member_frac)
+}
+
+pub(crate) fn members_from<R: BufRead>(reader: R, sample: &str, max_member_frac: f64) -> io::Result<Members> {
+    let mut out = Members::default();
+    let mut counts: Vec<(String, usize)> = Vec::new();
     for line in reader.lines() {
         let line = line?;
         if let Some(h) = line.strip_prefix('>') {
             let parts: Vec<&str> = h.trim_end().split('|').collect();
             if parts.len() >= 6 && parts[parts.len() - 3] == sample {
                 let locus = parts[..parts.len() - 5].join("|");
-                if !out.contains(&locus) {
-                    out.insert(locus);
+                if !out.mine.contains(&locus) {
+                    out.mine.insert(locus);
                 }
             }
+            continue;
+        }
+        if let Some(n) = line.strip_prefix("#colonies") {
+            out.n_colonies = n.trim().parse().ok();
             continue;
         }
         if line.is_empty() || line.starts_with('#') || line.starts_with("locus\t") {
             continue;
         }
         let Some((locus, samples)) = line.split_once('\t') else { continue }; // FASTA sequence lines
-        if samples.trim_end().split(',').any(|s| s == sample) {
-            out.insert(locus.to_string());
+        let mut n = 0usize;
+        let mut me = false;
+        for s in samples.trim_end().split(',').filter(|s| !s.is_empty()) {
+            n += 1;
+            me |= s == sample;
         }
+        if me {
+            out.mine.insert(locus.to_string());
+        }
+        counts.push((locus.to_string(), n));
+    }
+    if let Some(nc) = out.n_colonies {
+        out.germline = counts.into_iter().filter(|&(_, n)| is_germline(n, nc, max_member_frac)).map(|(l, _)| l).collect();
     }
     Ok(out)
 }
@@ -143,6 +203,8 @@ pub fn push_record(out: &mut String, locus: &str, side: &str, role: &str, sample
 pub struct ExtraStats {
     /// loci of which this colony is not a discovery member and that were called (ok rows)
     pub candidates: usize,
+    /// loci this colony did not discover that were skipped as germline (members > max frac)
+    pub germline_skipped: usize,
     /// ... of which passed the ALT gate (extra pass run)
     pub gated: usize,
     pub clip: usize,
@@ -159,6 +221,7 @@ pub struct ExtraStats {
 impl ExtraStats {
     pub fn add(&mut self, o: &ExtraStats) {
         self.candidates += o.candidates;
+        self.germline_skipped += o.germline_skipped;
         self.gated += o.gated;
         self.clip += o.clip;
         self.polya += o.polya;
@@ -177,15 +240,35 @@ mod tests {
     #[test]
     fn members_from_table_and_reads_fa() {
         let tsv = "locus\tsamples\nchr1:100-115\tS1,S2\nchr2:5-6\tS22\nchr3:1-oneside_1\tS2\n";
-        let m = members_from(io::Cursor::new(tsv), "S2").unwrap();
-        assert!(m.contains("chr1:100-115") && m.contains("chr3:1-oneside_1"));
-        assert!(!m.contains("chr2:5-6"), "S22 is not S2");
+        let m = members_from(io::Cursor::new(tsv), "S2", 0.5).unwrap();
+        assert!(m.mine.contains("chr1:100-115") && m.mine.contains("chr3:1-oneside_1"));
+        assert!(!m.mine.contains("chr2:5-6"), "S22 is not S2");
+        assert!(m.n_colonies.is_none() && m.germline.is_empty(), "no #colonies: no germline filter");
         let fa = ">chr1:100-115|LEFT|CLIP|S1|abc|1\nACGT\n>chr1:100-115|LEFT|MATE|S2|abc|2\nACGT\n\
                   >odd|name:7-9|RIGHT|DISC|S2|f|1\nAAAA\n>chr9:1-2|LEFT|CLIP|S3|x|1\nA\n";
-        let m = members_from(io::Cursor::new(fa), "S2").unwrap();
-        let mut v: Vec<&String> = m.iter().collect();
+        let m = members_from(io::Cursor::new(fa), "S2", 0.5).unwrap();
+        let mut v: Vec<&String> = m.mine.iter().collect();
         v.sort();
         assert_eq!(v, vec!["chr1:100-115", "odd|name:7-9"]);
+        assert!(m.germline.is_empty());
+    }
+
+    #[test]
+    fn germline_loci_by_member_fraction() {
+        // 4 colonies in the run: 3/4 > 0.5 germline, 2/4 = 0.5 NOT (strict), 1/4 not
+        let tsv = "#colonies 4\nlocus\tsamples\nA:1-2\tS1,S2,S3\nB:1-2\tS1,S2\nC:1-2\tS3\nD:1-2\tS1,S2,S3,S4\n";
+        let m = members_from(io::Cursor::new(tsv), "S4", 0.5).unwrap();
+        assert_eq!(m.n_colonies, Some(4));
+        assert_eq!(m.candidate("A:1-2"), Candidate::Germline);
+        assert_eq!(m.candidate("B:1-2"), Candidate::Yes);
+        assert_eq!(m.candidate("C:1-2"), Candidate::Yes);
+        assert_eq!(m.candidate("D:1-2"), Candidate::Member, "membership is reported first");
+        assert_eq!(m.candidate("E:1-2"), Candidate::Yes, "a locus nobody discovered");
+        // the fraction is the config key; colonies without reads still count in the denominator
+        let m = members_from(io::Cursor::new(tsv), "S4", 0.25).unwrap();
+        assert_eq!(m.candidate("B:1-2"), Candidate::Germline);
+        assert_eq!(m.candidate("C:1-2"), Candidate::Yes);
+        assert!(is_germline(51, 100, 0.5) && !is_germline(50, 100, 0.5) && !is_germline(3, 0, 0.5));
     }
 
     #[test]
