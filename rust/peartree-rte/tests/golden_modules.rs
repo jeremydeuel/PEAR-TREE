@@ -53,7 +53,6 @@ fn opt_obj(v: &Value) -> Option<&serde_json::Map<String, Value>> {
 
 // ------------------------------------------------------------------------------- WP-HALL
 #[test]
-#[ignore = "WP-HALL"]
 fn golden_hallmarks() {
     use peartree_rte::hallmarks as H;
     let all = all_events();
@@ -137,7 +136,6 @@ fn golden_hallmarks() {
 }
 
 #[test]
-#[ignore = "WP-HALL"]
 fn golden_score() {
     let mut n = 0;
     for e in all_events().iter().filter(|e| e["kind"] == "score") {
