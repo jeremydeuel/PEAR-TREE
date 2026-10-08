@@ -56,6 +56,10 @@ cargo build --release --manifest-path rust/peartree-genotype2/Cargo.toml
 # it, so a failure here must not block the discovery/genotype builds above)
 cargo build --release --manifest-path rust/peartree-combine/Cargo.toml \
     || echo "WARNING: rust/peartree-combine failed to build — COMBINE_IMPL=rust unavailable (python combine unaffected)" >&2
+# tools/rte port (annotate's TPRT-hallmark step, memory-bounded); optional until annotate_v2 calls
+# it (rust/peartree-rte/SPEC.md), so a failure must not block the builds above
+cargo build --release --manifest-path rust/peartree-rte/Cargo.toml \
+    || echo "WARNING: rust/peartree-rte failed to build — annotate keeps the python tools/rte" >&2
 
 echo
 echo "built:"
@@ -63,6 +67,7 @@ ls -la rust/peartree-discovery/target/release/peartree-discovery
 ls -la rust/peartree-genotype/target/release/peartree-genotype
 ls -la rust/peartree-genotype2/target/release/peartree-genotype2
 ls -la rust/peartree-combine/target/release/peartree-combine 2>/dev/null || true
+ls -la rust/peartree-rte/target/release/peartree-rte 2>/dev/null || true
 
 # Report which OPTIONAL, CONFIG-GATED features this binary actually implements. A stale binary
 # does not announce itself: config.rs tolerates unknown keys by design, so an old build fed a

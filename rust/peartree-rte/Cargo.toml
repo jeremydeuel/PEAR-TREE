@@ -1,0 +1,47 @@
+[package]
+name = "peartree-rte"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.87"
+description = "PEAR-TREE TPRT-hallmark annotation (Rust port of tools/rte, memory-bounded streaming)"
+build = "build.rs"
+
+[lib]
+name = "peartree_rte"
+path = "src/lib.rs"
+
+[[bin]]
+name = "peartree-rte"
+path = "src/main.rs"
+
+[dependencies]
+# loci are annotated in parallel in bounded chunks; output order never depends on scheduling
+rayon = "1.10"
+flate2 = "1.0"
+# hash maps are for lookup only -- never iterated for output (see SPEC.md "Ordering")
+rustc-hash = "2"
+# config (JSON), the per-insertion input (JSONL), the rte_detail_json output column, golden tests
+serde_json = { version = "1", features = ["preserve_order"] }
+# mappy (minimap2 python binding) equivalent: the minimap2 C library through its FFI, replicating
+# mappy's Aligner/map call sequence (src/mm.rs). Bundles minimap2 2.30; the reference venvs have
+# mappy 2.31 -- the same pair peartree-combine validated hit-for-hit (its SPEC.md §8).
+minimap2 = "0.1.31"
+# library.py `young_consensus_regex` overrides (the built-in default is hand-coded: it needs a lookahead)
+regex = "1"
+tikv-jemallocator = { version = "0.6", optional = true }
+
+[build-dependencies]
+# compiles the vendored edlib 1.2.7 C++ (vendor/edlib) -- the exact library python-edlib 1.3.9
+# wraps, so distances / locations / paths are bit-identical (copied from peartree-combine).
+cc = "1.0"
+
+# jemalloc ON by default (many small per-read allocations; same reasoning as peartree-discovery).
+[features]
+default = ["jemalloc"]
+jemalloc = ["dep:tikv-jemallocator"]
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+debug = 1
