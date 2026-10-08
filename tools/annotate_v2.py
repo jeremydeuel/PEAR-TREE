@@ -294,6 +294,10 @@ class Insertion:
         self.title = title
         self.left_seq = left_seq
         self.right_seq = right_seq
+        # the same junctions from the combine evidence sidecar (clip_consensus: columns that
+        # >= 2 pooled fragments support), '' when absent; set by read_evidence_clips()
+        self.evidence_left = ''
+        self.evidence_right = ''
         self.nins = 0
         self.nart = 0
         self.nwt = 0
@@ -771,16 +775,38 @@ class Insertion:
     def _breakpoint_sv_subtype(self):
         """A plain deletion / tandem duplication, or None: each soft-clip is nothing but the
         reference on the far side of the PARTNER breakpoint (Jeremy 2026-10-07, PD51635
-        chr2:99670833: a 19 bp deletion whose 21 / 15 bp clips were the two deletion flanks, typed
+        chr2:99670833: a 21 bp deletion whose 21 / 15 bp clips were the two deletion flanks, typed
         TSD_DELETION / unknown). Read through such a junction = ref[..x] + seam + ref[y..], so the
         left clip is the reference ending where the right junction's reference ends (then the
         seam), and the right clip is the seam then the reference starting where the left
         junction's reference starts. `seam` = a few untemplated bases (NHEJ fill-in; chrX:141289677
         = 13 bp tandem duplication + `TA`); `microhomology` = ambiguous bases the aligner put on
-        the reference side. Locus L-R: R < L is a deletion of L-R bp, R > L a tandem duplication
-        of R-L bp. An inserted element never matches its own target site on both sides, so this
-        runs before the element logic and the label is exclusive. Reference-free: the junction
-        strings already hold both flanks."""
+        the reference side. Both junctions' aligned flanks reach over the microhomology, so the
+        event is (R - L) - microhomology bp: R > L a tandem duplication, R < L a deletion
+        (PD37580 4:63418109-63418121 = TAGATCTGTA duplicated, 10 bp + TA; chr2:99670833 = 21 bp
+        deleted, -19 - AG). An inserted element never matches its own target site on both sides,
+        so this runs before the element logic and the label is exclusive. Reference-free: the
+        junction strings already hold both flanks.
+
+        The combined.txt.gz junctions are tried first, then the evidence-sidecar ones: the
+        combined clip runs out to the longest read, and its far end is often ONE read, so a single
+        sequencing error there breaks the exact flank match (PD37580 4:63418109: CAAAAG for the
+        reference CAATAG at Q25, typed unknown); the evidence clip keeps only what >= 2 fragments
+        agree on."""
+        tried = set()
+        for ls, rs in ((self.left_seq, self.right_seq),
+                       (self.evidence_left or self.left_seq, self.evidence_right or self.right_seq)):
+            if (ls, rs) in tried:
+                continue
+            tried.add((ls, rs))
+            sv = self._adjacent_sv(ls or '', rs or '')
+            if sv is not None:
+                return sv
+        return None
+
+    def _adjacent_sv(self, ls, rs):
+        """_breakpoint_sv_subtype() on one pair of junction strings (case-encoded like
+        left_seq / right_seq)."""
         loc = self._parse_locus()
         if loc is None:
             return None
@@ -795,8 +821,11 @@ class Insertion:
         max_seam = a.get('sv_adj_max_seam', 6)
         trim = a.get('sv_adj_end_trim', 2)
         min_ent = a.get('sv_adj_min_entropy', 1.2)
-        li, ri = (x.upper() for x in self._insert_clips())
-        lf, rf = (x.upper() for x in self._flank_uppers())
+        li_end = next((i for i, ch in enumerate(ls) if ch.isupper()), len(ls))
+        ri_start = next((i for i, ch in enumerate(rs) if ch.islower()), len(rs))
+        li, ri = ls[:li_end].upper(), rs[ri_start:].upper()
+        lf = ''.join(c for c in ls if c.isupper())
+        rf = ''.join(c for c in rs if c.isupper())
 
         def matches(core, flank, at_end):
             """Microhomology offset at which `core` (minus <= trim read-end bases) sits flush
@@ -831,11 +860,15 @@ class Insertion:
                 offs.append(matches(ri[k:], lf, False))
             if None in offs:
                 continue
+            mh = max(offs)
+            size = gap - mh
+            if size == 0 or (size > 0) != (gap > 0):
+                continue                     # the microhomology swallows the whole event
             notes = ''
             if k:
                 notes += f", +{k} bp untemplated seam {seam}"
-            if max(offs):
-                notes += f", microhomology {max(offs)} bp"
+            if mh:
+                notes += f", microhomology {mh} bp"
             if gap < 0 and k >= -gap:
                 # the "seam" replaces the whole deleted stretch: either it IS those bases (plain
                 # reference, a mis-clip) or their reverse complement -- a micro-inversion inside a
@@ -847,8 +880,8 @@ class Insertion:
                             f"reference across the breakpoint)")
                 return None
             if gap < 0:
-                return f"SV_DELETION: {-gap} bp deletion (clips = reference across the breakpoint{notes})"
-            return f"SV_DUPLICATION: {gap} bp tandem duplication (clips = reference across the breakpoint{notes})"
+                return f"SV_DELETION: {-size} bp deletion (clips = reference across the breakpoint{notes})"
+            return f"SV_DUPLICATION: {size} bp tandem duplication (clips = reference across the breakpoint{notes})"
         return None
 
     # ------------------------------------------------------------------- flank-leak Dfam demotion
@@ -1210,6 +1243,7 @@ class VariantAnnotationContainer:
         if not os.path.exists(self.insertions_file):
             raise FileNotFoundError(f"Insertions file {self.insertions_file} not found")
         self.read_insertions()
+        self.read_evidence_clips()
         self.read_splice()
         if not os.path.exists(self.genotyping_file):
             raise FileNotFoundError(f"Genotyping file {self.genotyping_file} not found")
@@ -1249,16 +1283,15 @@ class VariantAnnotationContainer:
         if not cfg.get('rte_library'):
             return {}
         try:
-            from tools.rte.annotator import RteAnnotator, InsertionInput, default_sidecars
+            from tools.rte.annotator import RteAnnotator, InsertionInput
         except ImportError:                       # run as `python tools/annotate_v2.py`
-            from rte.annotator import RteAnnotator, InsertionInput, default_sidecars
-        ev_default, rd_default = default_sidecars(self.insertions_file)
-        ev_path = cfg.get('rte_evidence_file') or ev_default
-        rd_path = cfg.get('rte_reads_file') or rd_default
-        ev_path = ev_path(self.sample) if callable(ev_path) else ev_path
-        rd_path = rd_path(self.sample) if callable(rd_path) else rd_path
+            from rte.annotator import RteAnnotator, InsertionInput
+        ev_path, rd_path = self.evidence_paths()
         ann = RteAnnotator(cfg, gene_model=Insertion.gene_model)
         self.rte_lib = ann.lib
+        if getattr(self, 'evidence', None) is not None:    # parsed once by read_evidence_clips()
+            ann.evidence = self.evidence
+            ev_path = None
         ann.load_evidence(ev_path, rd_path, wanted=set(self.insertions))
         inputs = {k: InsertionInput.from_legacy(ins, self.element_class(ins.conclusion()))
                   for k, ins in self.insertions.items()}
@@ -1337,6 +1370,45 @@ class VariantAnnotationContainer:
                     self.insertions[name].splice_hits.append((gene, side, nex))
                     n += 1
         print(f"attached {n} discovery splice-hallmark rows from {path}")
+
+    def evidence_paths(self):
+        """(evidence.tsv.gz, reads.fa.gz) combine sidecars: CONFIG overrides, else the
+        insertions file's siblings. Either may not exist."""
+        try:
+            from tools.rte.annotator import default_sidecars
+        except ImportError:                       # run as `python tools/annotate_v2.py`
+            from rte.annotator import default_sidecars
+        cfg = CONFIG['annotate']
+        ev_default, rd_default = default_sidecars(self.insertions_file)
+        ev_path = cfg.get('rte_evidence_file') or ev_default
+        rd_path = cfg.get('rte_reads_file') or rd_default
+        ev_path = ev_path(self.sample) if callable(ev_path) else ev_path
+        rd_path = rd_path(self.sample) if callable(rd_path) else rd_path
+        return ev_path, rd_path
+
+    def read_evidence_clips(self):
+        """Attach the evidence sidecar's per-junction clip_consensus to each Insertion
+        (evidence_left / evidence_right), for _breakpoint_sv_subtype()'s second try. The parsed
+        sidecar is kept for run_rte(). No sidecar -> nothing changes."""
+        self.evidence = None
+        ev_path, _ = self.evidence_paths()
+        if not ev_path or not os.path.exists(ev_path):
+            return
+        try:
+            from tools.rte.inputs import read_evidence_tsv
+        except ImportError:
+            from rte.inputs import read_evidence_tsv
+        self.evidence = read_evidence_tsv(ev_path)
+        n = 0
+        for title, ev in self.evidence.items():
+            ins = self.insertions.get(title)
+            if ins is None:
+                continue
+            jl, jr = ev.junctions.get('LEFT'), ev.junctions.get('RIGHT')
+            ins.evidence_left = jl.clip_consensus if jl else ''
+            ins.evidence_right = jr.clip_consensus if jr else ''
+            n += 1
+        print(f"read evidence clips for {n} insertions from {ev_path}")
 
     def read_insertions(self):
         """

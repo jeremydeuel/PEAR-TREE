@@ -268,8 +268,9 @@ def test_tandem_duplication():
 # --- plain local SVs: both clips are the reference across the partner breakpoint (PD51635) ------
 # Real junction consensus strings from the PD51635 run (2026-10-07).
 
-# chr2:99670833-99670814: a 19 bp deletion (hg38 99670815-99670833 = TTCCTTTTATTGCAAAAAT), typed
-# TSD_DELETION / "unknown" before; microhomology AG.
+# chr2:99670833-99670814: a 21 bp deletion (hg38 CTGTCAG[TTCCTTTTATTGCAAAAATAG]GAAGG -> CTGTCAGGAAGG;
+# the locus spans 19 because both flanks reach over the AG microhomology), typed TSD_DELETION /
+# "unknown" before.
 SV_DEL = _make(
     "chr2:99670833-99670814",
     left_seq="ataaaaattattcattctgtcAGGAAGGTATATTCACATAGGAATTAAATGCAAGAATAAAGGATCTGACCTGTACATTCAT",
@@ -281,6 +282,22 @@ SV_DUP_SEAM = _make(
     "chrX:141289677-141289690",
     left_seq="ttcctagtcctcagtaTCCTAGTCCTCAGAACTACTGAAGACTGATACAAACTGAATCTTTCACC",
     right_seq="CCCTAGAACCTACTTTGTCTGTTCCTAGTCCTCAGtatcctagtcctcagaactact")
+
+# PD37580 4:63418109-63418121 (GRCh37, 6-colony clade): TAGATCTGTA duplicated, hg19
+# ...AGAGATA[TAGATCTGTA]ACATC; the 12 bp locus = the 10 bp unit + TA microhomology. The combined
+# left clip runs out to one read whose CAAAAG (Q25) is CAATAG in the reference, so the exact flank
+# match failed and the locus was "unknown"; the evidence clip (>= 2 fragments) is AGAGATATAGATCTG.
+_PD37580_R = ("GGTTGCAGAAATACAAACTCTCCTCTTCCCCCGTTCATCTGCATCTCATTATTGGGCTGTGAGAAATAGCAGCCCAACCCTCAG"
+              "TTTGGTCTGGGAACACTATGGAAAGAAGTCGTAAATAGCAATAGAGATATAGATCTGTA")
+_PD37580_L = ("TATAGATCTGTAACATCAATAAAAAAATTACTTTTATGTTATCTTTTTGGATGATGGACTTTTCTTGCCAAAGATACCACTGCA"
+              "TAACAAAATATAGTTAATTTTAAGCTATAAAATATGGCCACCAATATACAACAGATT")
+SV_DUP_READ_ERROR = _make(
+    "4:63418109-63418121",
+    left_seq="caaaagagatatagatctg" + _PD37580_L,
+    right_seq=_PD37580_R + "tagatctgtaacatcaa")
+SV_DUP_READ_ERROR.evidence_left = "agagatatagatctg" + _PD37580_L
+SV_DUP_READ_ERROR.evidence_right = _PD37580_R + "tagatctgtaa"
+
 
 # A TSD insertion: the clips are an Alu 3' end / poly-A, never the partner flank -> no SV label.
 TSD_ALU = _make(
@@ -328,7 +345,7 @@ def test_micro_inversion_needs_the_reference():
 
 def test_plain_deletion_is_sv_deletion():
     c = SV_DEL.conclusion()
-    assert c.startswith("SV_DELETION: 19 bp deletion"), c
+    assert c.startswith("SV_DELETION: 21 bp deletion"), c
     assert "microhomology 2 bp" in c, c
     assert VAC.element_class(c) == "SV_DELETION", c
 
@@ -337,6 +354,15 @@ def test_tandem_dup_with_seam_is_sv_duplication():
     c = SV_DUP_SEAM.conclusion()
     assert c.startswith("SV_DUPLICATION: 13 bp tandem duplication"), c
     assert "seam TA" in c, c
+    assert VAC.element_class(c) == "SV_DUPLICATION", c
+
+
+def test_tandem_dup_read_error_falls_back_to_evidence_clip():
+    bare = _make(SV_DUP_READ_ERROR.title, SV_DUP_READ_ERROR.left_seq, SV_DUP_READ_ERROR.right_seq)
+    assert bare._breakpoint_sv_subtype() is None        # the read error alone defeats the match
+    c = SV_DUP_READ_ERROR.conclusion()
+    assert c.startswith("SV_DUPLICATION: 10 bp tandem duplication"), c
+    assert "microhomology 2 bp" in c, c
     assert VAC.element_class(c) == "SV_DUPLICATION", c
 
 
