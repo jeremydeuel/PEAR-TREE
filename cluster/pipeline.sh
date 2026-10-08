@@ -862,7 +862,7 @@ cmd_report() {
         || { log "tree_fit FAILED (logs/tree_fit.log); the table is built without it"; tail -5 "$RUNDIR/logs/tree_fit.log" >&2; }
     local known; known="$(dirname "$TREE")/known_insertions.tsv"
     local args=(--patient "$PATIENT_ID" --joint "$PATIENT_ID.joint.tsv" --genotype-dir genotypes
-                --insertions-dir insertions --out "$PATIENT_ID.somatic.xlsx")
+                --insertions-dir insertions --genome "$GENOME_2BIT" --out "$PATIENT_ID.somatic.xlsx")
     [ -s "$FIT/phylo_fit.tsv" ] && args+=(--fit-v2 "$FIT/phylo_fit.tsv")
     [ -s "$PATIENT_ID.annotated.csv.gz" ] && args+=(--annotation "$PATIENT_ID.annotated.csv.gz")
     [ -s "$PATIENT_ID.joint.refbias.tsv" ] && args+=(--refbias "$PATIENT_ID.joint.refbias.tsv")

@@ -7,6 +7,13 @@ the known insertions. One row per locus with: the joint verdict and per-carrier 
 tree_fit's class on both genotypers, the annotate_v2 annotation (element class, TPRT call/score,
 TSD, poly-A, insertion site), whether it is a known insertion, and a priority tier.
 
+Artefact checks cap a call at tier D and say why in tier_note:
+  * phylo_violating   tree_fit (genotype2) labels the locus phylo_violating
+  * scattered alt     a private call with alt reads in more than --max-noncarrier-colonies other colonies
+  * local origin      (--genome) every clip is reference sequence within --local-window bp and the
+                      mates lie in the flanks: nothing was inserted (template switch between nearby
+                      repeat copies, small del/dup) -- PD37580 lo0077's six L1 "insertions"
+
   python cluster/somatic_table.py --patient PD37590 --joint bias3.joint.tsv \
       --genotype-dir V2_refbias/genotypes --fit-v2 V2_refbias/fit/phylo_fit.tsv \
       --fit-legacy C_rust/eval/fit/phylo_fit.tsv --annotation C_rust/PD37590/PD37590.annotated.csv.gz \
@@ -31,8 +38,14 @@ TIERS = {
     "A": "known insertion",
     "B": "genotype2 clade/private, every carrier P >= 0.9, RTE class or TPRT/LIKELY_TPRT call",
     "C": "genotype2 clade/private, every carrier P >= 0.9",
-    "D": "genotype2 clade/private with a carrier P < 0.9, or only the legacy tree_fit supports it",
+    "D": "genotype2 clade/private with a carrier P < 0.9, or only the legacy tree_fit supports it, "
+         "or capped by an artefact check (tier_note)",
 }
+LOCAL_K_CLIP, LOCAL_K_MATE = 8, 15  # clip seeds short enough that one mismatch in 15 bp still seeds
+LOCAL_MIN_CLIP = 15          # clip bp left after removing homopolymer runs >= 5
+LOCAL_MATE_VOTES = 0.5       # fraction of a mate's 15-mers on one diagonal = it maps there (a paralog
+                             # copy at ~90% identity keeps ~0.2-0.4; sequencing errors still leave >= 0.5)
+LOCAL_MATE_FRAC = 0.7        # share of the locus' mates that must map inside the window
 
 
 # ------------------------------------------------------------------ input
@@ -81,6 +94,118 @@ def match_known(locus, known, tol=30):
         if q and q[0] == c and min(q[1], q[2]) - tol <= hi and lo <= max(q[1], q[2]) + tol:
             return k
     return None
+
+
+# ------------------------------------------------------------------ local-origin check
+_RC = str.maketrans("ACGTN", "TGCAN")
+
+
+def revcomp(s):
+    return s.translate(_RC)[::-1]
+
+
+def kmer_index(ref, k):
+    idx = collections.defaultdict(list)
+    for i in range(len(ref) - k + 1):
+        idx[ref[i:i + k]].append(i)
+    return idx
+
+
+def place(q, idx, k):
+    """best ungapped placement of q (either strand) in the indexed window:
+    (votes / n_kmers, strand, ref offset of q[0]) or None"""
+    best = None
+    for strand, s in (("+", q), ("-", revcomp(q))):
+        n = len(s) - k + 1
+        if n <= 0:
+            continue
+        diag = collections.Counter()
+        for i in range(n):
+            for p in idx.get(s[i:i + k], ()):
+                diag[p - i] += 1
+        if diag:
+            d, v = diag.most_common(1)[0]
+            if best is None or v / n > best[0]:
+                best = (v / n, strand, d)
+    return best
+
+
+def usable_clip(clip):
+    """the clip with homopolymer runs >= 5 removed (poly-A tails, slippage) -- None when too short
+    or low-complexity to place on its own"""
+    core = re.sub(r"(A{5,}|C{5,}|G{5,}|T{5,})", "", clip)
+    if len(core) < LOCAL_MIN_CLIP:
+        return None
+    if len({core[i:i + 4] for i in range(len(core) - 3)}) < 0.5 * (len(core) - 3):
+        return None
+    return clip
+
+
+def local_origin(loc, evid, cons, reads_by, genome, window):
+    """'' unless the clips are (near-)exact reference within +-window of the locus (<= 1 mismatch per
+    20 bp, gapless; homopolymer / low-complexity clips are skipped, an unplaceable clip < 20 bp too
+    once the other end placed), no end carries a poly-A >= 10, AND >= LOCAL_MATE_FRAC of the mates
+    map inside the window; else a description. Mates are not held to
+    a side: around a small del/dup they fall on either."""
+    p = parse_locus(loc)
+    if not p or genome is None:
+        return ""
+    c, a, b = p
+    lo, hi = min(a, b), max(a, b)
+    start = max(1, lo - window)
+    ref = genome.fetch(c, start - 1, hi + window)          # 1-based position = index + start
+    if not ref:
+        return ""
+    clips = []
+    for side in ("L", "R"):
+        # combine's consensus (combined.txt.gz) carries the clip in lower case; the evidence table's
+        # clip_consensus sometimes has none (PD37580 13:23156430 LEFT)
+        cl = ""
+        for src in (cons.get((loc, side), ""), evid.get((loc, side), {}).get("clip_consensus", "")):
+            cl = "".join(re.findall("[a-z]+", src)).upper()
+            if cl:
+                break
+        if usable_clip(cl):
+            clips.append((side, cl))
+    if not clips:
+        return ""
+    # a TPRT insertion keeps its poly-A: never call that local (a young Alu clip can match a
+    # reference Alu next door)
+    if any(fnum(evid.get((loc, sd), {}).get("polya_len_median"), 0) >= 10 for sd in ("L", "R")):
+        return ""
+    idx = kmer_index(ref, LOCAL_K_CLIP)
+    where, missed = [], []
+    for side, cl in clips:
+        hit = place(cl, idx, LOCAL_K_CLIP)
+        mm = None
+        if hit:
+            _, strand, d = hit
+            s = cl if strand == "+" else revcomp(cl)
+            if 0 <= d and d + len(s) <= len(ref):
+                mm = sum(x != y for x, y in zip(s, ref[d:d + len(s)]))
+        if mm is None or mm > max(1, len(cl) // 20):
+            missed.append(cl)
+            continue
+        pos = d + start
+        dist = 0 if lo <= pos <= hi else min(abs(pos - lo), abs(pos - hi), abs(pos + len(s) - 1 - lo), abs(pos + len(s) - 1 - hi))
+        where.append(f"{side} clip {len(cl)}bp = ref {c}:{pos}({strand}, {mm} mm, {dist} bp away)")
+    # a clip < 20 bp that does not place (one mismatch can leave it without a seed) is no evidence
+    # either way once the other end placed; a longer one is foreign sequence
+    if not where or any(len(cl) >= 20 for cl in missed):
+        return ""
+    mates = [(r[0], r[5]) for r in reads_by.get(loc, []) if r[1] == "MATE"]
+    if len(mates) < 2:
+        return ""
+    midx = kmer_index(ref, LOCAL_K_MATE)
+    ok = 0
+    for _, seq in mates:
+        hit = place(seq.upper(), midx, LOCAL_K_MATE)
+        if not hit or hit[0] < LOCAL_MATE_VOTES:
+            continue
+        ok += 1
+    if ok < LOCAL_MATE_FRAC * len(mates):
+        return ""
+    return "local origin: " + "; ".join(where) + f"; {ok}/{len(mates)} mates within {window} bp"
 
 
 # ------------------------------------------------------------------ xlsx (minimal SpreadsheetML)
@@ -242,6 +367,10 @@ def main():
     ap.add_argument("--rte-library", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "resources", "rte_library"),
                     help="RTE library dir: active.tsv describes the nearest active element (default: the repo's resources/rte_library)")
     ap.add_argument("--min-p", type=float, default=0.9, help="carrier P(carrier) for tiers B/C (0.9 = annotate_v2's)")
+    ap.add_argument("--max-noncarrier-colonies", type=int, default=2,
+                    help="a private call with alt reads in more other colonies is capped at tier D (default 2)")
+    ap.add_argument("--genome", help="reference of the discovery genome (.2bit or FASTA): enables the local-origin check")
+    ap.add_argument("--local-window", type=int, default=5000, help="local-origin check: bp either side of the locus")
     ap.add_argument("--out", required=True, help="output .xlsx")
     a = ap.parse_args()
 
@@ -255,6 +384,11 @@ def main():
     known = [k for k in read_tsv(a.known) if k.get("locus")]
     active = {r["id"]: r for r in read_tsv(os.path.join(a.rte_library, "active.tsv")) if r.get("id")}
     td_sources = {r["id"]: r for r in read_tsv(os.path.join(a.rte_library, "transduction_sources.tsv")) if r.get("id")}
+    genome = None
+    if a.genome:
+        sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+        from tools.rte.genome import open_genome
+        genome = open_genome(a.genome)
 
     # candidate set
     cand = collections.OrderedDict()
@@ -288,7 +422,7 @@ def main():
         print(f"combine outputs: consensus for {len({k[0] for k in cons})} loci, evidence for "
               f"{len({k[0] for k in evid})}, reads for {len(reads_by)} ({sum(map(len, reads_by.values()))} reads)")
 
-    header = ["tier", "locus", "chrom", "start", "end", "kind", "source", "known", "known_carriers",
+    header = ["tier", "tier_note", "locus", "chrom", "start", "end", "kind", "source", "known", "known_carriers",
               "joint_class", "joint_best", "n_carriers", "carriers", "min_P_carrier", "post_best", "log10_bf_tree",
               "carrier_reads (alt/ref/uninf)", "carrier_vaf_mean", "alt_reads_in_noncarriers", "n_noncarriers_with_alt",
               "treefit_v2_class", "treefit_v2_label", "treefit_v2_carriers",
@@ -340,10 +474,22 @@ def main():
             tier = "C"
         else:
             tier = "D"
+        notes = []
+        if f2.get("label") == "phylo_violating":
+            notes.append("phylo_violating (tree_fit genotype2)")
+        if jc == "private" and nc_n > a.max_noncarrier_colonies:
+            notes.append(f"alt reads in {nc_n} non-carrier colonies")
+        tprt_like = tcall in TPRT_CALLS or fnum(an.get("polya_len"), 0) >= 10
+        lo_note = local_origin(loc, evid, cons, reads_by, genome, a.local_window) if not (k or tprt_like) else ""
+        if lo_note:
+            notes.append(lo_note)
+        if notes and tier in ("B", "C"):
+            notes.insert(0, f"tier {tier} -> D")
+            tier = "D"
         p = parse_locus(loc) or ("", "", "")
         num = lambda x: (round(fnum(x), 4) if fnum(x) == fnum(x) else (x or ""))
         clean = lambda x: "" if x in (None, ".", "NA", "nan") else x
-        rows.append([tier, loc, p[0], p[1], p[2], j.get("locus_kind") or f2.get("locus_kind", ""), src,
+        rows.append([tier, "; ".join(notes), loc, p[0], p[1], p[2], j.get("locus_kind") or f2.get("locus_kind", ""), src,
                      bool(k), k.get("carriers", "") if k else "",
                      jc, j.get("best", ""), len(carriers) if carriers else "", ",".join(carriers),
                      round(min_p, 4) if min_p == min_p else "", num(j.get("post_best")), num(j.get("log10_bf_tree")),
@@ -363,8 +509,9 @@ def main():
                      clean(an.get("site_region", "")), clean(an.get("site_gene", "")), clean(an.get("site_strand", "")),
                      clean(an.get("conclusion", ""))] + side_cols(loc, evid, cons, reads_by))
     rank = {"A": 0, "B": 1, "C": 2, "D": 3}
-    rows.sort(key=lambda r: (rank[r[0]], -(r[11] or 0), -(fnum(r[29], 0)), r[1]))
-    widths = [5, 28, 7, 11, 11, 18, 10, 7, 30, 10, 16, 6, 40, 9, 9, 9, 50, 9, 9, 9,
+    H = {h: i for i, h in enumerate(header)}
+    rows.sort(key=lambda r: (rank[r[0]], bool(r[1]), -(r[H["n_carriers"]] or 0), -(fnum(r[H["tprt_score"]], 0)), r[H["locus"]]))
+    widths = [5, 40, 28, 7, 11, 11, 18, 10, 7, 30, 10, 16, 6, 40, 9, 9, 9, 50, 9, 9, 9,
               18, 16, 30, 18, 16, 30, 18, 18, 12, 8, 7, 14, 8, 6, 6, 9, 14, 9, 14, 9, 7, 16, 12, 8, 30, 20, 18, 18, 10, 8, 30, 9, 8, 8, 20, 60, 14, 14, 6, 60,
               7, 7, 7, 7, 7, 9, 7, 7, 7, 7, 7, 9, 30, 60, 60, 50, 50]
 
@@ -382,6 +529,10 @@ def main():
               ["known insertions", os.path.abspath(a.known) if a.known else "-"],
               ["", ""],
               ["columns", ""],
+              ["tier_note", "why a call was capped at tier D: phylo_violating (tree_fit genotype2), alt reads in more than "
+                            f"{a.max_noncarrier_colonies} non-carrier colonies (private calls), or local origin -- every clip is "
+                            f"reference within {a.local_window} bp and the mates lie in the flanks, so nothing was inserted"
+                            + ("" if genome else " (local-origin check OFF: no --genome)")],
               ["source", "genotype2 = joint step places it on a branch below the root; legacy = legacy tree_fit "
                          "calls it private / phylo-consistent shared; both; known = only via the known list"],
               ["joint_class", "clade (>= 2 carriers below one branch), private (one tip), ROOT, INDEP, NOISE"],
@@ -416,7 +567,7 @@ def main():
     krows = [r for r in rows if r[0] == "A"]
     sheets.append(("known", [header] + krows, widths, True))
     if reads_by:
-        order = {r[1]: (i, r[0], r[12]) for i, r in enumerate(rows)}
+        order = {r[H["locus"]]: (i, r[0], r[H["carriers"]]) for i, r in enumerate(rows)}
         rr = [["tier", "locus", "side", "role", "colony", "joint_carrier", "fragment", "read", "length", "sequence"]]
         for loc in sorted(reads_by, key=lambda x: order.get(x, (10 ** 9, "", ""))[0]):
             _, tier, car = order.get(loc, (0, "", ""))
