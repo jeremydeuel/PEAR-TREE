@@ -599,6 +599,28 @@ class Insertion:
         self.left_ins_seq, self.right_ins_seq = (s.upper() for s in self._insert_clips())
         return f'>{self.title}:R\n{self.right_ins_seq}\n>{self.title}:L\n{self.left_ins_seq}\n'
 
+    @staticmethod
+    def _dfam_pad(seq):
+        """Dfam query for one clip: a clip of dfam_pad_min_len..dfam_pad_len bp is N-padded up to
+        dfam_pad_len. The HMM scan's length-dependent null model under-scores short queries; the
+        padding lifts a 30-45 bp element clip by ~1-3 bits (local family-HMM test), which can carry
+        a borderline hit over dfamscan.pl's TC cutoff. Shorter clips and (near-)pure poly-A/T
+        clips are submitted unchanged: they carry no family signal to rescue. Ns go on the 3' end
+        so ali_start/ali_end stay valid offsets into the unpadded clip."""
+        A = CONFIG['annotate']
+        pad_len = A.get('dfam_pad_len', 50)
+        if len(seq) < A.get('dfam_pad_min_len', 30) or len(seq) >= pad_len:
+            return seq
+        if max(seq.count('A'), seq.count('T')) >= A.get('dfam_pad_max_polya_frac', 0.9) * len(seq):
+            return seq
+        return seq + 'N' * (pad_len - len(seq))
+
+    def get_dfam_fasta(self) -> str:
+        """get_fasta() for the Dfam scan only: the same clips, short ones N-padded (_dfam_pad).
+        bowtie2 keeps the unpadded fasta."""
+        left, right = (s.upper() for s in self._insert_clips())
+        return f'>{self.title}:R\n{self._dfam_pad(right)}\n>{self.title}:L\n{self._dfam_pad(left)}\n'
+
     # ------------------------------------------------------ uncharacterised complex insertion
     # A junction with no Dfam hit, no clip remap and no poly-A used to collapse -- whatever its
     # clips contained -- into 'artefact', the same bin as genotyping noise and poly-A slippage.
@@ -1234,7 +1256,8 @@ class VariantAnnotationContainer:
         self.sample = sample
         self.insertions_file = CONFIG['annotate']['insertions_file'](sample)
         self.genotyping_file = CONFIG['annotate']['genotyping_file'](sample)
-        self.dfam_file = CONFIG['annotate']['tmp']('dfam')(sample)
+        # 'pad.dfam', not 'dfam': a scan cached before short-clip padding must not be reused
+        self.dfam_file = CONFIG['annotate']['tmp']('pad.dfam')(sample)
         self.sam_file = CONFIG['annotate']['tmp']('sam')(sample)
         self.local_sam_file = CONFIG['annotate']['tmp']('local.sam')(sample)
         self.fasta_file = CONFIG['annotate']['tmp']('fa.gz')(sample)
@@ -1549,15 +1572,13 @@ class VariantAnnotationContainer:
         dfamscan = CONFIG['annotate'].get('dfamscan')
         # cores this job owns (LSF), not the whole node's
         cpu = int(os.environ.get("LSB_DJOB_NUMPROC") or os.cpu_count() or 1)
-        # nhmmscan cannot read gzip ("Sequence file ... is empty or misformatted"), whether called
-        # directly or by dfamscan.pl -> decompress the clip fasta to a temp file for both
-        fa = self.fasta_file
-        tmp_fa = None
-        if fa.endswith(".gz"):
-            tmp_fa = self.dfam_file + ".query.fa"
-            with gzip.open(fa, "rt") as i, open(tmp_fa, "w") as o:
-                o.write(i.read())
-            fa = tmp_fa
+        # the Dfam query is written uncompressed (nhmmscan cannot read gzip: "Sequence file ... is
+        # empty or misformatted", whether called directly or by dfamscan.pl) and with short clips
+        # N-padded (get_dfam_fasta), so it differs from the bowtie2 fasta
+        tmp_fa = fa = self.dfam_file + ".query.fa"
+        with open(tmp_fa, "w") as o:
+            for insertion in self.insertions.values():
+                o.write(insertion.get_dfam_fasta())
         try:
             if dfamscan and os.path.exists(dfamscan):
                 assert os.access(dfamscan, os.X_OK)
