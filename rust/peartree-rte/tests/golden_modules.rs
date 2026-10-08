@@ -179,7 +179,6 @@ fn golden_assemble() {
 
 // ------------------------------------------------------------------------------ WP-STRUCT
 #[test]
-#[ignore = "WP-STRUCT"]
 fn golden_classify() {
     use peartree_rte::structure::{classify, PseudogeneArg, SourceFinder};
     let all = all_events();
