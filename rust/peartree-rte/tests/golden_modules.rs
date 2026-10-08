@@ -156,7 +156,6 @@ fn golden_score() {
 
 // -------------------------------------------------------------------------------- WP-ASM
 #[test]
-#[ignore = "WP-ASM"]
 fn golden_assemble() {
     let mut libs = Libs::default();
     let mut n = 0;
