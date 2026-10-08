@@ -32,7 +32,12 @@ impl Libs {
             None if ev["lib"].get("mock").is_some() => golden::repo_path("test/fixtures/rte_library"),
             None => return None,
         };
-        if !self.0.iter().any(|(k, _)| *k == dir) {
+        // mock libraries (same fixture dir, different polymorphic_l1) must not share a cache slot
+        let key = match ev["lib"].get("mock") {
+            Some(m) => PathBuf::from(format!("{}#{}", dir.display(), m)),
+            None => dir.clone(),
+        };
+        if !self.0.iter().any(|(k, _)| *k == key) {
             let mut lib = RteLibrary::open(&dir.to_string_lossy(), None).unwrap();
             if let Some(m) = ev["lib"].get("mock") {
                 // the test stand-in: fixture consensus + its own polymorphic_l1 list
@@ -41,9 +46,9 @@ impl Libs {
                     .map(|a| a.iter().map(|x| (golden::s(&x[0]), golden::i(&x[1]), golden::s(&x[2]))).collect())
                     .unwrap_or_default();
             }
-            self.0.push((dir.clone(), lib));
+            self.0.push((key.clone(), lib));
         }
-        self.0.iter().find(|(k, _)| *k == dir).map(|(_, l)| l)
+        self.0.iter().find(|(k, _)| *k == key).map(|(_, l)| l)
     }
 }
 
@@ -230,7 +235,6 @@ impl peartree_rte::transduction::Locator for ReplayLocator {
 }
 
 #[test]
-#[ignore = "WP-TD"]
 fn golden_novel_find() {
     use peartree_rte::structure::SourceFinder;
     use peartree_rte::transduction::{L1Rmsk, LocatorHit, NovelSourceFinder};
@@ -271,7 +275,6 @@ fn golden_novel_find() {
 }
 
 #[test]
-#[ignore = "WP-TD"]
 fn golden_cons_identity() {
     for e in all_events().iter().filter(|e| e["kind"] == "cons_identity") {
         let got = peartree_rte::transduction::cons_identity(&golden::b(&e["in"]["seq"]), &golden::b(&e["in"]["cons"]));
@@ -280,7 +283,6 @@ fn golden_cons_identity() {
 }
 
 #[test]
-#[ignore = "WP-TD"]
 fn golden_exon_junctions() {
     use peartree_rte::pseudogene::ExonJunctionIndex;
     let all = all_events();

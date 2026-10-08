@@ -17,8 +17,12 @@ use crate::assembly::Segment;
 use crate::config::TransductionCfg;
 use crate::genome::{parse_region, Genome};
 use crate::library::RteLibrary;
+use crate::align::{self, Mode};
 use crate::mm::{Aligner, MapOpts};
+use crate::pyfmt::py_round;
+use crate::sequtil::rc;
 use crate::structure::SourceFinder;
+use std::io::BufRead;
 use std::path::Path;
 
 /// transduction.SourceCall
@@ -143,27 +147,129 @@ impl Locator for MappyLocator {
 /// One young L1: (start, end, strand '+'/'-', name, divergence %).
 pub type L1Row = (i64, i64, char, String, f64);
 
-/// transduction.L1Rmsk: young full-length L1s (LINE/L1, >= min_len) per contig. WP-TD.
+fn row_cmp(a: &L1Row, b: &L1Row) -> std::cmp::Ordering {
+    a.0.cmp(&b.0)
+        .then(a.1.cmp(&b.1))
+        .then(a.2.cmp(&b.2))
+        .then_with(|| a.3.cmp(&b.3))
+        .then_with(|| a.4.partial_cmp(&b.4).unwrap_or(std::cmp::Ordering::Equal))
+}
+
+/// transduction.L1Rmsk: young full-length L1s (LINE/L1, >= min_len) per contig.
 pub struct L1Rmsk {
     /// contig -> sorted rows
     pub by_contig: rustc_hash::FxHashMap<String, Vec<L1Row>>,
 }
 
+fn pyint(s: &str) -> Result<i64, String> {
+    s.trim().parse::<i64>().map_err(|_| format!("invalid literal for int(): '{s}'"))
+}
+
+fn pyfloat(s: &str) -> Result<f64, String> {
+    s.trim().parse::<f64>().map_err(|_| format!("could not convert string to float: '{s}'"))
+}
+
 impl L1Rmsk {
-    /// Parse a RepeatMasker .out or UCSC rmsk.txt (plain or gzipped). WP-TD.
-    pub fn open(_path: &Path, _min_len: i64) -> Result<L1Rmsk, String> {
-        todo!("WP-TD: port transduction.L1Rmsk.__init__")
+    /// Parse a RepeatMasker .out or UCSC rmsk.txt (plain or gzipped).
+    pub fn open(path: &Path, min_len: i64) -> Result<L1Rmsk, String> {
+        let rd = crate::inputs::open_text(path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+        let mut by_contig: rustc_hash::FxHashMap<String, Vec<L1Row>> = Default::default();
+        for line in rd.lines() {
+            let line = line.map_err(|e| format!("{}: {e}", path.display()))?;
+            let f: Vec<&str> = line.split_whitespace().collect();
+            let (contig, s, e, strand, name, fam, div);
+            if f.len() >= 15 && f[0].bytes().all(|b| b.is_ascii_digit()) && f.len() < 17 {
+                // RepeatMasker .out: score div del ins contig begin end (left) strand name class/family ...
+                contig = f[4];
+                s = pyint(f[5])? - 1;
+                e = pyint(f[6])?;
+                strand = f[8];
+                name = f[9];
+                fam = f[10].to_string();
+                div = pyfloat(f[1])?;
+            } else if f.len() >= 17 {
+                // UCSC rmsk.txt: bin swScore milliDiv ... genoName genoStart genoEnd genoLeft strand repName repClass repFamily
+                contig = f[5];
+                s = pyint(f[6])?;
+                e = pyint(f[7])?;
+                strand = f[9];
+                name = f[10];
+                fam = format!("{}/{}", f[11], f[12]);
+                div = pyint(f[2])? as f64 / 10.0;
+            } else {
+                continue;
+            }
+            if !fam.starts_with("LINE/L1") || e - s < min_len {
+                continue;
+            }
+            let strand = if strand == "C" || strand == "-" { '-' } else { '+' };
+            by_contig.entry(contig.to_string()).or_default().push((s, e, strand, name.to_string(), div));
+        }
+        for v in by_contig.values_mut() {
+            v.sort_by(row_cmp);
+        }
+        Ok(L1Rmsk { by_contig })
     }
 
-    /// `upstream_of(contig, s, e, strand, max_dist)`. WP-TD.
-    pub fn upstream_of(&self, _contig: &str, _s: i64, _e: i64, _strand: char, _max_dist: i64) -> Vec<L1Row> {
-        todo!("WP-TD: port transduction.L1Rmsk.upstream_of")
+    /// `upstream_of(contig, s, e, strand, max_dist)`: L1s on `strand` whose 3' end lies within
+    /// max_dist upstream (in that strand's sense) of the segment [s, e).
+    pub fn upstream_of(&self, contig: &str, s: i64, e: i64, strand: char, max_dist: i64) -> Vec<L1Row> {
+        let alt = match contig.strip_prefix("chr") {
+            Some(x) => x.to_string(),
+            None => format!("chr{contig}"),
+        };
+        let Some(lst) = self.by_contig.get(contig).or_else(|| self.by_contig.get(&alt)) else { return Vec::new() };
+        let target = s - max_dist - 10000;
+        // bisect_left over the start column
+        let lo = lst.partition_point(|r| r.0 < target);
+        let mut out: Vec<(i64, &L1Row)> = Vec::new();
+        for r in &lst[lo..] {
+            let (ls, le, lstr) = (r.0, r.1, r.2);
+            if ls > e + max_dist {
+                break;
+            }
+            if lstr != strand {
+                continue;
+            }
+            if strand == '+' && le <= s + 50 && s - le <= max_dist {
+                out.push((s - le, r));
+            } else if strand == '-' && ls >= e - 50 && ls - e <= max_dist {
+                out.push((ls - e, r));
+            }
+        }
+        out.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| row_cmp(a.1, b.1)));
+        out.into_iter().map(|(_, r)| r.clone()).collect()
     }
 }
 
-/// `cons_identity(seq, cons)` (tools/rte_library/common.cons_identity). WP-TD.
-pub fn cons_identity(_seq: &[u8], _cons: &[u8]) -> f64 {
-    todo!("WP-TD: port tools/rte_library/common.cons_identity")
+/// common.identity(a, b, mode="HW")[0]: matches / (M + X + I + D) of the edlib path alignment of
+/// `a` as an infix of `b` (both upper-cased).
+fn hw_identity(a: &[u8], b: &[u8]) -> f64 {
+    let a = a.to_ascii_uppercase();
+    let b = b.to_ascii_uppercase();
+    if a.is_empty() || b.is_empty() {
+        return 0.0;
+    }
+    let Some(r) = align::path(&a, &b, Mode::Hw, -1, &[]) else { return 0.0 };
+    let m = r.ops.iter().filter(|&&op| op == align::OP_MATCH).count();
+    let cols = r.ops.len();
+    if cols > 0 {
+        m as f64 / cols as f64
+    } else {
+        0.0
+    }
+}
+
+/// `cons_identity(seq, cons)` (tools/rte_library/common.cons_identity): the better of the
+/// consensus as an infix of the element and the element as an infix of the consensus.
+pub fn cons_identity(seq: &[u8], cons: &[u8]) -> f64 {
+    let a = hw_identity(cons, seq);
+    let b = hw_identity(seq, cons);
+    if b > a {
+        b
+    } else {
+        a
+    }
 }
 
 /// transduction.NovelSourceFinder. `cohort_l1` is set by the annotator's cohort pass.
@@ -180,15 +286,99 @@ pub struct NovelSourceFinder<'a> {
 }
 
 impl NovelSourceFinder<'_> {
-    /// `available()`. WP-TD.
+    /// `available()`.
     pub fn available(&self) -> bool {
-        todo!("WP-TD: port NovelSourceFinder.available")
+        self.locator.is_some() && (self.rmsk.is_some() || !self.cohort_l1.is_empty() || !self.lib.polymorphic_l1.is_empty())
+    }
+
+    fn l1_identity(&self, contig: &str, s: i64, e: i64, strand: char, div: f64) -> f64 {
+        let key = (contig.to_string(), s, e);
+        if let Some(v) = self.ident_cache.lock().unwrap().get(&key) {
+            return *v;
+        }
+        let mut ident: Option<f64> = None;
+        let cons = self.lib.consensus.get("L1HS").filter(|c| !c.is_empty());
+        if let (Some(g), Some(cons)) = (self.genome, cons) {
+            let mut seq = g.fetch(contig, s, e);
+            if !seq.is_empty() {
+                if strand == '-' {
+                    seq = rc(&seq);
+                }
+                ident = Some(cons_identity(&seq.to_ascii_uppercase(), cons));
+            }
+        }
+        let ident = ident.unwrap_or(1.0 - div / 100.0);
+        self.ident_cache.lock().unwrap().insert(key, ident);
+        ident
     }
 }
 
 impl SourceFinder for NovelSourceFinder<'_> {
-    /// `find(seq)`. WP-TD.
-    fn find(&self, _seq: &[u8]) -> Option<SourceCall> {
-        todo!("WP-TD: port NovelSourceFinder.find")
+    /// `find(seq)`: seq = the transduced segment in element-sense orientation.
+    fn find(&self, seq: &[u8]) -> Option<SourceCall> {
+        let c = &self.cfg;
+        if !self.available() || (seq.len() as i64) < c.novel_source_min_seg {
+            return None;
+        }
+        let hits: Vec<LocatorHit> = self.locator.as_ref()?.locate(seq).into_iter().filter(|h| h.mapq >= c.novel_source_min_mapq).collect();
+        if hits.len() != 1 {
+            return None;
+        }
+        let h = &hits[0];
+        let (contig, s, e, gstrand) = (h.contig.as_str(), h.start, h.end, h.strand);
+        if h.identity < c.novel_source_min_tag_identity {
+            return None;
+        }
+        // (dist, src, ident, name)
+        let mut best: Option<(i64, String, f64, String)> = None;
+        if let Some(rmsk) = &self.rmsk {
+            for (ls, le, lstr, name, div) in rmsk.upstream_of(contig, s, e, gstrand, c.novel_source_max_dist) {
+                let ident = self.l1_identity(contig, ls, le, lstr, div);
+                if ident >= c.novel_source_min_identity {
+                    let dist = if gstrand == '+' { s - le } else { ls - e };
+                    best = Some((dist, format!("{contig}:{ls}-{le}"), ident, name));
+                    break;
+                }
+            }
+        }
+        if best.is_none() {
+            for (cc, pos, cstr) in &self.cohort_l1 {
+                if cc != contig || *cstr != gstrand {
+                    continue;
+                }
+                let dist = if gstrand == '+' { s - pos } else { pos - e };
+                if (0..=c.novel_source_max_dist).contains(&dist) {
+                    best = Some((dist, format!("{contig}:{pos}"), 1.0, "cohort_L1".to_string()));
+                    break;
+                }
+            }
+        }
+        let mut poly = false;
+        if best.is_none() {
+            // tier B fallback: a polymorphic L1 position in the upstream window, either orientation
+            for (cc, pos, pid) in &self.lib.polymorphic_l1 {
+                if cc != contig {
+                    continue;
+                }
+                let dist = if gstrand == '+' { s - pos } else { pos - e };
+                if (0..=c.novel_source_max_dist).contains(&dist) && best.as_ref().is_none_or(|b| dist < b.0) {
+                    best = Some((dist, format!("{contig}:{pos}"), 0.0, format!("polymorphic_L1:{pid}")));
+                    poly = true;
+                }
+            }
+        }
+        let (dist, src, ident, name) = best?;
+        let off_end = dist + (e - s);
+        let tier = if poly || ident < c.novel_source_tier_a { "B" } else { "A" };
+        Some(SourceCall {
+            source_id: format!("novel:{src}"),
+            td_end: off_end,
+            td_start: dist,
+            n_segments: 1,
+            novel: true,
+            identity: py_round(ident, 4),
+            detail: format!("source={name};tag={contig}:{s}-{e}({gstrand});dist={dist};tier={tier}"),
+            tier: tier.to_string(),
+        })
     }
 }
