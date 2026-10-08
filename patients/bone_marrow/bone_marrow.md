@@ -1,4 +1,4 @@
-# Bone marrow — 7 patients, 2517 tips total
+# Bone marrow — 8 patients, 2544 tips total
 
 Single-cell / single-stem-cell-derived WGS. TSVs are placeholders pending the farm probe (see [PLAN](../PLAN.md)).
 
@@ -11,3 +11,4 @@ Single-cell / single-stem-cell-derived WGS. TSVs are placeholders pending the fa
 | PD49237 | PD49237 | 231 | ✓ |
 | PD5182 | PD5182 | 161 | ✓ |
 | PD5847 | PD5847 | 99 | ✓ |
+| PD45886 | PD45886 (SDS10, Machado 2023 Nat Commun; GRCh37) | 27 | ✓ |
