@@ -194,7 +194,7 @@ import arm_config; print(arm_config.describe('B'))") >&2
         TPRT_ANNOT_TMP="$HSC_ROOT/tmp/$P" \
         GT_THROTTLE="${GT_THROTTLE:-20}" GT_MEM_T1="${GT_MEM_T1:-4000}" GT_MEM_T2="${GT_MEM_T2:-16000}" \
         SD_MEM_T1="${SD_MEM_T1:-4000}" CI_MEM="${CI_MEM:-16000}" CI_CORES="${CI_CORES:-8}" \
-        AN_MEM="${AN_MEM:-32000}" AN_CORES="${AN_CORES:-4}" \
+        AN_MEM="${AN_MEM:-32000}" AN_CORES="${AN_CORES:-8}" \
         PT_HEADER_GATE="$asm" \
         PT_JOB_PREFIX="${P}_hsc" PT_NO_CLEANUP="${KEEP_BAMS:-0}" PT_JOBIDS_FILE="$W/jobids.tsv" \
         bash "$PT_ROOT/cluster/pipeline.sh" submit-list "$P" "$W/samples.tsv"

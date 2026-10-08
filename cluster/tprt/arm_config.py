@@ -113,6 +113,10 @@ def build(arm):
         for k in ANNOTATE_FROM_TPRT:
             ann[k] = tprt_ann[k]
     ann['genome_2bit'] = twobit
+    # tools/rte runs in the Rust engine (rust/peartree-rte): the Python one loads the whole reads
+    # FASTA (PD49229, 722 colonies: killed at 32 GB). 'rust' makes a missing binary an error
+    # instead of a silent fall-back to that path.
+    ann['rte_engine'] = 'rust'
     # run_ab.sh exports TPRT_ANNOT_TMP=$TPRT_ROOT/tmp/<arm> into each arm's jobs: arm C runs from
     # arm B's checkout (same stub, TPRT_AB_ARM='B') and must not share B's dfam/sam scratch files
     tdir = os.environ.get('TPRT_ANNOT_TMP') or tmp_dir(arm)
