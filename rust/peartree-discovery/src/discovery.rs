@@ -1972,6 +1972,7 @@ impl Discovery {
 
     pub fn output<W: Write>(&self, writer: &mut W, hallmarks: &mut Vec<u8>, mut sc: Option<&mut Sidecar>) -> io::Result<()> {
         let cw = self.config.cluster_window;
+        let mut site_gap_rejected: u64 = 0;
         let mut pa_rejected: u64 = 0;
         // SENS-5: hallmark annotation is non-gating — the FASTQ output below is
         // identical whether or not it is enabled; only this sidecar is added.
@@ -2174,6 +2175,11 @@ impl Discovery {
                 if o.dead {
                     continue;
                 }
+                // MAX_SITE_GAP safety net (config load already bounds every window)
+                if site_gap(&o.left, &o.right).is_some_and(|g| g.abs() > MAX_SITE_GAP) {
+                    site_gap_rejected += 1;
+                    continue;
+                }
                 if hm {
                     write_hallmark(hallmarks, rn, &o.left, &o.right)?;
                 }
@@ -2184,6 +2190,9 @@ impl Discovery {
             }
         }
         self.pa_pair_floor_rejected.set(pa_rejected);
+        if site_gap_rejected > 0 {
+            eprintln!("site gap: {site_gap_rejected} pair(s) with |TSD/deletion| > {MAX_SITE_GAP} bp not emitted");
+        }
         Ok(())
     }
 
@@ -2705,6 +2714,15 @@ fn write_hallmark(buf: &mut Vec<u8>, contig: &str, left: &Emit, right: &Emit) ->
     writeln!(buf, "{contig}\t{l_pos}\t{r_pos}\t{tsd}\t{purity:.3}\t{en}\t{score:.3}")
 }
 
+/// R - L of a pair of two clip junctions (the TSD / target-site deletion); None when an end
+/// is a poly-A mate token, a discordant cluster or an open end, which define no TSD.
+fn site_gap(left: &Emit, right: &Emit) -> Option<i64> {
+    match (left, right) {
+        (Emit::Bp(l), Emit::Bp(r)) => Some(r.breakpoint - l.breakpoint),
+        _ => None,
+    }
+}
+
 /// Locus id `contig:L-R` exactly as in the `.txt.gz` record names.
 fn locus_name(left: &Emit, right: &Emit) -> String {
     let (reference_name, left_str, right_str) = match (left, right) {
@@ -3122,6 +3140,8 @@ mod tests {
         let l = fbp(CLIP_LEFT, 5015, &polyt(20, 1), 2);
         let rr = fbp(CLIP_RIGHT, 5000, &dna(2, 30), 2);
         assert_eq!(locus_name(&Emit::Bp(&l), &Emit::Bp(&rr)), "1:5015-5000");
+        assert_eq!(site_gap(&Emit::Bp(&l), &Emit::Bp(&rr)), Some(-15));
+        assert_eq!(site_gap(&Emit::Bp(&b), &Emit::Open(5000)), None);
         let mut out = Vec::new();
         print_output(&mut out, Emit::Bp(&b), Emit::Open(5000)).unwrap();
         let s = String::from_utf8(out).unwrap();

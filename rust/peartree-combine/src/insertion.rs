@@ -342,6 +342,25 @@ mod tests {
         p
     }
 
+    /// MAX_SITE_GAP (pipeline::site_gap_ok): a 22 kb "pair" is dropped, |gap| <= 120 kept,
+    /// disc_/oneside_ ends (no second junction) are never judged.
+    #[test]
+    fn site_gap_rule() {
+        let mut t = String::new();
+        for key in ["chr1:100-120", "chr1:1000-880", "chr1:5000-27000", "chr1:9000-8870"] {
+            for part in ["LEFT:CLIPPED", "LEFT:ALIGNED", "RIGHT:ALIGNED", "RIGHT:CLIPPED"] {
+                t += &rec(&format!("{key}:{part}"), "ACGTACGTAC");
+            }
+        }
+        t += &rec("chr2:200-disc_900:LEFT:CLIPPED", "GGGAAA");
+        t += &rec("chr2:200-disc_900:LEFT:ALIGNED", "ACGTACGTAC");
+        let p = write_gz("site_gap.txt.gz", &t);
+        let imp = parse_discovery_file(&p, 0, &Interner::new()).unwrap();
+        let kept: Vec<(i64, i64)> = imp.records.iter().filter(|i| crate::pipeline::site_gap_ok(i))
+            .map(|i| (i.name_start.pos, i.name_end.pos)).collect();
+        assert_eq!(kept, vec![(100, 120), (1000, 880), (200, 900)]);
+    }
+
     #[test]
     fn parses_types_mates_and_filters() {
         let mut t = String::new();

@@ -35,6 +35,10 @@ pub const TSD_MAX: i64 = 40;
 // is too close (skipped); it rescues only when strictly inside POLYA_FAR_DIST.
 pub const POLYA_NEAR_DIST: i64 = 12;
 pub const POLYA_FAR_DIST: i64 = 120;
+/// HARD rule (Jeremy, 2026-10-08): a TSD / target-site deletion is never longer than this.
+/// Every pairing window must stay inside it (checked at config load) and no two-sided locus
+/// with |R - L| > MAX_SITE_GAP is ever emitted.
+pub const MAX_SITE_GAP: i64 = 120;
 
 // drop clipped reads whose XA/SA shows the whole read maps contiguously
 // elsewhere (not a real junction). On by default; set PEARTREE_KEEP_FULLMAP=1
@@ -490,7 +494,27 @@ impl DiscoveryConfig {
             }
         }
         cfg.apply_env()?;
+        cfg.validate_site_gap()?;
         Ok(cfg)
+    }
+
+    /// MAX_SITE_GAP: refuse any pairing window that could pair a LEFT and a RIGHT junction
+    /// more than 120 bp apart (TSD, target-site deletion, L1-mediated span).
+    pub fn validate_site_gap(&self) -> Result<(), String> {
+        let m = MAX_SITE_GAP;
+        let checks = [
+            ("tsd_max", self.tsd_max, m),
+            ("max_target_site_deletion", self.max_target_site_deletion, m),
+            ("max_l1_mediated_span", self.max_l1_mediated_span, m),
+        ];
+        for (k, v, lim) in checks {
+            if v > lim {
+                return Err(format!(
+                    "config: {k} = {v} would allow a TSD/target-site deletion beyond {m} bp; the site gap is capped at +/-{m} bp (MAX_SITE_GAP)"
+                ));
+            }
+        }
+        Ok(())
     }
 
     fn set(&mut self, key: &str, val: &str) -> Result<(), String> {
@@ -740,6 +764,7 @@ mod tests {
         c.set("one_sided_min_fragments", "3").unwrap();
         c.set("drop_dup_in_polya_path", "true").unwrap();
         assert!(c.extra_pairing() && c.drop_dup_in_polya_path && c.allow_blunt_pairs);
+        assert!(c.validate_site_gap().is_err(), "a 50 kb L1-mediated span breaks MAX_SITE_GAP");
         assert_eq!((c.max_target_site_deletion, c.max_l1_mediated_span, c.one_sided_min_fragments), (30, 50000, 3));
     }
 

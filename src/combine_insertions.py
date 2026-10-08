@@ -29,6 +29,15 @@ from combine_insertions_get_sequence import get_sequence
 from sequence_checks import sequence_matching_score
 from collections import Counter
 
+
+MAX_SITE_GAP = 120  # bp; hard cap on |TSD / target-site deletion| of a two-sided locus
+
+
+def _site_gap_ok(name: str) -> bool:
+    """False only when both end tokens of `contig:start-end` are plain coordinates > MAX_SITE_GAP apart."""
+    a, b = name.rsplit(":", 1)[1].rsplit("-", 1)
+    return not (a.isdigit() and b.isdigit() and abs(int(b) - int(a)) > MAX_SITE_GAP)
+
 def _splice_sidecar(path):
     """`<combined>.txt.gz` -> `<combined>.splice.tsv` (shared by combine + annotate)."""
     return (path[:-7] if path.endswith(".txt.gz") else path) + ".splice.tsv"
@@ -133,6 +142,13 @@ def combine_insertions(input_files, insertions_genotyping_file, combined_inserti
         else:
             all_insertions += file_insertions
             accepted_files.append(f)
+    # HARD rule (2026-10-08): |TSD / target-site deletion| <= MAX_SITE_GAP (120 bp); drops the
+    # 14-22 kb far "pairs" older discovery runs emitted. Only plain-number name tokens define a
+    # TSD (polyA_ = mate position, disc_/oneside_ = no second junction). Mirrors the Rust port.
+    n0 = len(all_insertions)
+    all_insertions = [i for i in all_insertions if _site_gap_ok(i.name)]
+    if len(all_insertions) < n0:
+        print(f"site gap: removed {n0 - len(all_insertions)} loci with |TSD/target-site deletion| > {MAX_SITE_GAP} bp")
     print(f"intersecting insertions from {len(input_files)} files...")
     # per-sample discovery breakpoints, taken before intersect merges records (far-pair
     # colony-consistency test, CONFIG['combine_insertions']['far_pair_strict'])

@@ -159,6 +159,16 @@ fn drop_filtered(insertions: &mut Vec<Insertion>, set: &FxHashSet<String>, conti
 /// 13. write `<stem>.genotyping.txt.gz` (§6.3).
 
 
+/// Maximum |TSD / target-site deletion| (bp) of a two-sided locus (Jeremy, 2026-10-08).
+pub const MAX_SITE_GAP: i64 = 120;
+
+/// A locus passes unless BOTH name tokens are plain junction coordinates more than MAX_SITE_GAP
+/// apart (`polyA_` = a mate position, `disc_` / `oneside_` = no second junction: no TSD).
+pub fn site_gap_ok(i: &Insertion) -> bool {
+    use crate::model::TokKind::Pos;
+    !(i.name_start.kind == Pos && i.name_end.kind == Pos && (i.name_end.pos - i.name_start.pos).abs() > MAX_SITE_GAP)
+}
+
 pub fn run(args: &Args) -> Result<(), String> {
     crate::diag::start();
     // ---- 1. config, validation, genome
@@ -224,6 +234,14 @@ pub fn run(args: &Args) -> Result<(), String> {
             all.extend(imp.records);
             accepted.push(k as FileId);
         }
+    }
+    // HARD rule: a TSD / target-site deletion is never longer than MAX_SITE_GAP (120 bp). Discovery
+    // refuses wider windows since 2026-10-08, but older per-colony files (e.g. PD51635, run with
+    // L1-mediated far pairing) still carry 14-22 kb "pairs": drop them here, before anything else.
+    let n0 = all.len();
+    all.retain(site_gap_ok);
+    if all.len() < n0 {
+        println!("site gap: removed {} loci with |TSD/target-site deletion| > {MAX_SITE_GAP} bp", n0 - all.len());
     }
     println!("intersecting insertions from {} files...", ctx.files.len());
     crate::diag::memlog("import");
