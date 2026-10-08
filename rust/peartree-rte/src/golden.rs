@@ -273,6 +273,35 @@ pub fn record(v: &Value) -> RteRecord {
 }
 
 /// Genomes defined by `genome` events, by id.
+/// Prefix every genome id of `events` with `ns`: the `id` of `genome` events and every string
+/// under a `genome` / `remap` key at any depth. The pytest and e2e goldens both number their
+/// genomes `g1, g2, ...`; merged unprefixed, the later file's genomes replace the earlier's.
+pub fn namespace_genomes(events: &mut [Value], ns: &str) {
+    fn walk(v: &mut Value, ns: &str) {
+        match v {
+            Value::Object(m) => {
+                for (k, x) in m.iter_mut() {
+                    if (k == "genome" || k == "remap") && x.is_string() {
+                        *x = Value::String(format!("{ns}{}", x.as_str().unwrap()));
+                    } else {
+                        walk(x, ns);
+                    }
+                }
+            }
+            Value::Array(a) => a.iter_mut().for_each(|x| walk(x, ns)),
+            _ => {}
+        }
+    }
+    for e in events.iter_mut() {
+        if e["kind"] == "genome" {
+            if let Some(id) = e["id"].as_str().map(|s| format!("{ns}{s}")) {
+                e["id"] = Value::String(id);
+            }
+        }
+        walk(e, ns);
+    }
+}
+
 #[derive(Default)]
 pub struct Genomes {
     by_id: rustc_hash::FxHashMap<String, Box<dyn Genome>>,

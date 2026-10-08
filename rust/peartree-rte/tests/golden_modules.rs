@@ -15,7 +15,9 @@ fn all_events() -> Vec<Value> {
     let mut v = load_events(&golden::golden_dir().join("pytest.jsonl.gz"));
     if let Some(m) = golden::e2e_manifest() {
         if std::env::var_os("PEARTREE_RTE_SKIP_E2E").is_none() {
-            v.extend(load_events(Path::new(m["golden"].as_str().unwrap())));
+            let mut e2e = load_events(Path::new(m["golden"].as_str().unwrap()));
+            golden::namespace_genomes(&mut e2e, "e2e:");
+            v.extend(e2e);
         }
     }
     v
