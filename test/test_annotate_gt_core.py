@@ -167,3 +167,32 @@ def test_alu_vote_blocked_by_any_sva_hit():
                     ("right", 2, _dfam("SVA_F", 20))]
     assert ins.conclusion() == base
     assert ins.gt_core.startswith("unresolved") and "SVA hits" in ins.gt_core
+
+
+def test_streamed_bounded_selection_equals_gt_query_seqs():
+    """read_gt_core keeps per locus only the gt_keep_bound() smallest distinct candidates while
+    streaming the file; the selection must equal gt_query_seqs() over every read (many duplicate
+    sequences under different roles / sides, more candidates than the bound)."""
+    ins = _ins()
+    pool = [ALU[i:i + 40 + (i % 50)] for i in range(0, 150, 3)]
+    annotate_v2.CONFIG["annotate"]["gt_core_max_queries"] = 3
+    try:
+        bound = Insertion.gt_keep_bound()
+        for trial in range(30):
+            reads = []
+            for _ in range(RNG.randint(1, 200)):
+                s = RNG.choice(pool)
+                role = RNG.choice(["GT_MATE", "GT_CLIP", "GT_POLYA", "GT_DISC"])
+                side = RNG.choice(["LEFT", "RIGHT"])
+                seq = (RFLANK[-30:] + s) if side == "RIGHT" else (s + LFLANK[:30])
+                reads.append((side, role, seq if RNG.random() < 0.8 else s))
+            lst = []
+            for r in reads:
+                c = ins.gt_query_candidate(*r)
+                if c is not None:
+                    lst.append(c)
+                    if len(lst) > 2 * bound:
+                        lst[:] = sorted(set(lst))[:bound]
+            assert Insertion.gt_select(lst) == ins.gt_query_seqs(reads), trial
+    finally:
+        del annotate_v2.CONFIG["annotate"]["gt_core_max_queries"]

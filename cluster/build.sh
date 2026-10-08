@@ -48,18 +48,23 @@ fi
 
 echo "cargo: $(command -v cargo)"
 cargo --version
+# PT_CARGO_OFFLINE=1: build from the crates already in CARGO_HOME (a compute node without
+# internet, after one online build / `cargo fetch` on the head node)
+OFFLINE=""
+[ "${PT_CARGO_OFFLINE:-0}" = 1 ] && OFFLINE="--offline"
 
-cargo build --release --manifest-path rust/peartree-discovery/Cargo.toml
-cargo build --release --manifest-path rust/peartree-genotype/Cargo.toml
-cargo build --release --manifest-path rust/peartree-genotype2/Cargo.toml
+cargo build --release $OFFLINE --manifest-path rust/peartree-discovery/Cargo.toml
+cargo build --release $OFFLINE --manifest-path rust/peartree-genotype/Cargo.toml
+cargo build --release $OFFLINE --manifest-path rust/peartree-genotype2/Cargo.toml
 # combine_insertions port (only used with COMBINE_IMPL=rust; the python combine does not need
 # it, so a failure here must not block the discovery/genotype builds above)
-cargo build --release --manifest-path rust/peartree-combine/Cargo.toml \
+cargo build --release $OFFLINE --manifest-path rust/peartree-combine/Cargo.toml \
     || echo "WARNING: rust/peartree-combine failed to build — COMBINE_IMPL=rust unavailable (python combine unaffected)" >&2
-# tools/rte port (annotate's TPRT-hallmark step, memory-bounded); optional until annotate_v2 calls
-# it (rust/peartree-rte/SPEC.md), so a failure must not block the builds above
-cargo build --release --manifest-path rust/peartree-rte/Cargo.toml \
-    || echo "WARNING: rust/peartree-rte failed to build — annotate keeps the python tools/rte" >&2
+# tools/rte port (annotate's TPRT-hallmark step): REQUIRED. annotate_v2 runs it by default
+# (CONFIG['annotate']['rte_engine'] = auto -> rust when built); the python tools/rte holds every
+# read of the patient in memory (PD49229, 722 colonies: killed at 32 GB). Needs a C/C++ compiler
+# (vendored edlib, minimap2 C sources of the minimap2-sys crate) and zlib headers.
+cargo build --release $OFFLINE --manifest-path rust/peartree-rte/Cargo.toml
 
 echo
 echo "built:"
@@ -67,7 +72,7 @@ ls -la rust/peartree-discovery/target/release/peartree-discovery
 ls -la rust/peartree-genotype/target/release/peartree-genotype
 ls -la rust/peartree-genotype2/target/release/peartree-genotype2
 ls -la rust/peartree-combine/target/release/peartree-combine 2>/dev/null || true
-ls -la rust/peartree-rte/target/release/peartree-rte 2>/dev/null || true
+ls -la rust/peartree-rte/target/release/peartree-rte
 
 # Report which OPTIONAL, CONFIG-GATED features this binary actually implements. A stale binary
 # does not announce itself: config.rs tolerates unknown keys by design, so an old build fed a

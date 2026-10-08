@@ -1,6 +1,7 @@
 """annotate_v2 <-> rust/peartree-rte file contract (rust/peartree-rte/SPEC.md "Interface").
 
-Not wired into annotate_v2 yet (the integration stage does that). Three helpers:
+Used by annotate_v2 (`VariantAnnotationContainer._run_rte_rust`, engine selection in
+`rte_engine()`: CONFIG['annotate']['rte_engine'] = 'rust' | 'python' | 'auto'). Three helpers:
 
     write_inputs(inputs, path)     {key: InsertionInput} -> JSONL, one object per insertion, in order
     write_config(cfg, path)        CONFIG['annotate'] -> JSON (callables dropped; rte_library made
@@ -64,7 +65,8 @@ class RustRecord:
         self.structure = r["structure"]
         self.tags = [] if r["tags"] == "." else r["tags"].split(",")
         self.tprt_call = r["tprt_call"]
-        self.tprt_score = r["tprt_score"]
+        # python's value: round(sum(points), 2) (a float), or the int 0 when no point fired
+        self.tprt_score = 0 if r["tprt_points"] == "." else float(r["tprt_score"])
         self.tprt_points = r["tprt_points"]
         self.consensus = "" if r["consensus"] == "." else r["consensus"]
         self.detail = json.loads(r["rte_detail_json"])

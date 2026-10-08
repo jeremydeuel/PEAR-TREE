@@ -1031,23 +1031,38 @@ class Insertion:
         Short (< gt_core_min_len), poly-A/T (>= 80% one base) and low-entropy inserts carry no
         family signal and are dropped; identical sequences once; mates first (they reach deepest
         into the element), longest first; at most gt_core_max_queries."""
-        min_len = self._gt_cfg('gt_core_min_len', 30)
-        cap = self._gt_cfg('gt_core_max_queries', 20)
-        cands = []
-        for side, role, seq in reads:
-            if role not in ('GT_MATE', 'GT_CLIP', 'GT_POLYA') or side not in ('LEFT', 'RIGHT'):
-                continue
-            s = seq.upper()
-            anchor = self._gt_flank_anchor(side)
-            p = s.find(anchor) if anchor else -1
-            if p >= 0:
-                s = s[p + len(anchor):] if side == 'RIGHT' else s[:p]
-            elif role != 'GT_MATE':
-                continue
-            if len(s) < min_len or max(s.count('A'), s.count('T')) >= 0.8 * len(s) \
-                    or self._shannon(s) < self._GT_LOW_COMPLEXITY_ENTROPY:
-                continue
-            cands.append((role != 'GT_MATE', -len(s), side, s))
+        return self.gt_select([c for c in (self.gt_query_candidate(*r) for r in reads) if c is not None])
+
+    def gt_query_candidate(self, side, role, seq):
+        """One read's contribution to gt_query_seqs(): its sort key + inserted sequence
+        (role != GT_MATE, -len, side, seq), or None. Per read, so the container can stream the
+        genotype_reads file (read_gt_core) instead of holding every read."""
+        if role not in ('GT_MATE', 'GT_CLIP', 'GT_POLYA') or side not in ('LEFT', 'RIGHT'):
+            return None
+        s = seq.upper()
+        anchor = self._gt_flank_anchor(side)
+        p = s.find(anchor) if anchor else -1
+        if p >= 0:
+            s = s[p + len(anchor):] if side == 'RIGHT' else s[:p]
+        elif role != 'GT_MATE':
+            return None
+        if len(s) < self._gt_cfg('gt_core_min_len', 30) or max(s.count('A'), s.count('T')) >= 0.8 * len(s) \
+                or self._shannon(s) < self._GT_LOW_COMPLEXITY_ENTROPY:
+            return None
+        return (role != 'GT_MATE', -len(s), side, s)
+
+    @classmethod
+    def gt_keep_bound(cls):
+        """How many of a locus's smallest DISTINCT candidates are enough for gt_select(): one
+        sequence occurs in at most 4 keys (GT_MATE or not x LEFT/RIGHT), so the first `cap`
+        distinct sequences of the sorted list lie within its first 4 * cap distinct entries."""
+        return 4 * max(1, int(cls._gt_cfg('gt_core_max_queries', 20)))
+
+    @classmethod
+    def gt_select(cls, cands):
+        """gt_query_seqs()'s selection over its candidates: identical sequences once, mates
+        first, longest first; at most gt_core_max_queries."""
+        cap = cls._gt_cfg('gt_core_max_queries', 20)
         out, seen = [], set()
         for _, _, side, s in sorted(cands):
             if s in seen:
@@ -1455,12 +1470,68 @@ class VariantAnnotationContainer:
         # TPRT-hallmark annotation (tools/rte): additive columns, only when configured
         self.rte_records = self.run_rte()
 
+    # tools/rte engine: the Rust port (rust/peartree-rte, memory-bounded: the reads FASTA is
+    # streamed and spilled, never held) or the python package (holds every read of the patient
+    # in memory: PD49229, 722 colonies, was killed at 32 GB). CONFIG['annotate'] keys:
+    #   rte_engine  'rust' | 'python' | 'auto' (default): auto = rust when the binary exists
+    #   rte_binary  path of the peartree-rte binary (default: the repo's release build)
+    #   rte_threads worker threads (default: AN_CORES / LSB_DJOB_NUMPROC / cpu count)
+    # A failing binary FAILS the annotate job: no silent fallback to python (it would re-OOM).
+    _RTE_BINARY = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                               'rust', 'peartree-rte', 'target', 'release', 'peartree-rte')
+
+    def rte_engine(self):
+        """('rust', binary) or ('python', None), decided once per run."""
+        if getattr(self, '_rte_engine', None) is not None:
+            return self._rte_engine
+        cfg = CONFIG['annotate']
+        want = str(cfg.get('rte_engine') or 'auto').lower()
+        binary = cfg.get('rte_binary') or self._RTE_BINARY
+        have = os.path.isfile(binary) and os.access(binary, os.X_OK)
+        if want == 'python':
+            eng = ('python', None)
+        elif want == 'rust':
+            if not have:
+                raise FileNotFoundError(f"CONFIG['annotate']['rte_engine'] = 'rust' but {binary} is missing "
+                                        f"(build it: bash cluster/build.sh)")
+            eng = ('rust', binary)
+        elif want == 'auto':
+            if have:
+                eng = ('rust', binary)
+            else:
+                print(f"[rte] WARNING: {binary} not built -- falling back to the python tools/rte, which "
+                      f"holds every read of the patient in memory (build: bash cluster/build.sh)", flush=True)
+                eng = ('python', None)
+        else:
+            raise ValueError(f"CONFIG['annotate']['rte_engine'] must be rust, python or auto, got {want!r}")
+        self._rte_engine = eng
+        return eng
+
+    @staticmethod
+    def _rte_threads():
+        n = CONFIG['annotate'].get('rte_threads')
+        for v in (n, os.environ.get('AN_CORES'), os.environ.get('LSB_DJOB_NUMPROC')):
+            try:
+                if v is not None and int(v) > 0:
+                    n = int(v)
+                    break
+            except ValueError:
+                pass
+        else:
+            n = None
+        try:
+            avail = len(os.sched_getaffinity(0))
+        except AttributeError:
+            avail = os.cpu_count() or 1
+        return max(1, min(n or avail, avail))
+
     def run_rte(self):
         """tools/rte plug-in: element / structure / tags / TSD / EN / poly-A / TPRT score per
         insertion, from the combine sidecars (insertions.evidence.tsv.gz + insertions.reads.fa.gz)
         and the reference RTE library. Enabled by CONFIG['annotate']['rte_library']; returns {}
         (no new columns, legacy output byte-identical) otherwise. The sidecars default to the
-        insertions file's siblings and may be absent (the junction strings are used alone)."""
+        insertions file's siblings and may be absent (the junction strings are used alone).
+        Engine: rte_engine() (the Rust binary by default when built)."""
         cfg = CONFIG['annotate']
         if not cfg.get('rte_library'):
             return {}
@@ -1469,26 +1540,68 @@ class VariantAnnotationContainer:
         except ImportError:                       # run as `python tools/annotate_v2.py`
             from rte.annotator import RteAnnotator, InsertionInput
         ev_path, rd_path = self.evidence_paths()
-        ann = RteAnnotator(cfg, gene_model=Insertion.gene_model)
-        self.rte_lib = ann.lib
-        if getattr(self, 'evidence', None) is not None:    # parsed once by read_evidence_clips()
-            ann.evidence = self.evidence
-            ev_path = None
-        ann.load_evidence(ev_path, rd_path, wanted=set(self.insertions), gt_reads_path=self.gt_reads_path())
-        # optional gt_reads / gt_changed columns, only when a genotype_reads file was read
-        self.rte_gt = ann.has_gt_reads
         inputs = {k: InsertionInput.from_legacy(ins, self.element_class(ins.conclusion()))
                   for k, ins in self.insertions.items()}
-        records = ann.annotate_all(inputs)
+        engine, binary = self.rte_engine()
+        if engine == 'rust':
+            records = self._run_rte_rust(binary, inputs, ev_path, rd_path, self.gt_reads_path())
+        else:
+            ann = RteAnnotator(cfg, gene_model=Insertion.gene_model)
+            self.rte_lib = ann.lib
+            if getattr(self, 'evidence', None) is not None:    # parsed once by read_evidence_clips()
+                ann.evidence = self.evidence
+                ev_path = None
+            ann.load_evidence(ev_path, rd_path, wanted=set(self.insertions), gt_reads_path=self.gt_reads_path())
+            # optional gt_reads / gt_changed columns, only when a genotype_reads file was read
+            self.rte_gt = ann.has_gt_reads
+            records = ann.annotate_all(inputs)
         for k, rec in records.items():
             ins = self.insertions.get(k)
             if ins is not None and inputs[k].pseudogene_genes:
                 ins.exon_junction_proven = 'EXON_JUNCTION' in rec.tags
-        print(f"[rte] annotated {len(records)} insertions "
+        print(f"[rte] annotated {len(records)} insertions ({engine}) "
               f"({sum(1 for r in records.values() if r.tprt_call == 'TPRT')} TPRT)")
         if self.rte_gt:
             print(f"[rte] genotype reads used at {sum(1 for r in records.values() if r.gt_reads)} insertions, "
                   f"changing a call at {sum(1 for r in records.values() if r.gt_changed)}")
+        return records
+
+    def _run_rte_rust(self, binary, inputs, ev_path, rd_path, gt_path):
+        """Annotate with rust/peartree-rte (SPEC.md "Interface"): inputs JSONL + config JSON in a
+        scratch dir (TPRT_ANNOT_TMP, else the run directory), the binary's TSV read back into
+        records exposing what annotate_v2 / locus_class read from an RteRecord. Non-zero exit ->
+        RuntimeError (the annotate job fails; no fallback)."""
+        import shutil
+        import tempfile
+        try:
+            from tools.rte import rust_bridge
+            from tools.rte.library import RteLibrary
+        except ImportError:
+            from rte import rust_bridge
+            from rte.library import RteLibrary
+        cfg = CONFIG['annotate']
+        self.rte_lib = RteLibrary(cfg['rte_library'], cfg)       # locus_class reads the library
+        base = os.environ.get('TPRT_ANNOT_TMP') or os.getcwd()
+        os.makedirs(base, exist_ok=True)
+        work = tempfile.mkdtemp(prefix=f"{self.sample}.rte.", dir=base)
+        inp, conf, out = (os.path.join(work, f) for f in ('inputs.jsonl.gz', 'config.json', 'rte.tsv.gz'))
+        rust_bridge.write_inputs(inputs, inp)
+        rust_bridge.write_config(cfg, conf)
+        exists = lambda p: bool(p) and os.path.exists(p)          # noqa: E731
+        cmd = [binary, 'annotate', '--config', conf, '--inputs', inp, '--out', out, '--tmp-dir', work,
+               '--threads', str(self._rte_threads())]
+        for flag, p in (('--evidence', ev_path), ('--reads', rd_path), ('--gt-reads', gt_path)):
+            if exists(p):
+                cmd += [flag, p]
+        print(f"[rte] {' '.join(cmd)}", flush=True)
+        rc = subprocess.run(cmd).returncode
+        if rc != 0:
+            raise RuntimeError(f"peartree-rte failed (exit {rc}); its inputs are kept in {work}")
+        records = rust_bridge.read_records(out)
+        if len(records) != len(inputs):
+            raise RuntimeError(f"peartree-rte wrote {len(records)} records for {len(inputs)} insertions ({out})")
+        self.rte_gt = exists(gt_path)
+        shutil.rmtree(work, ignore_errors=True)
         return records
 
     def read_gene_model(self):
@@ -1589,6 +1702,14 @@ class VariantAnnotationContainer:
         """{insertion: [(side, role, seq)]} of the GT_* records of a genotype_reads FASTA
         (`>locus|SIDE|ROLE|sample|frag|r12`); any other role is ignored."""
         out = {}
+        for locus, side, role, seq in VariantAnnotationContainer._iter_gt_fasta(path, wanted):
+            out.setdefault(locus, []).append((side, role, seq))
+        return out
+
+    @staticmethod
+    def _iter_gt_fasta(path, wanted):
+        """(locus, side, role, seq) per GT_* record of a genotype_reads FASTA, streamed (the
+        file of a 700-colony patient must not be held in memory: read_gt_core)."""
         with (gzip.open(path, 'rt') if path.endswith('.gz') else open(path)) as fh:
             head = None
             for line in fh:
@@ -1601,8 +1722,7 @@ class VariantAnnotationContainer:
                 locus, side, role = '|'.join(head[:-5]), head[-5].upper(), head[-4].upper()
                 head = None
                 if role.startswith('GT_') and locus in wanted:
-                    out.setdefault(locus, []).append((side, role, line.strip()))
-        return out
+                    yield locus, side, role, line.strip()
 
     def read_gt_core(self):
         """Scan the inserted parts of the genotyping reads (Insertion.gt_query_seqs) with the
@@ -1617,16 +1737,29 @@ class VariantAnnotationContainer:
         if not CONFIG['annotate'].get('gt_core', True) or not path or not os.path.exists(path):
             return
         self.gt_core_on = True
-        reads = self._read_gt_fasta(path, set(self.insertions))
+        # streamed: per locus only its smallest distinct query candidates are kept (enough for
+        # Insertion.gt_select, see gt_keep_bound), never the reads themselves
+        bound = Insertion.gt_keep_bound()
+        cands = {}                                     # title -> [candidate], first-seen order
+        n_reads = 0
+        for title, side, role, seq in self._iter_gt_fasta(path, self.insertions):
+            n_reads += 1
+            lst = cands.setdefault(title, [])
+            c = self.insertions[title].gt_query_candidate(side, role, seq)
+            if c is not None:
+                lst.append(c)
+                if len(lst) > 2 * bound:
+                    lst[:] = sorted(set(lst))[:bound]
         queries = []                                   # (qid, title, side 'left'|'right', seq)
-        for title, rs in reads.items():
+        for title, lst in cands.items():
             ins = self.insertions[title]
-            qs = ins.gt_query_seqs(rs)
+            qs = Insertion.gt_select(lst)
             ins.gt_queries = len(qs)
             for k, (side, seq) in enumerate(qs):
                 queries.append((f"{title}|GT|{k}:{side[0]}", title, side.lower(), seq))
-        print(f"genotyping reads: {sum(map(len, reads.values()))} for {len(reads)} insertions from {path}; "
-              f"{len(queries)} insert queries for {sum(1 for t in reads if self.insertions[t].gt_queries)} insertions")
+        print(f"genotyping reads: {n_reads} for {len(cands)} insertions from {path}; "
+              f"{len(queries)} insert queries for {sum(1 for t in cands if self.insertions[t].gt_queries)} insertions")
+        del cands
         if not queries:
             return
         tmp = CONFIG['annotate']['tmp']
@@ -1680,6 +1813,24 @@ class VariantAnnotationContainer:
         self.evidence = None
         ev_path, _ = self.evidence_paths()
         if not ev_path or not os.path.exists(ev_path):
+            return
+        if not (CONFIG['annotate'].get('rte_library') and self.rte_engine()[0] == 'python'):
+            # nobody needs the parsed sidecar (the Rust engine reads the file itself): stream it,
+            # keeping only the two clip strings of the called insertions
+            import csv
+            seen = set()
+            with gzip.open(ev_path, 'rt') if ev_path.endswith('.gz') else open(ev_path) as fh:
+                for r in csv.DictReader((l for l in fh if l.strip()), delimiter="\t"):
+                    ins = self.insertions.get(r.get("insertion_id") or "")
+                    if ins is None:
+                        continue
+                    seen.add(ins.title)
+                    side = (r.get("side") or "").upper()
+                    if side == 'LEFT':
+                        ins.evidence_left = (r.get("clip_consensus") or "").strip(".")
+                    elif side == 'RIGHT':
+                        ins.evidence_right = (r.get("clip_consensus") or "").strip(".")
+            print(f"read evidence clips for {len(seen)} insertions from {ev_path}")
             return
         try:
             from tools.rte.inputs import read_evidence_tsv

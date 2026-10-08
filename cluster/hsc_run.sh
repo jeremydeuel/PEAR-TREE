@@ -9,7 +9,7 @@
 #   combine     Rust peartree-combine, src/config.py = config.py.grch38.tprt (+ tprt/arm_config.py)
 #   genotype    peartree-genotype2, config.genotype2.grch38.refbias, two-sided loci only
 #   joint       --ref-bias auto (global / per kind / per colony), colony zygosity, no NOISE cap
-#   annotate    annotate_v2 + RTE library (tools/rte), locus_class
+#   annotate    annotate_v2 + RTE library (Rust peartree-rte, tools/rte port; spill in $HSC_ROOT/tmp/<P>), locus_class
 #   report      tools/phylo/tree_fit.py + cluster/somatic_table.py -> <P>.somatic.xlsx
 #
 # Assembly: per patient from colonies.tsv (all WGS rows GRCh38, or all hs37d5/GRCh37), override
@@ -68,7 +68,7 @@ cmd_setup() {
     note "building Rust binaries in $PT_ROOT"
     module load "$RUST_MODULE" >/dev/null 2>&1 || true
     bash "$PT_ROOT/cluster/build.sh"
-    for b in peartree-discovery peartree-combine peartree-genotype2; do
+    for b in peartree-discovery peartree-combine peartree-genotype2 peartree-rte; do
         [ -x "$PT_ROOT/rust/$b/target/release/$b" ] || die "build did not produce $b"
     done
     cat > "$PT_ROOT/src/config.py" <<EOF
@@ -144,7 +144,7 @@ cmd_submit() {
         || die "$d/colonies.tsv has no rows — run: bash $PT_ROOT/cluster/hsc_run.sh populate $P"
     [ -s "$PT_ROOT/src/config.py" ] && grep -q TPRT_AB_ARM "$PT_ROOT/src/config.py" \
         || die "no generated src/config.py — run: bash $PT_ROOT/cluster/hsc_run.sh setup"
-    for b in peartree-discovery peartree-combine peartree-genotype2; do
+    for b in peartree-discovery peartree-combine peartree-genotype2 peartree-rte; do
         [ -x "$PT_ROOT/rust/$b/target/release/$b" ] || die "missing $b — run setup"
     done
 
