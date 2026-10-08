@@ -19,8 +19,16 @@ Artefact checks cap a call at tier D and say why in tier_note:
       --fit-legacy C_rust/eval/fit/phylo_fit.tsv --annotation C_rust/PD37590/PD37590.annotated.csv.gz \
       --known patients/colorectum/PD37590/known_insertions.tsv --out PD37590.somatic.xlsx
 
-Sheets: README, somatic (the table, sorted by tier), known (the known insertions' rows),
-refbias (the b estimates, when --refbias is given).
+Hard rules (Jeremy, 2026-10-08) EXCLUDE a candidate (moved to the `excluded` sheet with the reason):
+  * site gap          |TSD / target-site deletion| > 120 bp (MAX_SITE_GAP)
+  * junction support  no colony with >= 2 INDEPENDENT fragments on BOTH ends: CLIP / POLYA reads count;
+                      next to >= 1 such clip, a SHORT overhang or a DISC pair whose inside mate AGREES with
+                      that clip's inserted sequence (>= 25 bp at >= 90 %) adds a fragment; a discordant
+                      pair alone, or one that does not agree on the insert, never counts; templates whose
+                      read AND mate agree within 5 bp (allele-forward shift, R1/R2 ignored) are one molecule
+  Known insertions (tier A) are kept and only flagged in tier_note.
+Sheets: README, somatic (the table, sorted by tier), excluded (the rule failures), known (the known
+insertions' rows), refbias (the b estimates, when --refbias is given).
 """
 import argparse
 import collections
@@ -63,6 +71,144 @@ def parse_locus(name):
     if not m:
         return None
     return m.group(1), int(m.group(2)), int(m.group(3))
+
+
+# ------------------------------------------------------------------ hard rules
+MAX_SITE_GAP = 120            # bp, |TSD / target-site deletion| of a two-sided locus
+MIN_JUNCTION_FRAGMENTS = 2    # independent junction-crossing fragments per end, in one colony
+DUP_SHIFT = 5                 # bp: read and mate both within this shift = one molecule (= discovery/combine)
+JUNCTION_ROLES = ("CLIP", "POLYA")
+AGREE_MIN_BP = 25             # a DISC mate must share >= this many bp of a clip's insert ...
+AGREE_MIN_ID = 0.9            # ... at >= this identity to count as a second fragment
+
+
+def site_gap(loc):
+    p = parse_locus(loc)
+    return None if p is None else p[2] - p[1]
+
+
+def shift_match(a, b, tol=DUP_SHIFT, min_id=0.8):
+    """True when b starts within tol bases of a (allele-forward, same orientation) -- the sequence-only
+    stand-in for "same outer coordinate". Identity (>= min_id over the overlap) only LOCATES the offset:
+    clipped tails of PCR duplicates carry many sequencing errors (low-quality poly-A/T), so it is lax."""
+    if not a or not b:
+        return False
+    for d in range(-tol, tol + 1):
+        x, y = (a[d:], b) if d >= 0 else (a, b[-d:])
+        n = min(len(x), len(y))
+        if n < 30:
+            continue
+        if sum(1 for i in range(n) if x[i] == y[i]) >= min_id * n:
+            return True
+    return False
+
+
+def _molecules(rows):
+    """single-linkage PCR-duplicate collapse of rows (kind, frag, read_seq, mate_seq): one component per
+    molecule (read and mate both shift-match; a mate missing on either side: the read decides)"""
+    n = len(rows)
+    parent = list(range(n))
+
+    def root(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+    for i in range(n):
+        for j in range(i + 1, n):
+            mi, mj = rows[i][3], rows[j][3]
+            # a missing mate is unknown, not evidence of a second molecule: the read alone decides
+            if shift_match(rows[i][2], rows[j][2]) and (not (mi and mj) or shift_match(mi, mj)):
+                parent[root(j)] = root(i)
+    comp = collections.defaultdict(list)
+    for i in range(n):
+        comp[root(i)].append(rows[i])
+    return list(comp.values())
+
+
+def insert_part(read, side, record):
+    """the inserted (clipped) part of an allele-forward junction read, located with the combined record's
+    reference flank (`:L` = clip + FLANK, `:R` = FLANK + clip); falls back to the record's clip"""
+    clip = "".join(c for c in record if c.islower()).upper()
+    flank = "".join(c for c in record if c.isupper())
+    if len(flank) >= 15:
+        if side == "L":
+            k = read.find(flank[:15])
+            if k > 0:
+                return read[:k]
+        else:
+            k = read.find(flank[-15:])
+            if k >= 0:
+                return read[k + 15:]
+    return clip
+
+
+def agrees(mate, insert, k=12):
+    """mate and insert share >= AGREE_MIN_BP on one diagonal at >= AGREE_MIN_ID (same orientation:
+    both allele-forward), i.e. they agree on what was inserted"""
+    if not mate or len(insert) < AGREE_MIN_BP:
+        return False
+    seeds = collections.defaultdict(list)
+    for i in range(len(insert) - k + 1):
+        seeds[insert[i:i + k]].append(i)
+    tried = set()
+    for j in range(len(mate) - k + 1):
+        for i in seeds.get(mate[j:j + k], ()):
+            d = j - i
+            if d in tried:
+                continue
+            tried.add(d)
+            lo, hi = max(0, -d), min(len(insert), len(mate) - d)
+            n = hi - lo
+            if n >= AGREE_MIN_BP and sum(insert[x] == mate[x + d] for x in range(lo, hi)) >= AGREE_MIN_ID * n:
+                return True
+    return False
+
+
+def end_support(frags, side, record):
+    """frags: {frag: (role, frag, read, mate)} of one colony at one end -> independent fragments:
+    CLIP/POLYA molecules, plus (only next to >= 1 of them) SHORT-only molecules and DISC molecules whose
+    inside mate agrees with a clip's insert"""
+    rows = list(frags.values())
+    clips = [r for r in rows if r[0] in JUNCTION_ROLES]
+    if not clips:
+        return 0
+    inserts = [insert_part(r[2], side, record) for r in clips]
+    usable = [r for r in rows if r[0] in JUNCTION_ROLES or r[0] == "SHORT"
+              or (r[0] == "DISC" and any(agrees(r[3], ins) for ins in inserts))]
+    return len(_molecules(usable))
+
+
+def junction_support(reads, cons=None, loc=None):
+    """reads: [(side, role, sample, frag, r12, seq)] of one locus -> {sample: (L, R)} independent
+    fragments per end (reads.fa LEFT/RIGHT -> L/R); cons = combined records {(locus, 'L'|'R'): seq}"""
+    cons = cons or {}
+    mates = {(r[0], r[2], r[3]): r[5] for r in reads if r[1] == "MATE"}
+    per = collections.defaultdict(lambda: collections.defaultdict(dict))
+    for side, role, sample, frag, r12, seq in reads:
+        if role in JUNCTION_ROLES or role in ("SHORT", "DISC"):
+            s = {"LEFT": "L", "RIGHT": "R"}.get(side, side)
+            per[sample][s].setdefault(frag, (role, frag, seq, mates.get((side, sample, frag), "")))
+    return {smp: tuple(end_support(d.get(s, {}), s, cons.get((loc, s), "")) for s in ("L", "R"))
+            for smp, d in per.items()}
+
+
+def hard_rules(loc, reads_by, check_fragments, cons=None):
+    """-> (violations, support text); support = the best colony's independent fragments per end"""
+    bad = []
+    g = site_gap(loc)
+    if g is not None and abs(g) > MAX_SITE_GAP:
+        bad.append(f"site gap {g} bp (|gap| > {MAX_SITE_GAP})")
+    txt = ""
+    if check_fragments:
+        sup = junction_support(reads_by.get(loc, []), cons, loc)
+        best = max(sup.items(), key=lambda kv: (min(kv[1]), sum(kv[1])), default=None)
+        if best:
+            txt = f"{best[0]}: L{best[1][0]}/R{best[1][1]}"
+        if not best or min(best[1]) < MIN_JUNCTION_FRAGMENTS:
+            bad.append(f"< {MIN_JUNCTION_FRAGMENTS} independent junction fragments on an end in every colony"
+                       + (f" (best {txt})" if txt else " (no junction reads)"))
+    return bad, txt
 
 
 def joint_class(r):
@@ -436,8 +582,8 @@ def main():
               "L_n_reads", "L_n_fragments", "L_n_samples", "L_n_mates", "L_polya_len", "L_beyond_polya",
               "R_n_reads", "R_n_fragments", "R_n_samples", "R_n_mates", "R_polya_len", "R_beyond_polya",
               "reads_by_role", "L_junction (REF upper | clip lower)", "R_junction (REF upper | clip lower)",
-              "L_clip_consensus", "R_clip_consensus"]
-    rows = []
+              "L_clip_consensus", "R_clip_consensus", "junction_fragments (best colony L/R)"]
+    rows, excluded = [], []
     for loc, src in cand.items():
         j = joint.get(loc, {})
         f2, fl, an = fit2.get(loc, {}), fitl.get(loc, {}), ann.get(loc, {})
@@ -486,6 +632,9 @@ def main():
         if notes and tier in ("B", "C"):
             notes.insert(0, f"tier {tier} -> D")
             tier = "D"
+        violations, support = hard_rules(loc, reads_by, bool(a.insertions_dir), cons)
+        if violations and k:
+            notes.append("KNOWN but fails: " + "; ".join(violations))
         p = parse_locus(loc) or ("", "", "")
         num = lambda x: (round(fnum(x), 4) if fnum(x) == fnum(x) else (x or ""))
         clean = lambda x: "" if x in (None, ".", "NA", "nan") else x
@@ -507,18 +656,26 @@ def main():
                      num(clean(an.get("covered_5p", ""))), num(clean(an.get("covered_3p", ""))),
                      clean(an.get("tags", "")), clean(an.get("rte_detail", "")),
                      clean(an.get("site_region", "")), clean(an.get("site_gene", "")), clean(an.get("site_strand", "")),
-                     clean(an.get("conclusion", ""))] + side_cols(loc, evid, cons, reads_by))
+                     clean(an.get("conclusion", ""))] + side_cols(loc, evid, cons, reads_by) + [support])
+        if violations and not k:
+            excluded.append(["; ".join(violations)] + rows.pop())
     rank = {"A": 0, "B": 1, "C": 2, "D": 3}
     H = {h: i for i, h in enumerate(header)}
     rows.sort(key=lambda r: (rank[r[0]], bool(r[1]), -(r[H["n_carriers"]] or 0), -(fnum(r[H["tprt_score"]], 0)), r[H["locus"]]))
+    excluded.sort(key=lambda r: (rank[r[1]], r[1 + H["locus"]]))
     widths = [5, 40, 28, 7, 11, 11, 18, 10, 7, 30, 10, 16, 6, 40, 9, 9, 9, 50, 9, 9, 9,
               18, 16, 30, 18, 16, 30, 18, 18, 12, 8, 7, 14, 8, 6, 6, 9, 14, 9, 14, 9, 7, 16, 12, 8, 30, 20, 18, 18, 10, 8, 30, 9, 8, 8, 20, 60, 14, 14, 6, 60,
-              7, 7, 7, 7, 7, 9, 7, 7, 7, 7, 7, 9, 30, 60, 60, 50, 50]
+              7, 7, 7, 7, 7, 9, 7, 7, 7, 7, 7, 9, 30, 60, 60, 50, 50, 22]
 
     tier_n = collections.Counter(r[0] for r in rows)
     readme = [["PEAR-TREE somatic insertion candidates", a.patient],
               ["", ""],
               ["rows", len(rows)]] + [[f"tier {t}", f"{tier_n.get(t, 0)}  -  {d}"] for t, d in TIERS.items()] + [
+              ["excluded", f"{len(excluded)}  -  hard rules: |TSD/deletion| <= {MAX_SITE_GAP} bp; >= {MIN_JUNCTION_FRAGMENTS} "
+                           "independent fragments (CLIP/POLYA; beside a clip also SHORT, and DISC pairs whose inside mate "
+                           f"agrees with the clip's insert over >= {AGREE_MIN_BP} bp at >= {int(AGREE_MIN_ID * 100)} %; "
+                           f"read+mate within {DUP_SHIFT} bp = one PCR molecule) on BOTH ends in one colony"
+                           + ("" if a.insertions_dir else "  [fragment rule NOT checked: no --insertions-dir]")],
               ["", ""],
               ["inputs", ""],
               ["genotype2 joint", os.path.abspath(a.joint)],
@@ -563,7 +720,8 @@ def main():
                               "the junction, POLYA, DISC = discordant pair, SPAN, SHORT, MATE = the mate of an evidence read), "
                               "colony, whether that colony is a joint carrier, fragment id, read 1/2, sequence in allele-forward "
                               "orientation. Filter by locus"]]
-    sheets = [("README", readme, [26, 120], False), ("somatic", [header] + rows, widths, True)]
+    sheets = [("README", readme, [26, 120], False), ("somatic", [header] + rows, widths, True),
+              ("excluded", [["excluded_by"] + header] + excluded, [60] + widths, True)]
     krows = [r for r in rows if r[0] == "A"]
     sheets.append(("known", [header] + krows, widths, True))
     if reads_by:
@@ -580,7 +738,8 @@ def main():
         h = list(rb[0].keys())
         sheets.append(("refbias", [h] + [[num_or(r[c]) for c in h] for r in rb], [10, 22] + [12] * (len(h) - 2), True))
     write_xlsx(a.out, sheets)
-    print(f"wrote {a.out}: {len(rows)} loci ({', '.join(f'{t} {tier_n.get(t, 0)}' for t in TIERS)})")
+    print(f"wrote {a.out}: {len(rows)} loci ({', '.join(f'{t} {tier_n.get(t, 0)}' for t in TIERS)}), "
+          f"{len(excluded)} excluded by the hard rules")
 
 
 def active_cols(r):
