@@ -107,11 +107,32 @@ fn annotate(args: &[String]) -> Result<(), String> {
         t0.elapsed().as_secs_f64()
     );
     let res = peartree_rte::annotator::Resources::load(&cfg)?;
-    let ann = peartree_rte::annotator::RteAnnotator::new(&cfg, &res);
-    let records = ann.annotate_all(&inputs, &loader);
+    let mut ann = peartree_rte::annotator::RteAnnotator::new(&cfg, &res);
+    if let Some(c) = kv.get("--chunk") {
+        ann.chunk = c.parse::<usize>().map_err(|_| "--chunk: not a number")?.max(1);
+    }
+    let t1 = Instant::now();
+    let records = ann.annotate_all(&inputs, &loader)?;
+    let n_err = records.iter().filter(|r| r.detail.contains("error")).count();
+    eprintln!(
+        "[rte] annotated {} insertions in {:.1}s ({} TPRT, {} errors{})",
+        records.len(),
+        t1.elapsed().as_secs_f64(),
+        records.iter().filter(|r| r.tprt_call == "TPRT").count(),
+        n_err,
+        if loader.has_gt_reads {
+            format!(
+                "; genotype reads used at {}, changing a call at {}",
+                records.iter().filter(|r| r.gt_reads != 0).count(),
+                records.iter().filter(|r| !r.gt_changed.is_empty()).count()
+            )
+        } else {
+            String::new()
+        }
+    );
     let rows = inputs.iter().zip(&records).map(|(i, r)| peartree_rte::io::output_row(&i.title, Some(r)));
     peartree_rte::io::write_output(&out, rows)?;
-    eprintln!("[rte] annotated {} insertions -> {} in {:.1}s", records.len(), out.display(), t0.elapsed().as_secs_f64());
+    eprintln!("[rte] wrote {} rows -> {} ({:.1}s total)", records.len(), out.display(), t0.elapsed().as_secs_f64());
     Ok(())
 }
 

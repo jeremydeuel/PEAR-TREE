@@ -276,8 +276,8 @@ pub fn cons_identity(seq: &[u8], cons: &[u8]) -> f64 {
 pub struct NovelSourceFinder<'a> {
     pub lib: &'a RteLibrary,
     pub cfg: TransductionCfg,
-    pub rmsk: Option<L1Rmsk>,
-    pub locator: Option<Box<dyn Locator + 'a>>,
+    pub rmsk: Option<&'a L1Rmsk>,
+    pub locator: Option<&'a dyn Locator>,
     pub genome: Option<&'a dyn Genome>,
     /// cohort L1 calls on the remap genome: (contig, pos, '+'/'-')
     pub cohort_l1: Vec<(String, i64, char)>,
@@ -293,7 +293,7 @@ impl NovelSourceFinder<'_> {
 
     fn l1_identity(&self, contig: &str, s: i64, e: i64, strand: char, div: f64) -> f64 {
         let key = (contig.to_string(), s, e);
-        if let Some(v) = self.ident_cache.lock().unwrap().get(&key) {
+        if let Some(v) = self.ident_cache.lock().unwrap_or_else(|e| e.into_inner()).get(&key) {
             return *v;
         }
         let mut ident: Option<f64> = None;
@@ -308,7 +308,7 @@ impl NovelSourceFinder<'_> {
             }
         }
         let ident = ident.unwrap_or(1.0 - div / 100.0);
-        self.ident_cache.lock().unwrap().insert(key, ident);
+        self.ident_cache.lock().unwrap_or_else(|e| e.into_inner()).insert(key, ident);
         ident
     }
 }
@@ -331,7 +331,7 @@ impl SourceFinder for NovelSourceFinder<'_> {
         }
         // (dist, src, ident, name)
         let mut best: Option<(i64, String, f64, String)> = None;
-        if let Some(rmsk) = &self.rmsk {
+        if let Some(rmsk) = self.rmsk {
             for (ls, le, lstr, name, div) in rmsk.upstream_of(contig, s, e, gstrand, c.novel_source_max_dist) {
                 let ident = self.l1_identity(contig, ls, le, lstr, div);
                 if ident >= c.novel_source_min_identity {

@@ -257,11 +257,12 @@ fn golden_novel_find() {
         });
         let has_locator = !e["in"]["locator_answers"].as_array().unwrap().is_empty() || golden::bo(&e["in"]["available"]);
         let rmsk = e["in"]["rmsk"].as_str().map(|p| L1Rmsk::open(&golden::repo_path(p), cfg.novel_source_min_len).unwrap());
+        let locator = ReplayLocator(answers.collect());
         let f = NovelSourceFinder {
             lib,
             cfg: cfg.clone(),
-            rmsk,
-            locator: has_locator.then(|| Box::new(ReplayLocator(answers.collect())) as Box<dyn peartree_rte::transduction::Locator>),
+            rmsk: rmsk.as_ref(),
+            locator: has_locator.then_some(&locator as &dyn peartree_rte::transduction::Locator),
             genome: remap,
             cohort_l1: e["in"]["cohort_l1"].as_array().unwrap().iter().map(|c| (golden::s(&c[0]), golden::i(&c[1]), golden::s(&c[2]).chars().next().unwrap())).collect(),
             ident_cache: Default::default(),
@@ -316,7 +317,6 @@ fn golden_exon_junctions() {
 // -------------------------------------------------------------------------------- WP-INT
 /// End to end: the binary over the e2e_phylo sidecars == python's final rows (+ gt columns).
 #[test]
-#[ignore = "WP-INT"]
 fn golden_e2e_binary() {
     let Some(m) = golden::e2e_manifest() else {
         eprintln!("skipping: no e2e manifest");

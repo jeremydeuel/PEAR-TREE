@@ -1030,7 +1030,7 @@ impl AssemblyResult {
     /// by the consensus length (votes per consensus position).
     fn pileup(&mut self, asm: &Assembler) {
         let lib = asm.lib;
-        let Some(cons) = lib.consensus.get(&self.consensus) else { panic!("KeyError: {:?}", self.consensus) };
+        let Some(cons) = lib.consensus.get(&self.consensus) else { panic!("KeyError: '{}'", self.consensus) };
         let cend = lib.cons_end.get(&self.consensus).copied().unwrap_or(cons.len()) as i64;
         let cls_ = lib.class_of(&self.consensus);
         let npos = cons.len();
