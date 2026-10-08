@@ -75,11 +75,19 @@ class Segment:
                        -self.strand if self.strand else 0, self.identity, self.matches, self.cigar)
 
 
+def counts_as_fragment(lay) -> bool:
+    """False for the genotype2 extra-pass reads (GT_* roles, insertions.genotype_reads.fa.gz):
+    they are classification evidence only (element, structure, covered parts) and never a
+    fragment towards any `>= k fragments` rule (scored poly-A, strand votes, transduction /
+    templated tags) -- those stay on the combine reads alone."""
+    return not str(lay.role).startswith("GT_")
+
+
 @dataclass
 class ReadLayout:
     name: str
     side: str           # LEFT / RIGHT (as delivered), '' for mates without side
-    role: str           # JUNCTION (clip consensus), CLIP, POLYA, MATE, DISC, SPAN
+    role: str           # JUNCTION (clip consensus), CLIP, POLYA, MATE, DISC, SPAN (+ GT_*)
     frag_key: tuple
     seq: str
     segments: list = field(default_factory=list)
@@ -646,6 +654,8 @@ class AssemblyResult:
             return cend > 0 and e.t_en >= cend - tol
 
         for lay in layouts:
+            if not counts_as_fragment(lay):
+                continue
             sg = lay.segments
             for i in range(len(sg) - 2):
                 a, b, c = sg[i], sg[i + 1], sg[i + 2]
@@ -673,6 +683,8 @@ class AssemblyResult:
         votes = {1: set(), -1: set()}
         lens = {1: [], -1: []}
         for lay in layouts:
+            if not counts_as_fragment(lay):
+                continue
             segs = lay.segments
             for i, s in enumerate(segs):
                 if s.kind != "POLYA" or s.qlen < min_run:

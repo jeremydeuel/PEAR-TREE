@@ -155,7 +155,9 @@ joint step calls many more carriers, whose BAMs hold further junction reads and 
 (inside mates = more of the element: 5' truncation, inversion, transduction). With
 `gt_extra_reads = true` and `--members <P.members.tsv.gz | P.insertions.reads.fa.gz> --sample <id>`
 (src/extra.rs), every locus the colony is NOT a discovery member of (no reads of `<id>` in
-combine's reads FASTA) and where it passes the ALT gate (>= `gt_extra_min_alt` evidence reads
+combine's reads FASTA), that is not germline (discovered in at most `gt_extra_max_member_frac`
+0.5 of ALL the run's colonies: the members table's `#colonies N`, which pipeline.sh takes from
+the discovery files; skipped loci are counted on stderr) and where it passes the ALT gate (>= `gt_extra_min_alt` evidence reads
 realigned as `Alt`) gets an extra pass AFTER its row is made, so the rows are byte-identical with
 the key on or off: the Alt reads (`GT_CLIP`, `GT_POLYA` for a pure poly-A/T junction-facing
 clip), one query widened by `gt_extra_disc_span` (500) for discordant anchors (`GT_DISC`: primary,
@@ -164,10 +166,13 @@ anchor's mate fetched through the index (`GT_MATE`, site-forward like combine's
 `allele_forward_seq`; <= `gt_extra_max_mate_fetches` 3000 per colony). Output
 `<out>.extra_reads.fa.gz` in the insertions.reads.fa.gz layout (`>locus|SIDE|ROLE|sample|frag|r12`).
 Phase 4 (`tools/genotype_extra_reads.py merge`) keeps each colony's reads of a locus only when the
-joint matrix calls it a carrier (P >= 0.9) -> `insertions/<P>.insertions.genotype_reads.fa.gz`,
-which annotate_v2's RTE plug-in pools with the combine reads (`gt_reads` / `gt_changed`
-columns). They are never junction evidence (cluster/somatic_table.py reads only the combine
-roles). e2e_phylo (10 colonies, 283 loci): 50-100 gated loci per colony, ~0.1-0.2 s extra.
+joint matrix calls it a carrier (P >= 0.9) and the locus is not germline ->
+`insertions/<P>.insertions.genotype_reads.fa.gz`. annotate_v2 uses it twice: its core call scans
+the reads' inserted parts with the junction clips' Dfam / remap machinery and may resolve an
+`unknown` / `artefact` call (never a confident one; `gt_core` column, `[gt: ...]` note), and the
+RTE plug-in pools them with the combine reads (`gt_reads` / `gt_changed`). They are never
+evidence counts: cluster/somatic_table.py reads only the combine roles, and every tools/rte
+`>= k fragments` rule skips GT_* layouts (`assembly.counts_as_fragment`). e2e_phylo (10 colonies, 283 loci): 50-100 gated loci per colony, ~0.1-0.2 s extra.
 
 ## Cluster
 

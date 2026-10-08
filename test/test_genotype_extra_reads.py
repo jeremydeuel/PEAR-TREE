@@ -141,3 +141,57 @@ def test_somatic_table_hard_rules_ignore_gt_roles():
     bad_gt, _ = somatic_table.hard_rules(loc, {loc: one + gt}, True)
     assert bad_base == bad_gt and any("independent junction fragments" in b for b in bad_gt)
     assert all(not r.startswith("GT_") for r in somatic_table.JUNCTION_ROLES)
+
+
+def test_rte_fragment_rules_never_count_gt_reads():
+    """The scored poly-A (>= rte_polya_min_fragments fragments) of a locus whose tail is only in
+    the reads: from combine reads it is scored, from the SAME reads labelled GT_* it is not --
+    they still give the element its identity (classification evidence)."""
+    from tools.rte.assembly import counts_as_fragment, ReadLayout
+    lib = rte_sim.library()
+    ins = lib.consensus["L1HS"][5500:lib.cons_end["L1HS"]] + "A" * 25
+    inp, ev, genome, _ = rte_sim.build(ins)
+    s = "".join(ch for ch in inp.left_seq if ch.isupper())      # poly-A only in the clip reads
+    inp.left_seq = s
+    ev.junctions["LEFT"].clip_consensus = s
+    ev.junctions["LEFT"].polya_len_median = 0.0
+    a = RteAnnotator({"rte_library": rte_sim.FIX}, genome=genome)
+    r = a.annotate(inp, ev)
+    assert r.element == "L1" and r.polya_len >= 10
+    gt = type(ev)(ev.insertion_id, junctions=ev.junctions,
+                  reads=[EvidenceRead(x.side, "GT_" + x.role, x.sample, x.frag, x.r12, x.seq) for x in ev.reads])
+    r2 = a.annotate(inp, gt)
+    assert r2.element == "L1", "GT reads still classify"
+    assert r2.polya_len == 0 and "polya_reads" not in r2.detail and "td_frags" not in r2.detail
+    assert not counts_as_fragment(ReadLayout("x", "LEFT", "GT_MATE", ("S", "f"), "A"))
+    assert counts_as_fragment(ReadLayout("x", "LEFT", "MATE", ("S", "f"), "A"))
+
+
+def test_gt_reads_reach_no_evidence_count_consumer():
+    """Guard: the genotyping reads live in their own files and only the classification code may
+    name them. Every file that does is on this allowlist; the evidence-count consumers
+    (somatic_table hard rules, combine, the genotype2 joint step) read only the combine reads."""
+    import re
+    allowed = {
+        "cluster/pipeline.sh", "cluster/config.genotype2.grch38", "tools/genotype_extra_reads.py",
+        "tools/annotate_v2.py", "tools/rte/annotator.py", "tools/rte/assembly.py", "tools/rte/record.py",
+        "rust/peartree-genotype2/README.md", "rust/peartree-genotype2/src/extra.rs",
+        "rust/peartree-genotype2/src/main.rs", "rust/peartree-genotype2/src/config.rs",
+        "rust/peartree-genotype2/src/driver.rs",
+    }
+    pat = re.compile(r"genotype_reads|extra_reads|GT_(MATE|CLIP|POLYA|DISC|ROLE)")
+    found = set()
+    for root, dirs, files in os.walk(REPO):
+        dirs[:] = [d for d in dirs if d not in (".git", "target", "__pycache__", "venv", ".claude")]
+        for f in files:
+            rel = os.path.relpath(os.path.join(root, f), REPO)
+            if rel.startswith("test/") or rel == os.path.join("src", "config.py") or not f.endswith((".py", ".rs", ".sh", ".md", ".R", ".grch38", ".refbias")):
+                continue
+            with open(os.path.join(root, f), errors="ignore") as fh:
+                if pat.search(fh.read()):
+                    found.add(rel)
+    assert found <= allowed, f"new consumer(s) of the genotyping reads: {sorted(found - allowed)}"
+    # the report's evidence reader takes the combine reads file only
+    src = open(os.path.join(REPO, "cluster", "somatic_table.py")).read()
+    assert ".insertions.reads.fa.gz" in src and "genotype_reads" not in src
+    assert somatic_table.JUNCTION_ROLES == ("CLIP", "POLYA")

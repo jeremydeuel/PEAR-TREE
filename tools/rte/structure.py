@@ -29,6 +29,7 @@ from __future__ import annotations
 from collections import Counter
 from dataclasses import dataclass, field
 
+from .assembly import counts_as_fragment
 from .sequtil import low_complexity
 from .transduction import known_source
 
@@ -487,6 +488,8 @@ def _unexplained_tail(layouts, cls_, lib, c, call):
     best = ""
     best_j = ""
     for lay in layouts:
+        if not counts_as_fragment(lay):
+            continue
         segs = lay.segments
         for i in range(len(segs) - 1):
             x, nxt = segs[i], segs[i + 1]
@@ -534,6 +537,8 @@ def _foldback_5p(five_layouts, c, max_gap=12, min_len=15):
     Needs >= templated_min_fragments fragments. Returns [(frag_key, segment)]."""
     hits = []
     for lay in five_layouts:
+        if not counts_as_fragment(lay):
+            continue
         segs = lay.segments
         if len(segs) < 2 or segs[0].kind != "REF" or segs[0].strand == 0 or segs[0].t_st < 0:
             continue
@@ -565,6 +570,8 @@ def _local_templates(layouts, ctx, c, exclude=()):
     bps = [x for x in ((ctx.left_bp, ctx.right_bp) if ctx is not None else ()) if x is not None]
     cands = []
     for lay in layouts:
+        if not counts_as_fragment(lay):
+            continue
         for s in lay.segments:
             if s.kind != "LOCAL" or s.qlen < c["templated_min_bp"] or id(s) in exclude:
                 continue

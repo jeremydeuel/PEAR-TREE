@@ -37,7 +37,7 @@ import os
 from collections import Counter
 from dataclasses import dataclass, field
 
-from .assembly import Assembler, SiteContext
+from .assembly import Assembler, SiteContext, counts_as_fragment
 from .genome import open_genome
 from .hallmarks import (split_junction, polya_info, edge_run, PolyAInfo, locate_site, target_site, en_motif,
                         slippage_context, foldback, parse_locus)
@@ -450,7 +450,7 @@ class RteAnnotator:
             sup_t = max(sup_t, jr.polya_len_median)
         per = {"A": {}, "T": {}}
         for lay in asm.raw_layouts:
-            if lay.role == "JUNCTION":
+            if lay.role == "JUNCTION" or not counts_as_fragment(lay):
                 continue
             segs = lay.segments
             for i, sg in enumerate(segs):
@@ -480,6 +480,8 @@ class RteAnnotator:
         best = ""
         frags = set()
         for lay in asm.layouts:
+            if not counts_as_fragment(lay):
+                continue
             segs = lay.segments
             if len(segs) < 3 or segs[-1].kind != "REF" or segs[-2].kind != "POLYA":
                 continue

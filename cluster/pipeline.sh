@@ -803,7 +803,7 @@ write_bam_stats() {
 # =============================================================================
 # genotype2 extra pass: the per-colony sidecars, kept only where the joint step calls the colony a
 # carrier (P >= genotype2_io.P_CARRIER), -> insertions/<P>.insertions.genotype_reads.fa.gz, which
-# annotate_v2 (tools/rte) reads as classification evidence. Never junction evidence: the report's
+# annotate_v2 (core call + tools/rte) reads as classification evidence. Never junction evidence: the report's
 # hard rules read insertions.reads.fa.gz only.
 merge_genotype_reads() {
     local CALLS="$1" out="insertions/$PATIENT_ID.insertions.genotype_reads.fa.gz"

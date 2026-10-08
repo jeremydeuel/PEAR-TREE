@@ -326,6 +326,16 @@ class Insertion:
         # None = not evaluated (rte off), True/False once the rte pass ran. Only consulted by
         # _element_conclusion() when CONFIG['annotate']['pseudogene_require_exon_junction'] is set.
         self.exon_junction_proven = None
+        # genotyping reads (genotype2 extra pass of joint carriers that did not discover this
+        # locus, <P>.insertions.genotype_reads.fa.gz): the inserted parts submitted as extra
+        # queries (gt_queries), their Dfam hits as (side, query index, Dfam_Annotation) and their
+        # clip remaps per side. SUPPLEMENTARY evidence only (_gt_supplement); all empty unless
+        # that file was read, so every junction-based path is unchanged without it.
+        self.gt_queries = 0
+        self.gt_dfams = []
+        self.gt_left_maps = []
+        self.gt_right_maps = []
+        self.gt_core = ''
         # extract inserted sequences
     # Sequence case encodes the junction: UPPER = aligned to the reference, lower = clipped.
     # A tail is therefore a homopolymer run in the *clipped* part, flush against the aligned
@@ -986,6 +996,146 @@ class Insertion:
         contig, s, e = loc
         return self.gene_model.annotate(contig, s, e)
 
+    # ------------------------------------------------------------------ genotyping reads
+    # The genotype2 extra pass collects, in joint carriers that did NOT discover a locus, its
+    # junction reads (GT_CLIP / GT_POLYA), discordant anchors (GT_DISC) and their inside mates
+    # (GT_MATE). Their INSERTED parts are scanned like the junction clips (Dfam + clip remap,
+    # VariantAnnotationContainer.read_gt_core) and used here as SUPPLEMENTARY evidence.
+    # Precedence: the junction-based call always stands, except that an `unknown` / `artefact`
+    # call (no element identity from the junctions) is re-run with the GT hits pooled into the
+    # junction hits, and adopted only when that yields an RTE class (ALU / LINE1 / SVA /
+    # RTE_other) agreeing with the family >= gt_core_min_support GT reads hit. A confident
+    # junction call (any other class) is never changed; gt_core records whether the GT reads
+    # agree with it. They are classification evidence only, never junction evidence: nothing
+    # here feeds a read / fragment count.
+    _GT_LOW_COMPLEXITY_ENTROPY = 1.5
+
+    @staticmethod
+    def _gt_cfg(key, default):
+        return CONFIG['annotate'].get(key, default)
+
+    def _gt_flank_anchor(self, side, k=15):
+        """The k reference bases next to the junction: the end of the right junction's flank
+        (`FLANK|ins`), the start of the left junction's (`ins|FLANK`); '' without a flank."""
+        if side == 'RIGHT':
+            up = ''.join(ch for ch in self.right_seq if ch.isupper())
+            return up[-k:].upper() if len(up) >= k else ''
+        up = ''.join(ch for ch in self.left_seq if ch.isupper())
+        return up[:k].upper() if len(up) >= k else ''
+
+    def gt_query_seqs(self, reads):
+        """reads: [(side, role, seq)] of this locus (site-forward, GT_* roles) -> [(side, seq)]
+        of inserted sequence to scan: a GT_MATE whole (minus any junction flank it reaches), the
+        part of a GT_CLIP / GT_POLYA beyond the junction flank (a clip read whose flank is not
+        found is skipped: its insert boundary is unknown). GT_DISC anchors are flank only.
+        Short (< gt_core_min_len), poly-A/T (>= 80% one base) and low-entropy inserts carry no
+        family signal and are dropped; identical sequences once; mates first (they reach deepest
+        into the element), longest first; at most gt_core_max_queries."""
+        min_len = self._gt_cfg('gt_core_min_len', 30)
+        cap = self._gt_cfg('gt_core_max_queries', 20)
+        cands = []
+        for side, role, seq in reads:
+            if role not in ('GT_MATE', 'GT_CLIP', 'GT_POLYA') or side not in ('LEFT', 'RIGHT'):
+                continue
+            s = seq.upper()
+            anchor = self._gt_flank_anchor(side)
+            p = s.find(anchor) if anchor else -1
+            if p >= 0:
+                s = s[p + len(anchor):] if side == 'RIGHT' else s[:p]
+            elif role != 'GT_MATE':
+                continue
+            if len(s) < min_len or max(s.count('A'), s.count('T')) >= 0.8 * len(s) \
+                    or self._shannon(s) < self._GT_LOW_COMPLEXITY_ENTROPY:
+                continue
+            cands.append((role != 'GT_MATE', -len(s), side, s))
+        out, seen = [], set()
+        for _, _, side, s in sorted(cands):
+            if s in seen:
+                continue
+            seen.add(s)
+            out.append((side, s))
+            if len(out) >= cap:
+                break
+        return out
+
+    @staticmethod
+    def _dfam_family(model):
+        if model.startswith('SVA'):
+            return 'SVA'
+        if model.startswith('Alu'):
+            return 'ALU'
+        if 'L1' in model:
+            return 'LINE1'
+        return 'RTE_other'
+
+    def _gt_family_counts(self):
+        """{family: number of GT queries whose best Dfam hit is that family}."""
+        best = {}
+        for side, q, m in self.gt_dfams:
+            if (side, q) not in best or m.bits > best[(side, q)].bits:
+                best[(side, q)] = m
+        counts = {}
+        for m in best.values():
+            f = self._dfam_family(m.model)
+            counts[f] = counts.get(f, 0) + 1
+        return counts
+
+    def _gt_structure_notes(self):
+        """L1 5' extent and strand mix the GT hits add: the lowest LINE1 hmm_start (the 5'-most
+        element base reached; below the junction hits' = 5' coverage extended) and LINE1 hits on
+        both strands on one side (an inverted 5' segment, twin priming)."""
+        notes = []
+        l1 = [(s, m) for s, _, m in self.gt_dfams if self._dfam_family(m.model) == 'LINE1']
+        if l1:
+            gt5 = min(m.hmm_start for _, m in l1)
+            jn = [m.hmm_start for m in self.left_dfams + self.right_dfams if self._dfam_family(m.model) == 'LINE1']
+            if not jn or gt5 < min(jn):
+                notes.append(f"L1 5' to hmm {gt5}" + (f" (junction {min(jn)})" if jn else ""))
+            for side in ('left', 'right'):
+                if len({m.strand for s, m in l1 if s == side}) == 2:
+                    notes.append(f"L1 both strands on {side} (inverted segment)")
+        return notes
+
+    def _gt_supplement(self, base):
+        """`base` (the junction-based conclusion) with the genotyping reads applied under the
+        precedence rule above; sets self.gt_core. Returns `base` unchanged without GT queries."""
+        if not self.gt_queries:
+            return base
+        cls = VariantAnnotationContainer.element_class(base)
+        counts = self._gt_family_counts()
+        nq = self.gt_queries
+        if not counts and not (self.gt_left_maps or self.gt_right_maps):
+            self.gt_core = f"no hits ({nq} gt queries)"
+            return base
+        hits = ','.join(f"{f}:{n}" for f, n in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])))
+        dom, n = max(counts.items(), key=lambda kv: (kv[1], kv[0])) if counts else (None, 0)
+        notes = self._gt_structure_notes()
+        tail = f"; {'; '.join(notes)}" if notes else ""
+        if cls in ('unknown', 'artefact'):
+            if dom is not None and n >= self._gt_cfg('gt_core_min_support', 2):
+                saved = (self.left_dfams, self.right_dfams, self.left_maps, self.right_maps)
+                try:
+                    self.left_dfams = saved[0] + [m for s, _, m in self.gt_dfams if s == 'left']
+                    self.right_dfams = saved[1] + [m for s, _, m in self.gt_dfams if s == 'right']
+                    self.left_maps = saved[2] + self.gt_left_maps
+                    self.right_maps = saved[3] + self.gt_right_maps
+                    new = self._element_conclusion()
+                finally:
+                    self.left_dfams, self.right_dfams, self.left_maps, self.right_maps = saved
+                ncls = VariantAnnotationContainer.element_class(new)
+                if ncls == dom:
+                    self.gt_core = f"resolved {cls}->{ncls} ({n}/{nq} gt reads; {hits}){tail}"
+                    return f"{new} [gt: +{ncls} from {n} genotyping reads]"
+                self.gt_core = f"unresolved {cls} ({hits} in {nq} gt reads; no junction hallmark){tail}"
+            else:
+                self.gt_core = f"unresolved {cls} ({hits or 'maps only'} in {nq} gt reads; < support){tail}"
+            return base
+        if dom is None:
+            self.gt_core = f"{cls}: gt maps only ({nq} gt reads){tail}"
+        else:
+            self.gt_core = f"{'concordant' if dom == cls else 'discordant'} {cls}: {hits} in {nq} gt reads{tail}"
+        return base
+
     def conclusion(self) -> str:
         """Full annotation: the element identity from _element_conclusion(), plus — because a
         structural variant and a mobile element are NOT mutually exclusive (a rearrangement
@@ -996,7 +1146,7 @@ class Insertion:
         from GeneModel via the title locus. Neither note ever changes the element class and
         nothing is dropped; they only annotate. Pure structural variants (no element call) are
         handled inside _element_conclusion() and carry the subtype directly."""
-        out = self._conclusion_no_site()
+        out = self._gt_supplement(self._conclusion_no_site())
         site = self.site()
         if site is not None:
             out = f"{out} [site: {site[3]}]"
@@ -1291,6 +1441,9 @@ class VariantAnnotationContainer:
                 self.generate_sam_local_file()
             if os.path.exists(self.local_sam_file) and os.path.getsize(self.local_sam_file) > 0:
                 self.read_sam_local()
+        # genotyping reads of undiscovered joint carriers: supplementary Dfam / remap evidence
+        # for the core call (Insertion._gt_supplement); a no-op without the genotype_reads file
+        self.read_gt_core()
         self.link_reciprocal_translocations()
         self.read_gene_model()
         # TPRT-hallmark annotation (tools/rte): additive columns, only when configured
@@ -1424,6 +1577,95 @@ class VariantAnnotationContainer:
             from rte.annotator import default_gt_reads
         p = CONFIG['annotate'].get('rte_gt_reads_file') or default_gt_reads(self.insertions_file)
         return p(self.sample) if callable(p) else p
+
+    @staticmethod
+    def _read_gt_fasta(path, wanted):
+        """{insertion: [(side, role, seq)]} of the GT_* records of a genotype_reads FASTA
+        (`>locus|SIDE|ROLE|sample|frag|r12`); any other role is ignored."""
+        out = {}
+        with (gzip.open(path, 'rt') if path.endswith('.gz') else open(path)) as fh:
+            head = None
+            for line in fh:
+                line = line.rstrip('\n')
+                if line.startswith('>'):
+                    head = line[1:].split('|')
+                    continue
+                if head is None or len(head) < 6:
+                    continue
+                locus, side, role = '|'.join(head[:-5]), head[-5].upper(), head[-4].upper()
+                head = None
+                if role.startswith('GT_') and locus in wanted:
+                    out.setdefault(locus, []).append((side, role, line.strip()))
+        return out
+
+    def read_gt_core(self):
+        """Scan the inserted parts of the genotyping reads (Insertion.gt_query_seqs) with the
+        junction clips' machinery -- Dfam (same HMM library / back-end) and, when bowtie2 and its
+        index are present, the clip remap (same rmsk / exon tracks) -- in their own batch (ids
+        `<insertion>|GT|<k>:R|L`, so the junction hits stay separate) and attach the hits to the
+        insertions (gt_dfams, gt_left_maps / gt_right_maps). Off (and the table unchanged) when
+        the genotype_reads file is absent or CONFIG['annotate']['gt_core'] is False. The scans
+        are cached on the query FASTA (tmp `gt.query.fa`): an identical batch reuses them."""
+        self.gt_core_on = False
+        path = self.gt_reads_path()
+        if not CONFIG['annotate'].get('gt_core', True) or not path or not os.path.exists(path):
+            return
+        self.gt_core_on = True
+        reads = self._read_gt_fasta(path, set(self.insertions))
+        queries = []                                   # (qid, title, side 'left'|'right', seq)
+        for title, rs in reads.items():
+            ins = self.insertions[title]
+            qs = ins.gt_query_seqs(rs)
+            ins.gt_queries = len(qs)
+            for k, (side, seq) in enumerate(qs):
+                queries.append((f"{title}|GT|{k}:{side[0]}", title, side.lower(), seq))
+        print(f"genotyping reads: {sum(map(len, reads.values()))} for {len(reads)} insertions from {path}; "
+              f"{len(queries)} insert queries for {sum(1 for t in reads if self.insertions[t].gt_queries)} insertions")
+        if not queries:
+            return
+        tmp = CONFIG['annotate']['tmp']
+        qfa, dfam, sam = (tmp(x)(self.sample) for x in ('gt.query.fa', 'gt.dfam', 'gt.sam'))
+        text = ''.join(f">{q}\n{s}\n" for q, _, _, s in queries)
+        cached = os.path.exists(qfa) and open(qfa).read() == text
+        if not (cached and os.path.exists(dfam)):
+            self._run_dfam(''.join(f">{q}\n{Insertion._dfam_pad(s)}\n" for q, _, _, s in queries), dfam)
+        by_id = {q: (t, side, k) for k, (q, t, side, _) in enumerate(queries)}
+        n_dfam = 0
+        with open(dfam) as fh:
+            for line in fh:
+                if not line.strip() or line[0] == '#':
+                    continue
+                f = line.strip().split(None, 14)
+                hit = by_id.get(f[2])
+                if hit is None:
+                    continue
+                t, side, k = hit
+                self.insertions[t].gt_dfams.append((side, k, Dfam_Annotation(f)))
+                n_dfam += 1
+        exe = CONFIG['combine_insertions'].get('bowtie2_executable')
+        idx = CONFIG['combine_insertions'].get('bowtie2_index2')
+        n_map = 0
+        if exe and idx and os.path.exists(exe) and os.path.exists(idx + '.1.bt2') \
+                and hasattr(self, '_rmsk_library'):
+            if not (cached and os.path.exists(sam) and os.path.getsize(sam) > 0):
+                with open(qfa + '.bt2.fa', 'w') as o:
+                    o.write(text)
+                rc = os.system(f"{exe} -x {idx} --end-to-end -f {qfa}.bt2.fa > {sam} 2> /dev/null")
+                os.remove(qfa + '.bt2.fa')
+                assert rc == 0, "bowtie2 (genotyping reads) failed"
+            with pysam.AlignmentFile(sam) as fh:
+                for read in fh:
+                    if read.is_qcfail or read.is_unmapped or read.query_name not in by_id:
+                        continue
+                    t, side, _ = by_id[read.query_name]
+                    co, rmsks, _ex = self._clip_map(read, side[0].upper(), self._rmsk_library, self._exon_library)
+                    if co:
+                        getattr(self.insertions[t], f"gt_{side}_maps").append(
+                            (f"{co[0][0]}:{co[0][1]}{co[0][2]}", read.mapping_quality, rmsks, co[0][2]))
+                        n_map += 1
+        with open(qfa, 'w') as o:
+            o.write(text)
+        print(f"genotyping reads: {n_dfam} Dfam hits, {n_map} remaps (supplementary evidence)")
 
     def read_evidence_clips(self):
         """Attach the evidence sidecar's per-junction clip_consensus to each Insertion
@@ -1578,6 +1820,11 @@ class VariantAnnotationContainer:
         """
         print(f"running DFAM on {self.sample}")
         assert os.path.exists(self.fasta_file)
+        self._run_dfam(''.join(insertion.get_dfam_fasta() for insertion in self.insertions.values()),
+                       self.dfam_file)
+
+    def _run_dfam(self, query_fasta, out_path):
+        """dfamscan.pl / nhmmscan of `query_fasta` (text) -> Dfam table `out_path`."""
         hmm = CONFIG['annotate']['hmm']
         assert os.path.exists(hmm), f"HMM library {hmm} not found (run hmmpress on it first)"
         hmmer = CONFIG['annotate'].get('hmmer')
@@ -1591,10 +1838,9 @@ class VariantAnnotationContainer:
         # the Dfam query is written uncompressed (nhmmscan cannot read gzip: "Sequence file ... is
         # empty or misformatted", whether called directly or by dfamscan.pl) and with short clips
         # N-padded (get_dfam_fasta), so it differs from the bowtie2 fasta
-        tmp_fa = fa = self.dfam_file + ".query.fa"
+        tmp_fa = fa = out_path + ".query.fa"
         with open(tmp_fa, "w") as o:
-            for insertion in self.insertions.values():
-                o.write(insertion.get_dfam_fasta())
+            o.write(query_fasta)
         try:
             if dfamscan and os.path.exists(dfamscan):
                 assert os.access(dfamscan, os.X_OK)
@@ -1603,17 +1849,17 @@ class VariantAnnotationContainer:
                 # are mismatched", PD37449 farm run) -> run dfamscan.pl without perl variables
                 env = {k: v for k, v in os.environ.items() if not k.startswith("PERL")}
                 rc = subprocess.call([dfamscan, "--fastafile", fa, "--hmmfile", hmm,
-                                      "--cpu", str(cpu), "--dfam_outfile", self.dfam_file], env=env)
+                                      "--cpu", str(cpu), "--dfam_outfile", out_path], env=env)
                 assert rc == 0, f"dfamscan.pl failed (exit {rc})"
             else:
                 rc = os.system(
-                    f"nhmmscan --cpu {cpu} --dfamtblout {self.dfam_file} {hmm} {fa} "
+                    f"nhmmscan --cpu {cpu} --dfamtblout {out_path} {hmm} {fa} "
                     f"> /dev/null 2>&1")
                 assert rc == 0, "nhmmscan failed"
         finally:
             if tmp_fa and os.path.exists(tmp_fa):
                 os.remove(tmp_fa)
-        assert os.path.exists(self.dfam_file)
+        assert os.path.exists(out_path)
 
     def generate_sam_file(self):
         """
@@ -1788,6 +2034,31 @@ class VariantAnnotationContainer:
 
 
 
+    def _clip_map(self, read, side, rmsk_library, exon_library):
+        """(coordinates, rmsk annotations, exons) at the junction-near end of a clip remap: the
+        start of a right clip mapped forward / a left clip mapped reverse, else the end."""
+        lo = None
+        local_exons = []
+        if (side == "R") ^ read.is_forward:
+            local_rmsks = self.get_rmsk(rmsk_library, (read.reference_name, read.reference_start))
+            if exon_library:
+                local_exons = self.get_exon(exon_library, (read.reference_name, read.reference_start))
+            if lo is not None:
+                co = lo.convert_coordinate(read.reference_name, read.reference_start,
+                                           '+' if read.is_forward else '-')
+            else:
+                co = [(read.reference_name, read.reference_start, '+' if read.is_forward else '-')]
+        else:
+            local_rmsks = self.get_rmsk(rmsk_library, (read.reference_name, read.reference_end))
+            if exon_library:
+                local_exons = self.get_exon(exon_library, (read.reference_name, read.reference_end))
+            if lo is not None:
+                co = lo.convert_coordinate(read.reference_name, read.reference_end,
+                                           '+' if read.is_forward else '-')
+            else:
+                co = [(read.reference_name, read.reference_end, '+' if read.is_forward else '-')]
+        return co, local_rmsks, local_exons
+
     def read_sam(self):
         """
         this function reads the output of bowtie2 and decorates the insertion object with it.
@@ -1799,10 +2070,11 @@ class VariantAnnotationContainer:
         #    print(f"done reading chainfile {CONFIG['combine_insertions']['bowtie2_index2_lo']}")
         #else:
         #    lo = None
-        lo = None
         rmsk_library = self.read_rmsk(CONFIG['annotate']['rmsk'])
         exon_path = CONFIG['annotate'].get('exon_annotation')
         exon_library = self.read_exons(exon_path) if exon_path else {}
+        # kept for the genotyping-read remaps (read_gt_core), which use the same tracks
+        self._rmsk_library, self._exon_library = rmsk_library, exon_library
 
         rightn = 0
         leftn = 0
@@ -1812,28 +2084,9 @@ class VariantAnnotationContainer:
                 #if read.is_secondary: continue
                 #if read.is_supplementary: continue
                 if read.is_unmapped: continue
-                local_rmsks = None
-                local_exons = []
                 insertion = read.query_name[:-2]
                 if not insertion in self.insertions.keys(): continue
-                if (read.query_name[-1] == "R") ^ read.is_forward:
-                    local_rmsks = self.get_rmsk(rmsk_library, (read.reference_name, read.reference_start))
-                    if exon_library:
-                        local_exons = self.get_exon(exon_library, (read.reference_name, read.reference_start))
-                    if lo is not None:
-                        co = lo.convert_coordinate(read.reference_name, read.reference_start,
-                                                   '+' if read.is_forward else '-')
-                    else:
-                        co = [(read.reference_name, read.reference_start, '+' if read.is_forward else '-')]
-                else:
-                    local_rmsks = self.get_rmsk(rmsk_library, (read.reference_name, read.reference_end))
-                    if exon_library:
-                        local_exons = self.get_exon(exon_library, (read.reference_name, read.reference_end))
-                    if lo is not None:
-                        co = lo.convert_coordinate(read.reference_name, read.reference_end,
-                                                   '+' if read.is_forward else '-')
-                    else:
-                        co = [(read.reference_name, read.reference_end, '+' if read.is_forward else '-')]
+                co, local_rmsks, local_exons = self._clip_map(read, read.query_name[-1], rmsk_library, exon_library)
                 if co:
                     if read.query_name[-1] == "R":
                         rightn += 1
@@ -1889,7 +2142,7 @@ class VariantAnnotationContainer:
         # the suffix and classify the element head, so even an RTE_other element (which carries
         # no big-three token) keeps its class. A pure SV has no element head — the whole string
         # is the SV descriptor — so it still falls through to the non_RTE_SV umbrella below.
-        head = conclusion.split(' [SV:', 1)[0].split(' [site:', 1)[0]
+        head = conclusion.split(' [SV:', 1)[0].split(' [site:', 1)[0].split(' [gt:', 1)[0]
         u = head.upper()
         # plain local SVs (Jeremy 2026-10-07): a deletion / duplication whose clips are only the
         # locus's own reference is its own class, not an "insertion" of any kind
@@ -1962,6 +2215,11 @@ class VariantAnnotationContainer:
         gt = bool(rte) and bool(getattr(self, 'rte_gt', False))
         if gt:
             cols = cols + ['gt_reads', 'gt_changed']
+        # the core call's use of the genotyping reads (Insertion._gt_supplement), only when that
+        # file was read: resolved / concordant / discordant / unresolved / no hits
+        gtc = bool(getattr(self, 'gt_core_on', False))
+        if gtc:
+            cols = cols + ['gt_core']
         # genotype2 joint verdict, only when <patient>.joint.tsv was read (numeric matrix input)
         joint = bool(getattr(self, 'joint', None))
         if joint:
@@ -1989,6 +2247,8 @@ class VariantAnnotationContainer:
                     rec = rte.get(key)
                     row += [str(rec.gt_reads) if rec is not None else '0',
                             (rec.gt_changed or '.') if rec is not None else '.']
+                if gtc:
+                    row += [(ins.gt_core or '.').replace('\t', ' ')]
                 if joint:
                     row += [(getattr(ins, 'joint', None) or {}).get(c, '') or '.' for c in self.JOINT_COLUMNS]
                 fh.write('\t'.join(row) + '\n')
