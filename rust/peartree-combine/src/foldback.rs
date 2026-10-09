@@ -39,7 +39,7 @@ pub enum Fold {
 fn revcomp(s: &[u8]) -> Vec<u8> {
     s.iter()
         .rev()
-        .map(|b| match b {
+        .map(|b| match b.to_ascii_uppercase() {
             b'A' => b'T',
             b'C' => b'G',
             b'G' => b'C',
@@ -121,18 +121,28 @@ pub fn drops(l: Fold, r: Fold) -> bool {
     l == Fold::Clear || r == Fold::Clear || (l != Fold::No && r != Fold::No)
 }
 
-/// True if the insertion is a fold-back artefact. Ends without a clip, or whose name token is not a
-/// junction coordinate (`polyA_` / `disc_` / `oneside_`), count as `No`.
-pub fn insertion_is_foldback(ins: &Insertion, contigs: &Interner, genome: &dyn RefFetch, fp: &Params) -> bool {
+/// The two end verdicts of an insertion. `Insertion` stores `left_clipped` REVERSE-COMPLEMENTED
+/// (outward from the junction, `LEFT:CLIPPED.revcomp()`, insertion.rs) and `right_clipped` in
+/// reference orientation; `classify` takes reference orientation, so the left clip is flipped back
+/// here (left_consensus() does the same flip for combined.txt.gz). Ends without a clip, or whose
+/// name token is not a junction coordinate (`polyA_` / `disc_` / `oneside_`), are `No`.
+pub fn end_verdicts(ins: &Insertion, contigs: &Interner, genome: &dyn RefFetch, fp: &Params) -> (Fold, Fold) {
     let contig = contigs.name(ins.contig);
-    let end = |clip: Option<&crate::seq::QualSeq>, left: bool| {
-        let tok = if left { &ins.name_start } else { &ins.name_end };
-        match clip {
-            Some(c) if tok.kind == TokKind::Pos => classify(genome, contig, &c.seq, left, tok.pos, fp),
-            _ => Fold::No,
-        }
+    let l = match (&ins.left_clipped, ins.name_start.kind) {
+        (Some(c), TokKind::Pos) => classify(genome, contig, &revcomp(&c.seq), true, ins.name_start.pos, fp),
+        _ => Fold::No,
     };
-    drops(end(ins.left_clipped.as_ref(), true), end(ins.right_clipped.as_ref(), false))
+    let r = match (&ins.right_clipped, ins.name_end.kind) {
+        (Some(c), TokKind::Pos) => classify(genome, contig, &c.seq, false, ins.name_end.pos, fp),
+        _ => Fold::No,
+    };
+    (l, r)
+}
+
+/// True if the insertion is a fold-back artefact (see `drops`).
+pub fn insertion_is_foldback(ins: &Insertion, contigs: &Interner, genome: &dyn RefFetch, fp: &Params) -> bool {
+    let (l, r) = end_verdicts(ins, contigs, genome, fp);
+    drops(l, r)
 }
 
 #[cfg(test)]
@@ -184,41 +194,62 @@ mod tests {
         assert_eq!(classify(&g(), "7", b"tgggtgacagagtgagactcc", true, 81477172, &FP), Fold::No, "contig absent");
     }
 
-    /// Real data, opt-in: PEARTREE_TEST_COMBINED=<P>.combined.txt.gz PEARTREE_TEST_2BIT=<genome>.2bit
-    /// PEARTREE_TEST_OUT=<file> -- writes the loci this filter drops (one per line).
+    /// Through the PRODUCTION path: a discovery record parsed by `parse_discovery_file` (which
+    /// stores the left clip reverse-complemented) -- the bug in 5ed4f32 judged the stored strand.
     #[test]
-    fn real_combined_scan() {
-        use std::io::{BufRead, Write};
-        let (Ok(c), Ok(tb), Ok(out)) = (
-            std::env::var("PEARTREE_TEST_COMBINED"),
+    fn parsed_discovery_record_lo0019() {
+        use flate2::{write::GzEncoder, Compression};
+        use std::io::Write;
+        let rec = |t: &str, q: &str| format!("@{t}\n{q}\n+\n{}\n", "I".repeat(q.len()));
+        // PD45886b_lo0019.txt.gz, verbatim
+        let mut t = String::new();
+        t += &rec("12:81477172-81477195:LEFT:CLIPPED", "TGGGTGACAGAGTGAGACTCC");
+        t += &rec("12:81477172-81477195:LEFT:ALIGNED", "GTCACCCAGCCTGGAGTGCAATGGCATGATCTCTGCTCA");
+        t += &rec("12:81477172-81477195:RIGHT:ALIGNED", "TTTTGGTTTTTTTTTTTTTTTTTTTTGAGACGGAGTCTCACTCTGTCACCCAGCCTGGAGTGCAATG");
+        t += &rec("12:81477172-81477195:RIGHT:CLIPPED", "AGCAGAGATCATGCCATT");
+        // control: the LEFT clip's far end is a DIRECT copy of the flank (what the bug flagged)
+        t += &rec("12:81477172-81477180:LEFT:CLIPPED", "GAGTCTCACTCTGTCACCCAGTTCAGGCATAAACCTTGACG");
+        t += &rec("12:81477172-81477180:LEFT:ALIGNED", "GTCACCCAGCCTGGAGTGCAATGGCATGATCTCTGCTCA");
+        t += &rec("12:81477172-81477180:RIGHT:ALIGNED", "TTTTGGTTTTTTTTTTTTTTTTTTTTGAGACGGAGTCTCACTCTGTCACCCAG");
+        t += &rec("12:81477172-81477180:RIGHT:CLIPPED", "GGCCGGGCGCGGTGGCTCACGCCTG");
+        let p = std::env::temp_dir().join(format!("pt_foldback_{}.txt.gz", std::process::id()));
+        let mut e = GzEncoder::new(std::fs::File::create(&p).unwrap(), Compression::fast());
+        e.write_all(t.as_bytes()).unwrap();
+        e.finish().unwrap();
+        let contigs = Interner::new();
+        let imp = crate::insertion::parse_discovery_file(&p, 0, &contigs).unwrap();
+        let _ = std::fs::remove_file(&p);
+        assert_eq!(end_verdicts(&imp.records[0], &contigs, &g(), &FP), (Fold::Clear, Fold::Maybe));
+        assert!(insertion_is_foldback(&imp.records[0], &contigs, &g(), &FP));
+        assert_eq!(end_verdicts(&imp.records[1], &contigs, &g(), &FP).0, Fold::No);
+    }
+
+    /// Real data, opt-in, production path: PEARTREE_TEST_DISCOVERY_DIR=<dir of <colony>.txt.gz>
+    /// PEARTREE_TEST_2BIT=<genome>.2bit PEARTREE_TEST_OUT=<file> -- every discovery record this
+    /// filter would drop, as `<colony>\t<locus>`.
+    #[test]
+    fn real_discovery_scan() {
+        use std::io::Write;
+        let (Ok(dir), Ok(tb), Ok(out)) = (
+            std::env::var("PEARTREE_TEST_DISCOVERY_DIR"),
             std::env::var("PEARTREE_TEST_2BIT"),
             std::env::var("PEARTREE_TEST_OUT"),
         ) else {
             return;
         };
         let genome = crate::genome::Genome::open(std::path::Path::new(&tb)).unwrap();
-        let rd = std::io::BufReader::new(flate2::read::MultiGzDecoder::new(std::fs::File::open(c).unwrap()));
-        let mut ends: std::collections::BTreeMap<String, (Fold, Fold)> = Default::default();
-        let mut lines = rd.lines();
-        while let Some(Ok(h)) = lines.next() {
-            let seq = lines.next().unwrap().unwrap();
-            lines.next();
-            lines.next();
-            let name = &h[1..];
-            let (locus, side) = name.rsplit_once(':').unwrap();
-            let (contig, span) = locus.rsplit_once(':').unwrap();
-            let (a, b) = span.split_once('-').unwrap();
-            let left = side == "L";
-            let Ok(pos) = (if left { a } else { b }).parse::<i64>() else { continue };
-            let clip: Vec<u8> = seq.bytes().filter(|b| b.is_ascii_lowercase()).collect();
-            let f = classify(&genome, contig, &clip, left, pos, &FP);
-            let e = ends.entry(locus.to_string()).or_insert((Fold::No, Fold::No));
-            if left { e.0 = f } else { e.1 = f }
-        }
         let mut w = std::fs::File::create(out).unwrap();
-        for (locus, (l, r)) in &ends {
-            if drops(*l, *r) {
-                writeln!(w, "{locus}").unwrap();
+        let mut files: Vec<_> = std::fs::read_dir(&dir).unwrap().filter_map(|e| e.ok()).map(|e| e.path())
+            .filter(|p| p.to_string_lossy().ends_with(".txt.gz")).collect();
+        files.sort();
+        for p in files {
+            let colony = p.file_name().unwrap().to_string_lossy().trim_end_matches(".txt.gz").to_string();
+            let contigs = Interner::new();
+            let imp = crate::insertion::parse_discovery_file(&p, 0, &contigs).unwrap();
+            for ins in &imp.records {
+                if insertion_is_foldback(ins, &contigs, &genome, &FP) {
+                    writeln!(w, "{colony}\t{}", ins.name(&contigs)).unwrap();
+                }
             }
         }
     }
