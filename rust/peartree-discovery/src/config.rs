@@ -398,6 +398,8 @@ pub struct DiscoveryConfig {
     /// pair with is a fold-back or possible fold-back too (Jeremy 2026-10-09).
     pub foldback_min_short: usize,
     pub foldback_window: i64,
+    /// Probes below this Shannon entropy (bits) are not judged (a homopolymer >= 8 never is).
+    pub foldback_min_entropy: f64,
 }
 
 impl Default for DiscoveryConfig {
@@ -494,6 +496,7 @@ impl Default for DiscoveryConfig {
             foldback_k: 20,
             foldback_min_short: MIN_CLIP_LEN,
             foldback_window: 50,
+            foldback_min_entropy: 1.5,
         }
     }
 }
@@ -672,6 +675,7 @@ impl DiscoveryConfig {
             "foldback_k" => self.foldback_k = parse_num(val)?,
             "foldback_min_short" => self.foldback_min_short = parse_num(val)?,
             "foldback_window" => self.foldback_window = parse_num(val)?,
+            "foldback_min_entropy" => self.foldback_min_entropy = parse_num(val)?,
             other => eprintln!("warning: ignoring unknown config key '{other}'"),
         }
         Ok(())

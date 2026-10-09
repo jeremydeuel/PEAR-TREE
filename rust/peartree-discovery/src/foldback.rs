@@ -22,10 +22,19 @@ use rustc_hash::FxHashMap;
 use crate::filters::{clip_entropy, longest_homopolymer_run};
 use crate::config::CLIP_LEFT;
 
-/// A probe below this entropy (bits) or with a homopolymer run >= `PROBE_MAX_RUN` is not
-/// judged: poly-A/T and STR clips match inverted reference tracts by chance.
-const PROBE_MIN_ENTROPY: f64 = 1.5;
+/// A probe with a homopolymer run >= `PROBE_MAX_RUN` (or below `Params::min_entropy` bits) is
+/// not judged: poly-A/T and STR clips match inverted reference tracts by chance.
 const PROBE_MAX_RUN: usize = 8;
+
+/// The SPEC-9 knobs (config `foldback_k`, `foldback_min_short`, `foldback_window`,
+/// `foldback_min_entropy`).
+#[derive(Clone, Copy, Debug)]
+pub struct Params {
+    pub k: usize,
+    pub min_short: usize,
+    pub window: i64,
+    pub min_entropy: f64,
+}
 
 /// Random-access reader for a UCSC .2bit file (versions 0 and 1, either byte order).
 pub struct TwoBit {
@@ -158,16 +167,16 @@ pub enum Fold {
 /// `CLIP_LEFT` reverse-complemented — model.rs `join`), so it is the first `k` bases either
 /// way; a clip of `min_short`..`k`-1 bases is used whole. `None` when shorter, non-ACGT or
 /// low-complexity.
-pub fn probe(clipped: &[u8], k: usize, min_short: usize) -> Option<Vec<u8>> {
-    let n = if clipped.len() >= k { k } else { clipped.len() };
-    if n == 0 || n < min_short.min(k) {
+pub fn probe(clipped: &[u8], fp: &Params) -> Option<Vec<u8>> {
+    let n = clipped.len().min(fp.k);
+    if n == 0 || n < fp.min_short.min(fp.k) {
         return None;
     }
     let p: Vec<u8> = clipped[..n].iter().map(|b| b.to_ascii_uppercase()).collect();
     if !p.iter().all(|b| matches!(b, b'A' | b'C' | b'G' | b'T')) {
         return None;
     }
-    if clip_entropy(&p) < PROBE_MIN_ENTROPY || longest_homopolymer_run(&p).0 >= PROBE_MAX_RUN {
+    if clip_entropy(&p) < fp.min_entropy || longest_homopolymer_run(&p).0 >= PROBE_MAX_RUN {
         return None;
     }
     Some(p)
@@ -181,22 +190,12 @@ pub fn foldback_target(side: i32, probe: &[u8]) -> Vec<u8> {
 }
 
 /// Classify one breakpoint (stored clip orientation, see `probe`).
-#[allow(clippy::too_many_arguments)]
-pub fn classify(
-    tb: &TwoBit,
-    contig: &str,
-    side: i32,
-    clipped: &[u8],
-    breakpoint: i64,
-    k: usize,
-    min_short: usize,
-    window: i64,
-) -> Fold {
-    let Some(p) = probe(clipped, k, min_short) else { return Fold::No };
+pub fn classify(tb: &TwoBit, contig: &str, side: i32, clipped: &[u8], breakpoint: i64, fp: &Params) -> Fold {
+    let Some(p) = probe(clipped, fp) else { return Fold::No };
     let target = foldback_target(side, &p);
-    match tb.fetch(contig, breakpoint - window, breakpoint + window + 1) {
+    match tb.fetch(contig, breakpoint - fp.window, breakpoint + fp.window + 1) {
         Some(r) if r.windows(target.len()).any(|w| w == target.as_slice()) => {
-            if p.len() >= k { Fold::Clear } else { Fold::Maybe }
+            if p.len() >= fp.k { Fold::Clear } else { Fold::Maybe }
         }
         _ => Fold::No,
     }
@@ -252,14 +251,7 @@ pub fn gate_pairs<B>(
 /// (`print_output`), so it is flipped back; its breakpoint is the name's first coordinate,
 /// the RIGHT one's the second. Poly-A ends (`polyA_<pos>`) are not clip breakpoints and are
 /// skipped, as in `output`.
-pub fn scan_discovery_output<W: std::io::Write>(
-    path: &str,
-    tb: &TwoBit,
-    k: usize,
-    min_short: usize,
-    window: i64,
-    out: &mut W,
-) -> io::Result<()> {
+pub fn scan_discovery_output<W: std::io::Write>(path: &str, tb: &TwoBit, fp: &Params, out: &mut W) -> io::Result<()> {
     use std::io::BufRead;
     let r = BufReader::new(flate2::read::MultiGzDecoder::new(File::open(path)?));
     writeln!(out, "locus\tside\tclip_len\tverdict")?;
@@ -283,10 +275,10 @@ pub fn scan_discovery_output<W: std::io::Write>(
         let Ok(bp) = pos.parse::<i64>() else { continue };
         // back to the stored orientation (print_output wrote the LEFT clip reverse-complemented)
         let clip = if side == CLIP_LEFT { revcomp(&seq.as_bytes().to_ascii_uppercase()) } else { seq.as_bytes().to_ascii_uppercase() };
-        let verdict = match classify(tb, contig, side, &clip, bp, k, min_short, window) {
+        let verdict = match classify(tb, contig, side, &clip, bp, fp) {
             Fold::Clear => "foldback",
             Fold::Maybe => "maybe",
-            Fold::No if probe(&clip, k, min_short).is_none() => "unjudged",
+            Fold::No if probe(&clip, fp).is_none() => "unjudged",
             Fold::No => "kept",
         };
         let s = if side == CLIP_LEFT { "L" } else { "R" };
@@ -383,6 +375,8 @@ mod tests {
     // (file/combine show TGGGTGACAGAGTGAGACTCC), RIGHT clip in reference orientation.
     const L_STORED: &[u8] = b"GGAGTCTCACTCTGTCACCCA";
     const R_STORED: &[u8] = b"AGCAGAGATCATGCCATT"; // 18 bp
+    const P: Params = Params { k: 20, min_short: 12, window: 50, min_entropy: 1.5 };
+    const P19: Params = Params { k: 20, min_short: 19, window: 50, min_entropy: 1.5 };
 
     /// The real UCSC file, when available (PEARTREE_TEST_HG19_2BIT=/path/hg19.2bit); skipped
     /// otherwise. Pins the reader to UCSC's packing, not just to `write_2bit` above.
@@ -392,34 +386,34 @@ mod tests {
         let t = TwoBit::open(&p).unwrap();
         assert_eq!(t.len("12"), Some(133_851_895));
         assert_eq!(t.fetch("12", 81477142, 81477242).unwrap(), SITE);
-        assert_eq!(classify(&t, "12", CLIP_LEFT, L_STORED, 81477172, 20, 12, 50), Fold::Clear);
+        assert_eq!(classify(&t, "12", CLIP_LEFT, L_STORED, 81477172, &P), Fold::Clear);
     }
 
     #[test]
     fn lo0019_junctions() {
         let (_d, t) = tb();
-        assert_eq!(classify(&t, "12", CLIP_LEFT, L_STORED, 81477172, 20, 12, 50), Fold::Clear);
-        assert_eq!(classify(&t, "12", CLIP_RIGHT, R_STORED, 81477195, 20, 12, 50), Fold::Maybe, "18 bp: possible only");
-        assert_eq!(classify(&t, "12", CLIP_RIGHT, R_STORED, 81477195, 20, 19, 50), Fold::No, "below min_short");
+        assert_eq!(classify(&t, "12", CLIP_LEFT, L_STORED, 81477172, &P), Fold::Clear);
+        assert_eq!(classify(&t, "12", CLIP_RIGHT, R_STORED, 81477195, &P), Fold::Maybe, "18 bp: possible only");
+        assert_eq!(classify(&t, "12", CLIP_RIGHT, R_STORED, 81477195, &P19), Fold::No, "below min_short");
     }
 
     #[test]
     fn strand_matters_a_direct_copy_is_not_a_foldback() {
         let (_d, t) = tb();
         // the LEFT clip in REFERENCE orientation (i.e. the wrong, unstored strand)
-        assert_eq!(classify(&t, "12", CLIP_LEFT, b"TGGGTGACAGAGTGAGACTCC", 81477172, 20, 12, 50), Fold::No);
+        assert_eq!(classify(&t, "12", CLIP_LEFT, b"TGGGTGACAGAGTGAGACTCC", 81477172, &P), Fold::No);
         // a RIGHT clip that repeats the flank directly (tandem dup), not inverted
-        assert_eq!(classify(&t, "12", CLIP_RIGHT, b"GGAGTCTCACTCTGTCACCCAG", 81477195, 20, 12, 50), Fold::No);
+        assert_eq!(classify(&t, "12", CLIP_RIGHT, b"GGAGTCTCACTCTGTCACCCAG", 81477195, &P), Fold::No);
     }
 
     #[test]
     fn element_clip_and_low_complexity_are_kept() {
         let (_d, t) = tb();
         // an Alu 5' end clip is not an inverted copy of this flank
-        assert_eq!(classify(&t, "12", CLIP_RIGHT, b"GGCCGGGCGCGGTGGCTCACGCCTG", 81477195, 20, 12, 50), Fold::No);
-        assert!(probe(b"AAAAAAAAAAAAAAAAAAAAAAAA", 20, 12).is_none(), "poly-A never judged");
-        assert!(probe(b"GGAGTCTCAC", 20, 12).is_none(), "10 bp: too short");
-        assert_eq!(classify(&t, "12", CLIP_LEFT, L_STORED, 81477172 + 5000, 20, 12, 50), Fold::No, "out of window");
+        assert_eq!(classify(&t, "12", CLIP_RIGHT, b"GGCCGGGCGCGGTGGCTCACGCCTG", 81477195, &P), Fold::No);
+        assert!(probe(b"AAAAAAAAAAAAAAAAAAAAAAAA", &P).is_none(), "poly-A never judged");
+        assert!(probe(b"GGAGTCTCAC", &P).is_none(), "10 bp: too short");
+        assert_eq!(classify(&t, "12", CLIP_LEFT, L_STORED, 81477172 + 5000, &P), Fold::No, "out of window");
     }
 
     #[test]

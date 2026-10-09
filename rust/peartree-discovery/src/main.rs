@@ -99,7 +99,13 @@ fn main() -> io::Result<()> {
         };
         let tb = foldback::TwoBit::open(p)?;
         let stdout = io::stdout();
-        foldback::scan_discovery_output(&input, &tb, config.foldback_k, config.foldback_min_short, config.foldback_window, &mut stdout.lock())?;
+        let fp = foldback::Params {
+            k: config.foldback_k,
+            min_short: config.foldback_min_short,
+            window: config.foldback_window,
+            min_entropy: config.foldback_min_entropy,
+        };
+        foldback::scan_discovery_output(&input, &tb, &fp, &mut stdout.lock())?;
         return Ok(());
     }
     let Some(bam) = bam else { usage() };

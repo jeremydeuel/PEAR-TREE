@@ -21,7 +21,7 @@ use crate::evidence::{
     FLAG_PAIRED, FLAG_REVERSE, FLAG_SUPPLEMENTARY,
 };
 use crate::exons::GeneModel;
-use crate::foldback::{classify, gate_pairs, Fold, TwoBit};
+use crate::foldback::{classify, gate_pairs, Fold, Params as FoldParams, TwoBit};
 use crate::filters::{both_clips_slippage, clean_clipped_seq, is_adapter, is_low_complexity, is_slippage_clip, longest_homopolymer_run, mean_kmer_diversity};
 use crate::intervals::IntervalIndex;
 use crate::model::{agrees, count_fragments, join, mate_site_forward, Breakpoint};
@@ -593,7 +593,8 @@ impl Discovery {
     fn foldback_class(&self, rn: &str, b: &Breakpoint) -> Fold {
         let Some(tb) = &self.foldback else { return Fold::No };
         let c = &self.config;
-        classify(tb, rn, b.side, &b.clipped.seq, b.breakpoint, c.foldback_k, c.foldback_min_short, c.foldback_window)
+        let fp = FoldParams { k: c.foldback_k, min_short: c.foldback_min_short, window: c.foldback_window, min_entropy: c.foldback_min_entropy };
+        classify(tb, rn, b.side, &b.clipped.seq, b.breakpoint, &fp)
     }
 
     /// SPEC-9 on one contig before pairing: drop `Clear` fold-backs, and short `Maybe` ones
