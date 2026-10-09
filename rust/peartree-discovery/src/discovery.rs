@@ -21,7 +21,7 @@ use crate::evidence::{
     FLAG_PAIRED, FLAG_REVERSE, FLAG_SUPPLEMENTARY,
 };
 use crate::exons::GeneModel;
-use crate::foldback::{breakpoint_is_foldback, TwoBit};
+use crate::foldback::{classify, gate_pairs, Fold, TwoBit};
 use crate::filters::{both_clips_slippage, clean_clipped_seq, is_adapter, is_low_complexity, is_slippage_clip, longest_homopolymer_run, mean_kmer_diversity};
 use crate::intervals::IntervalIndex;
 use crate::model::{agrees, count_fragments, join, mate_site_forward, Breakpoint};
@@ -589,17 +589,26 @@ impl Discovery {
         self.foldback = tb;
     }
 
-    /// SPEC-9: keep the breakpoints that are not cruciform fold-backs (no-op when off).
-    /// `count` adds the dropped ones to the stats counter (output only: the discordant
-    /// rescue re-screens breakpoints output already judged).
-    fn retain_not_foldback(&self, rn: &str, v: &mut Vec<&Breakpoint>, count: bool) {
-        let Some(tb) = &self.foldback else { return };
-        let (k, w) = (self.config.foldback_k, self.config.foldback_window);
-        let before = v.len();
-        v.retain(|b| !breakpoint_is_foldback(tb, rn, b.side, &b.clipped.seq, b.breakpoint, k, w));
-        if count {
-            self.foldback_rejected.set(self.foldback_rejected.get() + (before - v.len()) as u64);
+    /// SPEC-9 verdict for one breakpoint (`Fold::No` when the gate is off).
+    fn foldback_class(&self, rn: &str, b: &Breakpoint) -> Fold {
+        let Some(tb) = &self.foldback else { return Fold::No };
+        let c = &self.config;
+        classify(tb, rn, b.side, &b.clipped.seq, b.breakpoint, c.foldback_k, c.foldback_min_short, c.foldback_window)
+    }
+
+    /// SPEC-9 on one contig before pairing: drop `Clear` fold-backs, and short `Maybe` ones
+    /// whose would-be partner (any opposite breakpoint in the pairing window: TSD up to
+    /// `tsd_max`, target-site deletion up to `max_target_site_deletion`) is `Clear` or `Maybe`.
+    /// No-op when off.
+    fn foldback_gate<'b>(&self, rn: &str, l: &mut Vec<&'b Breakpoint>, r: &mut Vec<&'b Breakpoint>) {
+        if self.foldback.is_none() {
+            return;
         }
+        let c = &self.config;
+        let lo = c.tsd_min.min(-c.max_target_site_deletion.max(0));
+        let hi = c.tsd_max.max(1);
+        let n = gate_pairs(l, r, |b| self.foldback_class(rn, b), |b| b.breakpoint, lo, hi);
+        self.foldback_rejected.set(self.foldback_rejected.get() + n as u64);
     }
 
     pub fn set_exon_model(&mut self, m: Option<GeneModel>) {
@@ -2242,8 +2251,7 @@ impl Discovery {
 
             // SPEC-9: drop cruciform fold-back clip clusters (clip = inverted copy of the
             // flank). Poly-A-mate breakpoints (`p`) carry no clip to judge.
-            self.retain_not_foldback(rn, &mut l, true);
-            self.retain_not_foldback(rn, &mut r, true);
+            self.foldback_gate(rn, &mut l, &mut r);
 
             // Emissions are buffered per contig (left, right, poly-A pools) and flushed in
             // order below, so the optional post-TSD pairing modes can add pairs and upgrade a
@@ -2538,6 +2546,9 @@ impl Discovery {
                     if is_low_complexity(&mb.unclipped.seq, 0.8) {
                         continue;
                     }
+                    if self.foldback_class(rn, lb) == Fold::Maybe && self.foldback_class(rn, mb) == Fold::Maybe {
+                        continue; // SPEC-9: two short possible fold-backs
+                    }
                     if let Some(s) = sc.as_deref_mut() {
                         self.sidecar_locus(s, &Emit::Bp(lb), &Emit::Bp(mb), &[], &[])?;
                     }
@@ -2571,6 +2582,9 @@ impl Discovery {
                 if let Some(mb) = pick {
                     if is_low_complexity(&mb.unclipped.seq, 0.8) {
                         continue;
+                    }
+                    if self.foldback_class(rn, rb) == Fold::Maybe && self.foldback_class(rn, mb) == Fold::Maybe {
+                        continue; // SPEC-9: two short possible fold-backs
                     }
                     if let Some(s) = sc.as_deref_mut() {
                         self.sidecar_locus(s, &Emit::Bp(mb), &Emit::Bp(rb), &[], &[])?;
@@ -2611,7 +2625,10 @@ impl Discovery {
                 )
             });
         }
-        self.retain_not_foldback(rn, v, false);
+        // SPEC-9: clear fold-backs only; a short `Maybe` is judged per rescued pair
+        if self.foldback.is_some() {
+            v.retain(|b| self.foldback_class(rn, b) != Fold::Clear);
+        }
     }
 }
 

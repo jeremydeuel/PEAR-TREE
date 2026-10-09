@@ -102,17 +102,22 @@ short_overhang_max = 20
 max_short_per_breakpoint = 100
 
 # SPEC-9 -- cruciform fold-back gate (Jeremy 2026-10-09). Drops a clip breakpoint whose 20
-# junction-proximal clip bases occur reverse-complemented in the reference within +-50 bp: the
+# junction-proximal clip bases occur as an INVERTED copy in the reference within +-50 bp: the
 # hairpin product of cruciform DNA at an inverted repeat in enzymatic-fragmentation (low-input)
 # libraries (Ellis et al. 2021 Nat Protoc, Fig. 3). Their near-identical starts escape duplicate
 # marking, so they pass the >= 2-fragment rule (PD45886: 15 of 27 colonies, 470/489 private
 # calls; lo0019 12:81477172 = 84 reads in 170 bp, mates with mirror clips 97M54S/54S97M).
-# Measured on combine junctions: 2/2573 germline MEIs flagged (PD45886), 0/1476 (PD37580),
-# ~40 % of PD45886's private calls removed. foldback_reference MUST be the BAM's assembly
-# (hg19.2bit serves hs37d5): discovery length-checks every shared contig and exits otherwise.
+# A clip of foldback_min_short..19 bp that is wholly such an inverted copy is only a POSSIBLE
+# fold-back: dropped when the breakpoint it would pair with is a fold-back or possible one too.
+# Re-scored on PD45886's 27 discovery outputs (--step foldback-scan): 353/489 private calls
+# lose all discovery support (tier B 13/27), clean colonies lose 0.1-0.3 % of their loci, dirty
+# ones 5-12 %; germline MEIs 2/2573 (one a combine-naming artefact, one an L1MC4a local
+# template switch). foldback_reference MUST be the BAM's assembly (hg19.2bit serves hs37d5):
+# discovery length-checks every shared contig and exits otherwise.
 foldback_filter = true
 foldback_reference = /lustre/scratch126/casm/teams/team273/users/jd43/hg19.2bit
 foldback_k = 20
+foldback_min_short = 12
 foldback_window = 50
 
 # --- verbatim copy of config.discovery.grch38 follows ---

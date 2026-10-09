@@ -140,17 +140,30 @@ fn revcomp(s: &[u8]) -> Vec<u8> {
         .collect()
 }
 
-/// The `k` clip bases next to the junction, uppercased (`CLIP_LEFT` stores
-/// `[clipped][unclipped]`, so the end of the clip; `CLIP_RIGHT` the start). `None` when the
-/// clip is shorter than `k`, holds a non-ACGT base, or is low-complexity.
-pub fn probe(side: i32, clipped: &[u8], k: usize) -> Option<Vec<u8>> {
-    if k == 0 || clipped.len() < k {
+/// SPEC-9 verdict for one clip breakpoint.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Fold {
+    /// >= `k` junction-proximal clip bases are an inverted copy of the flank: always dropped.
+    Clear,
+    /// a clip of `min_short`..`k`-1 bases, ALL of it an inverted copy of the flank: too short
+    /// to call alone, dropped only when its pairing partner is `Clear` or `Maybe`.
+    Maybe,
+    /// not a fold-back, or not judgeable (too short, non-ACGT, low-complexity, contig
+    /// absent from the .2bit).
+    No,
+}
+
+/// The junction-proximal probe of a breakpoint's STORED clip: from clustering on, both sides
+/// store the clip reading outward from the junction (`CLIP_RIGHT` in reference orientation,
+/// `CLIP_LEFT` reverse-complemented — model.rs `join`), so it is the first `k` bases either
+/// way; a clip of `min_short`..`k`-1 bases is used whole. `None` when shorter, non-ACGT or
+/// low-complexity.
+pub fn probe(clipped: &[u8], k: usize, min_short: usize) -> Option<Vec<u8>> {
+    let n = if clipped.len() >= k { k } else { clipped.len() };
+    if n == 0 || n < min_short.min(k) {
         return None;
     }
-    let p: Vec<u8> = if side == CLIP_LEFT { &clipped[clipped.len() - k..] } else { &clipped[..k] }
-        .iter()
-        .map(|b| b.to_ascii_uppercase())
-        .collect();
+    let p: Vec<u8> = clipped[..n].iter().map(|b| b.to_ascii_uppercase()).collect();
     if !p.iter().all(|b| matches!(b, b'A' | b'C' | b'G' | b'T')) {
         return None;
     }
@@ -160,28 +173,126 @@ pub fn probe(side: i32, clipped: &[u8], k: usize) -> Option<Vec<u8>> {
     Some(p)
 }
 
-/// True if the probe's reverse complement occurs in `reference` (the window around the
-/// breakpoint).
-pub fn is_foldback(probe: &[u8], reference: &[u8]) -> bool {
-    let rc = revcomp(probe);
-    reference.windows(rc.len()).any(|w| w == rc.as_slice())
+/// The probe as it would appear in the reference if the clip were a fold-back: a RIGHT clip
+/// (reference orientation) folds onto the opposite strand, so its reverse complement; a LEFT
+/// clip is already stored reverse-complemented, so the probe itself.
+pub fn foldback_target(side: i32, probe: &[u8]) -> Vec<u8> {
+    if side == CLIP_LEFT { probe.to_vec() } else { revcomp(probe) }
 }
 
-/// Gate for one breakpoint: true = fold-back (drop). Contigs the .2bit lacks are kept.
-pub fn breakpoint_is_foldback(
+/// Classify one breakpoint (stored clip orientation, see `probe`).
+#[allow(clippy::too_many_arguments)]
+pub fn classify(
     tb: &TwoBit,
     contig: &str,
     side: i32,
     clipped: &[u8],
     breakpoint: i64,
     k: usize,
+    min_short: usize,
     window: i64,
-) -> bool {
-    let Some(p) = probe(side, clipped, k) else { return false };
+) -> Fold {
+    let Some(p) = probe(clipped, k, min_short) else { return Fold::No };
+    let target = foldback_target(side, &p);
     match tb.fetch(contig, breakpoint - window, breakpoint + window + 1) {
-        Some(r) => is_foldback(&p, &r),
-        None => false,
+        Some(r) if r.windows(target.len()).any(|w| w == target.as_slice()) => {
+            if p.len() >= k { Fold::Clear } else { Fold::Maybe }
+        }
+        _ => Fold::No,
     }
+}
+
+/// SPEC-9 on one contig's breakpoint lists: drop every `Clear` fold-back, and every `Maybe`
+/// whose opposite side holds a `Clear` or `Maybe` breakpoint it could pair with (RIGHT − LEFT
+/// in `[pair_lo, pair_hi]`). Returns the number dropped.
+pub fn gate_pairs<B>(
+    l: &mut Vec<B>,
+    r: &mut Vec<B>,
+    class: impl Fn(&B) -> Fold,
+    pos: impl Fn(&B) -> i64,
+    pair_lo: i64,
+    pair_hi: i64,
+) -> usize {
+    let cl: Vec<Fold> = l.iter().map(&class).collect();
+    let cr: Vec<Fold> = r.iter().map(&class).collect();
+    let partner_bad = |p: i64, other: &[B], oc: &[Fold], left: bool| {
+        other.iter().zip(oc).any(|(o, &c)| {
+            let gap = if left { pos(o) - p } else { p - pos(o) };
+            c != Fold::No && gap >= pair_lo && gap <= pair_hi
+        })
+    };
+    let keep_l: Vec<bool> = l
+        .iter()
+        .zip(&cl)
+        .map(|(b, &c)| match c {
+            Fold::Clear => false,
+            Fold::Maybe => !partner_bad(pos(b), r, &cr, true),
+            Fold::No => true,
+        })
+        .collect();
+    let keep_r: Vec<bool> = r
+        .iter()
+        .zip(&cr)
+        .map(|(b, &c)| match c {
+            Fold::Clear => false,
+            Fold::Maybe => !partner_bad(pos(b), l, &cl, false),
+            Fold::No => true,
+        })
+        .collect();
+    let before = l.len() + r.len();
+    let mut it = keep_l.iter();
+    l.retain(|_| *it.next().unwrap());
+    let mut it = keep_r.iter();
+    r.retain(|_| *it.next().unwrap());
+    before - l.len() - r.len()
+}
+
+/// `--step foldback-scan`: apply the gate to each `<contig>:<L>-<R>:{LEFT,RIGHT}:CLIPPED`
+/// record of a discovery FASTQ (.txt.gz). The LEFT clip is stored reverse-complemented
+/// (`print_output`), so it is flipped back; its breakpoint is the name's first coordinate,
+/// the RIGHT one's the second. Poly-A ends (`polyA_<pos>`) are not clip breakpoints and are
+/// skipped, as in `output`.
+pub fn scan_discovery_output<W: std::io::Write>(
+    path: &str,
+    tb: &TwoBit,
+    k: usize,
+    min_short: usize,
+    window: i64,
+    out: &mut W,
+) -> io::Result<()> {
+    use std::io::BufRead;
+    let r = BufReader::new(flate2::read::MultiGzDecoder::new(File::open(path)?));
+    writeln!(out, "locus\tside\tclip_len\tverdict")?;
+    let mut lines = r.lines();
+    while let Some(h) = lines.next() {
+        let h = h?;
+        let seq = lines.next().transpose()?.unwrap_or_default();
+        lines.next();
+        lines.next();
+        let Some(name) = h.strip_prefix('@') else { continue };
+        let (side, side_name) = if let Some(l) = name.strip_suffix(":LEFT:CLIPPED") {
+            (CLIP_LEFT, l)
+        } else if let Some(l) = name.strip_suffix(":RIGHT:CLIPPED") {
+            (crate::config::CLIP_RIGHT, l)
+        } else {
+            continue;
+        };
+        let Some((contig, span)) = side_name.rsplit_once(':') else { continue };
+        let Some((a, b)) = span.split_once('-') else { continue };
+        let pos = if side == CLIP_LEFT { a } else { b };
+        let Ok(bp) = pos.parse::<i64>() else { continue };
+        // back to the stored orientation (print_output wrote the LEFT clip reverse-complemented)
+        let clip = if side == CLIP_LEFT { revcomp(&seq.as_bytes().to_ascii_uppercase()) } else { seq.as_bytes().to_ascii_uppercase() };
+        let verdict = match classify(tb, contig, side, &clip, bp, k, min_short, window) {
+            Fold::Clear => "foldback",
+            Fold::Maybe => "maybe",
+            Fold::No if probe(&clip, k, min_short).is_none() => "unjudged",
+            Fold::No => "kept",
+        };
+        let s = if side == CLIP_LEFT { "L" } else { "R" };
+        writeln!(out, "{side_name}\t{s}\t{}\t{verdict}", clip.len())?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -268,15 +379,10 @@ mod tests {
         assert_eq!(t.len("12"), Some(81477142 + SITE.len() as u64 + 300));
     }
 
-    #[test]
-    fn lo0019_left_clip_is_a_foldback() {
-        let (_d, t) = tb();
-        // combine's L junction: clip `gggtgacagagtgagactcc` | aligned GTCACCCAGCC... at 81477172
-        let clipped = b"TGGGTGACAGAGTGAGACTCC";
-        assert!(breakpoint_is_foldback(&t, "12", CLIP_LEFT, clipped, 81477172, 20, 50));
-        // and the R junction: aligned ...GTGCAATG | clip `agcagagatcatgccatt` (18 bp)
-        assert!(breakpoint_is_foldback(&t, "12", CLIP_RIGHT, b"AGCAGAGATCATGCCATT", 81477195, 18, 50));
-    }
+    // lo0019 12:81477172-81477195 as discovery STORES it: LEFT clip reverse-complemented
+    // (file/combine show TGGGTGACAGAGTGAGACTCC), RIGHT clip in reference orientation.
+    const L_STORED: &[u8] = b"GGAGTCTCACTCTGTCACCCA";
+    const R_STORED: &[u8] = b"AGCAGAGATCATGCCATT"; // 18 bp
 
     /// The real UCSC file, when available (PEARTREE_TEST_HG19_2BIT=/path/hg19.2bit); skipped
     /// otherwise. Pins the reader to UCSC's packing, not just to `write_2bit` above.
@@ -286,19 +392,49 @@ mod tests {
         let t = TwoBit::open(&p).unwrap();
         assert_eq!(t.len("12"), Some(133_851_895));
         assert_eq!(t.fetch("12", 81477142, 81477242).unwrap(), SITE);
-        assert!(breakpoint_is_foldback(&t, "12", CLIP_LEFT, b"TGGGTGACAGAGTGAGACTCC", 81477172, 20, 50));
+        assert_eq!(classify(&t, "12", CLIP_LEFT, L_STORED, 81477172, 20, 12, 50), Fold::Clear);
+    }
+
+    #[test]
+    fn lo0019_junctions() {
+        let (_d, t) = tb();
+        assert_eq!(classify(&t, "12", CLIP_LEFT, L_STORED, 81477172, 20, 12, 50), Fold::Clear);
+        assert_eq!(classify(&t, "12", CLIP_RIGHT, R_STORED, 81477195, 20, 12, 50), Fold::Maybe, "18 bp: possible only");
+        assert_eq!(classify(&t, "12", CLIP_RIGHT, R_STORED, 81477195, 20, 19, 50), Fold::No, "below min_short");
+    }
+
+    #[test]
+    fn strand_matters_a_direct_copy_is_not_a_foldback() {
+        let (_d, t) = tb();
+        // the LEFT clip in REFERENCE orientation (i.e. the wrong, unstored strand)
+        assert_eq!(classify(&t, "12", CLIP_LEFT, b"TGGGTGACAGAGTGAGACTCC", 81477172, 20, 12, 50), Fold::No);
+        // a RIGHT clip that repeats the flank directly (tandem dup), not inverted
+        assert_eq!(classify(&t, "12", CLIP_RIGHT, b"GGAGTCTCACTCTGTCACCCAG", 81477195, 20, 12, 50), Fold::No);
     }
 
     #[test]
     fn element_clip_and_low_complexity_are_kept() {
         let (_d, t) = tb();
-        // an Alu 5' end clip (GGCCGGGCGCGGTGGCTCACGCCTG) is not an inverted copy of this flank
-        assert!(!breakpoint_is_foldback(&t, "12", CLIP_RIGHT, b"GGCCGGGCGCGGTGGCTCACGCCTG", 81477195, 20, 50));
-        // a poly-A clip is never judged
-        assert!(probe(CLIP_LEFT, b"AAAAAAAAAAAAAAAAAAAAAAAA", 20).is_none());
-        // too short to judge
-        assert!(probe(CLIP_LEFT, b"GGGTGACAGAG", 20).is_none());
-        // out of the window
-        assert!(!breakpoint_is_foldback(&t, "12", CLIP_LEFT, b"TGGGTGACAGAGTGAGACTCC", 81477172 + 5000, 20, 50));
+        // an Alu 5' end clip is not an inverted copy of this flank
+        assert_eq!(classify(&t, "12", CLIP_RIGHT, b"GGCCGGGCGCGGTGGCTCACGCCTG", 81477195, 20, 12, 50), Fold::No);
+        assert!(probe(b"AAAAAAAAAAAAAAAAAAAAAAAA", 20, 12).is_none(), "poly-A never judged");
+        assert!(probe(b"GGAGTCTCAC", 20, 12).is_none(), "10 bp: too short");
+        assert_eq!(classify(&t, "12", CLIP_LEFT, L_STORED, 81477172 + 5000, 20, 12, 50), Fold::No, "out of window");
+    }
+
+    #[test]
+    fn short_possible_foldbacks_need_a_foldback_partner() {
+        // (position, class); pairing window RIGHT - LEFT in [-30, 40]
+        let run = |l: &[(i64, Fold)], r: &[(i64, Fold)]| {
+            let (mut l, mut r) = (l.to_vec(), r.to_vec());
+            let n = gate_pairs(&mut l, &mut r, |b| b.1, |b| b.0, -30, 40);
+            (n, l.len(), r.len())
+        };
+        assert_eq!(run(&[(100, Fold::Clear)], &[(120, Fold::Maybe)]), (2, 0, 0), "Maybe + Clear");
+        assert_eq!(run(&[(100, Fold::Maybe)], &[(120, Fold::Maybe)]), (2, 0, 0), "Maybe + Maybe");
+        assert_eq!(run(&[(100, Fold::No)], &[(120, Fold::Maybe)]), (0, 1, 1), "Maybe + real clip");
+        assert_eq!(run(&[(100, Fold::Maybe)], &[(500, Fold::Maybe)]), (0, 1, 1), "Maybes too far apart");
+        assert_eq!(run(&[(100, Fold::No)], &[(120, Fold::Clear)]), (1, 1, 0), "Clear always goes");
+        assert_eq!(run(&[(120, Fold::Maybe)], &[(100, Fold::Maybe)]), (2, 0, 0), "target-site deletion geometry");
     }
 }

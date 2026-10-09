@@ -188,15 +188,21 @@ configs, incl. the evidence sidecar).
   with k structured bases (no homopolymer ≥ 8, ≥ 3 distinct bases). Short orphan-transduction tags
   followed by a long poly-A dragged the whole-clip entropy under 1.95 (the orphan TD misses).
 - `foldback_filter` + `foldback_reference` (.2bit of the BAM's assembly) + `foldback_k` (20) +
-  `foldback_window` (50) — SPEC-9, on in both `.tprt2frag` deploy configs (2026-10-09): a clip
-  breakpoint is dropped (before pairing, and in the discordant rescue) when its `k`
-  junction-proximal clip bases occur reverse-complemented in the reference within ±`window` bp.
-  These are cruciform hairpin fragments from enzymatic-fragmentation libraries (Ellis et al. 2021
-  Nat Protoc Fig. 3), whose near-identical starts escape duplicate marking and so satisfy the
-  ≥ 2-fragment rule. Low-complexity probes (entropy < 1.5 bits or a homopolymer ≥ 8) are never
-  judged. Discovery length-checks every contig shared by the BAM and the .2bit and exits on a
-  mismatch. Measured on combine junctions: 2/2573 germline MEIs flagged (PD45886), 0/1476
-  (PD37580); ~40 % of PD45886's private calls removed. `stats.json` gains `foldback.rejected`.
+  `foldback_min_short` (12) + `foldback_window` (50) — SPEC-9, on in both `.tprt2frag` deploy
+  configs (2026-10-09). Cruciform hairpin fragments from enzymatic-fragmentation libraries (Ellis
+  et al. 2021 Nat Protoc Fig. 3) carry a clip that is an inverted copy of the flank; their
+  near-identical starts escape duplicate marking and so satisfy the ≥ 2-fragment rule. Verdict
+  per clip breakpoint, in its STORED orientation (both sides read outward from the junction; the
+  LEFT clip is reverse-complemented from `join` on): **clear** = the first `k` clip bases occur
+  as an inverted copy within ±`window` bp → dropped; **possible** = a clip of
+  `min_short`..`k`−1 bases wholly such a copy → dropped only when an opposite breakpoint it could
+  pair with (RIGHT − LEFT in [−`max_target_site_deletion`, `tsd_max`]) is clear or possible.
+  Low-complexity probes (entropy < 1.5 bits or a homopolymer ≥ 8) are never judged. Applied
+  before pairing in `output`; the discordant rescue drops clear ones and refuses a pair of two
+  possible ones. Discovery length-checks every contig shared by the BAM and the .2bit and exits
+  on a mismatch. `stats.json` gains `foldback.rejected`. `--step foldback-scan --in <txt.gz>
+  --config <cfg>` re-scores a finished discovery output without its BAM. PD45886 (27 colonies):
+  353/489 private calls lose all discovery support, germline MEIs 2/2573.
 - `.tprt` also turns on SENS-8 `short_polya_clip` (poly-A clip consensus shortened below 12 bp by
   SBS homopolymer jitter — the other orphan/partnered-TD miss mode).
 - **combine**: `oneside_` tokens parse onto the Feature-A one-real-side types (`TYPE_*_DISC`,

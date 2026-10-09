@@ -387,12 +387,16 @@ pub struct DiscoveryConfig {
     /// 2021 Nat Protoc, Fig. 3); their near-identical starts escape duplicate marking, so
     /// they pass the >= 2-fragment rule. Low-complexity probes (poly-A, STRs) are never
     /// judged. Needs `foldback_reference` (a .2bit of the BAM's assembly; hg19.2bit serves
-    /// hs37d5 BAMs, contig names are matched with or without `chr`). Measured 2026-10-09:
-    /// k=20, ±50 bp flags 2/2573 germline MEIs (PD45886) and 0/1476 (PD37580) while
-    /// removing ~40 % of PD45886's private calls. Off = byte-identical.
+    /// hs37d5 BAMs, contig names are matched with or without `chr`). Measured 2026-10-09 by
+    /// `--step foldback-scan` on PD45886's 27 discovery outputs: 353/489 private calls lose
+    /// all discovery support, germline MEIs 2/2573. Off = byte-identical.
     pub foldback_filter: bool,
     pub foldback_reference: Option<String>,
     pub foldback_k: usize,
+    /// Clips of `foldback_min_short`..`foldback_k`-1 bases whose WHOLE sequence is an inverted
+    /// copy of the flank are possible fold-backs: dropped only when the breakpoint they would
+    /// pair with is a fold-back or possible fold-back too (Jeremy 2026-10-09).
+    pub foldback_min_short: usize,
     pub foldback_window: i64,
 }
 
@@ -488,6 +492,7 @@ impl Default for DiscoveryConfig {
             foldback_filter: false,
             foldback_reference: None,
             foldback_k: 20,
+            foldback_min_short: MIN_CLIP_LEN,
             foldback_window: 50,
         }
     }
@@ -665,6 +670,7 @@ impl DiscoveryConfig {
             "foldback_filter" => self.foldback_filter = parse_bool(val)?,
             "foldback_reference" => self.foldback_reference = Some(val.to_string()),
             "foldback_k" => self.foldback_k = parse_num(val)?,
+            "foldback_min_short" => self.foldback_min_short = parse_num(val)?,
             "foldback_window" => self.foldback_window = parse_num(val)?,
             other => eprintln!("warning: ignoring unknown config key '{other}'"),
         }

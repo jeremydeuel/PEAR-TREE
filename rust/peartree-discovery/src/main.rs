@@ -57,6 +57,7 @@ fn main() -> io::Result<()> {
     let mut step: Option<String> = None;
     let mut config_path: Option<String> = None;
     let mut reference: Option<String> = None;
+    let mut input: Option<String> = None;
     // 0 = auto (resolved from available parallelism after arg parsing). An explicit
     // `--threads`/`-@` or PEARTREE_BAM_THREADS overrides, including `--threads 1`.
     let mut threads: usize = std::env::var("PEARTREE_BAM_THREADS")
@@ -72,14 +73,34 @@ fn main() -> io::Result<()> {
             "--threads" | "-@" => { threads = args.get(i + 1).and_then(|s| s.parse().ok()).unwrap_or(threads); i += 2; }
             "--config" | "-c" => { config_path = args.get(i + 1).cloned(); i += 2; }
             "--reference" | "-T" => { reference = args.get(i + 1).cloned(); i += 2; }
+            "--in" => { input = args.get(i + 1).cloned(); i += 2; }
             _ => { i += 1; }
         }
     }
 
     let step = step.as_deref().unwrap_or("discover").to_string();
-    if step != "discover" && step != "coverage-median" {
-        eprintln!("unknown step '{step}'; this binary implements --step discover | coverage-median");
+    if step != "discover" && step != "coverage-median" && step != "foldback-scan" {
+        eprintln!("unknown step '{step}'; this binary implements --step discover | coverage-median | foldback-scan");
         usage();
+    }
+    // `--step foldback-scan --in <discovery .txt.gz> --config <cfg>`: run the SPEC-9 gate
+    // (the config's foldback_reference/k/window) over every breakpoint an existing discovery
+    // output emitted, printing `locus side clip_len verdict` (verdict foldback | kept |
+    // unjudged). Re-evaluates a finished run without its BAM; no assembly length check.
+    if step == "foldback-scan" {
+        let Some(input) = input else { usage() };
+        let config = DiscoveryConfig::load(config_path.as_deref()).unwrap_or_else(|e| {
+            eprintln!("config error: {e}");
+            std::process::exit(1);
+        });
+        let Some(p) = config.foldback_reference.as_deref() else {
+            eprintln!("foldback-scan needs foldback_reference in the config");
+            std::process::exit(1);
+        };
+        let tb = foldback::TwoBit::open(p)?;
+        let stdout = io::stdout();
+        foldback::scan_discovery_output(&input, &tb, config.foldback_k, config.foldback_min_short, config.foldback_window, &mut stdout.lock())?;
+        return Ok(());
     }
     let Some(bam) = bam else { usage() };
 
@@ -324,7 +345,7 @@ fn main() -> io::Result<()> {
 
     let foldback_cfg = config
         .foldback_filter
-        .then(|| (config.foldback_reference.clone(), config.foldback_k, config.foldback_window));
+        .then(|| (config.foldback_reference.clone(), config.foldback_k, config.foldback_min_short, config.foldback_window));
     let mut d = Discovery::new(bam, threads, config, exclude, rm_mask);
     d.set_discordant_rte(discordant_rte);
     d.set_exon_model(exon_model);
@@ -332,7 +353,7 @@ fn main() -> io::Result<()> {
     // SPEC-9: the fold-back gate's reference. Every BAM contig the .2bit also names must
     // have the same length, so a wrong-assembly .2bit fails here instead of silently
     // comparing clips against the wrong sequence.
-    if let Some((path, k, window)) = foldback_cfg {
+    if let Some((path, k, min_short, window)) = foldback_cfg {
         let Some(p) = path else {
             eprintln!("foldback_filter is on but foldback_reference (.2bit) is not set");
             std::process::exit(1);
@@ -362,7 +383,10 @@ fn main() -> io::Result<()> {
             );
             std::process::exit(1);
         }
-        eprintln!("fold-back gate: ON (k {k}, window +-{window} bp, {p}, {shared} contigs length-checked)");
+        eprintln!(
+            "fold-back gate: ON (k {k}, short clips {min_short}..{} bp only with a fold-back partner, window +-{window} bp, {p}, {shared} contigs length-checked)",
+            k.saturating_sub(1)
+        );
         d.set_foldback(Some(tb));
     }
     d.discovery()?;
