@@ -116,9 +116,15 @@ populate_irods() {
     command -v iquest >/dev/null || die "iquest not on PATH (module load IRODS)"
     tips="$(mktemp)"; hits="$(mktemp)"
     grep -oE '[(,][A-Za-z][A-Za-z0-9._-]*' "$d"/*.tree | cut -c2- | sort -u > "$tips"
-    iquest --no-page "%s/%s" "SELECT COLL_NAME, DATA_NAME WHERE DATA_NAME like '${P}%.sample.dupmarked.bam'" \
-        | awk -F/ '$2=="cgp" && $3=="intproj" && $5=="sample" {print $6 "\t" $4}' | sort -u > "$hits"
-    [ -s "$hits" ] || { rm -f "$tips" "$hits"; die "iquest found no ${P}*.sample.dupmarked.bam in iRODS"; }
+    # one iquest per PD prefix of the tree tips, not of the patient id: a patient dir can hold one
+    # individual sampled under two PD ids (SDS5_PD42190_PD45888: PD42190* + PD45888* tips)
+    local pfx pfxs
+    pfxs="$(grep -oE '^PD[0-9]+' "$tips" | sort -u)"
+    [ -n "$pfxs" ] || pfxs="$P"
+    for pfx in $pfxs; do
+        iquest --no-page "%s/%s" "SELECT COLL_NAME, DATA_NAME WHERE DATA_NAME like '${pfx}%.sample.dupmarked.bam'"
+    done | awk -F/ '$2=="cgp" && $3=="intproj" && $5=="sample" {print $6 "\t" $4}' | sort -u > "$hits"
+    [ -s "$hits" ] || { rm -f "$tips" "$hits"; die "iquest found no $(echo $pfxs | tr ' ' '/')*.sample.dupmarked.bam in iRODS"; }
     local tmp="$d/colonies.tsv.tmp.$$"
     {
         printf 'donor\tproj\tds\treadlen\tmapped\tassembly\tsample\n'
