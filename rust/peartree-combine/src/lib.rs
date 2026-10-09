@@ -8,6 +8,7 @@ pub mod consensus;
 pub mod context;
 pub mod diag;
 pub mod evidence;
+pub mod foldback;
 pub mod genome;
 pub mod genotyping_out;
 pub mod insertion;

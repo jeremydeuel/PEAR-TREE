@@ -13,6 +13,10 @@ Artefact checks cap a call at tier D and say why in tier_note:
   * local origin      (--genome) every clip is reference sequence within --local-window bp and the
                       mates lie in the flanks: nothing was inserted (template switch between nearby
                       repeat copies, small del/dup) -- PD37580 lo0077's six L1 "insertions"
+  * low allele frac.  the carriers' pooled alt/(alt+ref) rejects a heterozygote (one-sided binomial
+                      p < --het-alpha, expected b/(1+b) with the joint reference bias b): a colony is
+                      clonal, so a real event sits near 50 %. PD45886's private calls pooled 0.23 vs
+                      0.52 for germline hets; the test caps 1.2 % of germline carrier calls
 
   python cluster/somatic_table.py --patient PD37590 --joint bias3.joint.tsv \
       --genotype-dir V2_refbias/genotypes --fit-v2 V2_refbias/fit/phylo_fit.tsv \
@@ -26,6 +30,10 @@ Hard rules (Jeremy, 2026-10-08) EXCLUDE a candidate (moved to the `excluded` she
                       that clip's inserted sequence (>= 25 bp at >= 90 %) adds a fragment; a discordant
                       pair alone, or one that does not agree on the insert, never counts; templates whose
                       read AND mate agree within 5 bp (allele-forward shift, R1/R2 ignored) are one molecule
+  * short clips       (--genome) both clip consensuses <= SHORT_CLIP_BP and no MATE read of the locus
+                      that is non-local (>= 30 bp of non-homopolymer sequence that does not place within
+                      --local-window bp): no inserted sequence anywhere (Jeremy, 2026-10-09; PD45886:
+                      180/489 private calls, 13/2573 germline MEIs)
   Known insertions (tier A) are kept and only flagged in tier_note.
 Sheets: README, somatic (the table, sorted by tier), excluded (the rule failures), known (the known
 insertions' rows), refbias (the b estimates, when --refbias is given).
@@ -34,6 +42,7 @@ import argparse
 import collections
 import csv
 import gzip
+import math
 import os
 import re
 import sys
@@ -54,6 +63,8 @@ LOCAL_MIN_CLIP = 15          # clip bp left after removing homopolymer runs >= 5
 LOCAL_MATE_VOTES = 0.5       # fraction of a mate's 15-mers on one diagonal = it maps there (a paralog
                              # copy at ~90% identity keeps ~0.2-0.4; sequencing errors still leave >= 0.5)
 LOCAL_MATE_FRAC = 0.7        # share of the locus' mates that must map inside the window
+SHORT_CLIP_BP = 20           # short-clip rule: both clip consensuses at most this long ...
+SHORT_MATE_MIN = 30          # ... and no mate with >= this many non-homopolymer bp off the local reference
 
 
 # ------------------------------------------------------------------ input
@@ -376,6 +387,65 @@ def local_origin(loc, evid, cons, reads_by, genome, window):
     return "local origin: " + "; ".join(where) + f"; {ok}/{len(mates)} mates within {window} bp"
 
 
+def clip_len(cons, evid, loc, side):
+    """bp of inserted (lower-case) sequence in combine's consensus for one end, else the evidence
+    table's clip_consensus"""
+    for src in (cons.get((loc, side), ""), evid.get((loc, side), {}).get("clip_consensus", "")):
+        n = sum(len(x) for x in re.findall("[a-z]+", src))
+        if n:
+            return n
+    return 0
+
+
+def nonlocal_mates(loc, reads_by, genome, window):
+    """MATE reads of the locus carrying >= SHORT_MATE_MIN bp of non-homopolymer sequence that does not
+    place on the reference within +-window: sequence from inside an insertion (or from a far partner).
+    Mates that place locally are flank, which every artefact has too."""
+    p = parse_locus(loc)
+    if not p:
+        return 0
+    c, a, b = p
+    lo, hi = min(a, b), max(a, b)
+    start = max(1, lo - window)
+    ref = genome.fetch(c, start - 1, hi + window) or ""
+    idx = kmer_index(ref, LOCAL_K_MATE)
+    n = 0
+    for r in reads_by.get(loc, []):
+        if r[1] != "MATE":
+            continue
+        seq = r[5].upper()
+        if len(re.sub(r"(A{5,}|C{5,}|G{5,}|T{5,})", "", seq)) < SHORT_MATE_MIN:
+            continue
+        hit = place(seq, idx, LOCAL_K_MATE)
+        if hit and hit[0] >= LOCAL_MATE_VOTES:
+            continue
+        n += 1
+    return n
+
+
+def binom_cdf(k, n, p):
+    """P(X <= k), X ~ Binomial(n, p) (stdlib)"""
+    if n <= 0:
+        return 1.0
+    lp, lq = math.log(p), math.log1p(-p)
+    return min(1.0, sum(math.exp(math.lgamma(n + 1) - math.lgamma(i + 1) - math.lgamma(n - i + 1) + i * lp + (n - i) * lq)
+                        for i in range(0, k + 1)))
+
+
+def refbias_b(rows):
+    """{kind: b} plus 'global' from the joint refbias table"""
+    out = {}
+    for r in rows:
+        b = fnum(r.get("b"))
+        if b != b or b <= 0:
+            continue
+        if r.get("scope") == "global":
+            out["global"] = b
+        elif r.get("scope") == "kind":
+            out[r.get("name", "")] = b
+    return out
+
+
 # ------------------------------------------------------------------ xlsx (minimal SpreadsheetML)
 def col_letter(i):
     s = ""
@@ -539,6 +609,9 @@ def main():
                     help="a private call with alt reads in more other colonies is capped at tier D (default 2)")
     ap.add_argument("--genome", help="reference of the discovery genome (.2bit or FASTA): enables the local-origin check")
     ap.add_argument("--local-window", type=int, default=5000, help="local-origin check: bp either side of the locus")
+    ap.add_argument("--het-alpha", type=float, default=0.05,
+                    help="cap a call at tier D when its carriers' pooled alt reads reject a heterozygote at this "
+                         "one-sided binomial p (0 = off)")
     ap.add_argument("--out", required=True, help="output .xlsx")
     a = ap.parse_args()
 
@@ -551,6 +624,7 @@ def main():
     ann = {r["locus"]: r for r in read_tsv(a.annotation)}
     known = [k for k in read_tsv(a.known) if k.get("locus")]
     active = {r["id"]: r for r in read_tsv(os.path.join(a.rte_library, "active.tsv")) if r.get("id")}
+    bias = refbias_b(read_tsv(a.refbias))
     td_sources = {r["id"]: r for r in read_tsv(os.path.join(a.rte_library, "transduction_sources.tsv")) if r.get("id")}
     genome = None
     if a.genome:
@@ -615,10 +689,13 @@ def main():
         ps = [fnum(j.get("p_" + c)) for c in carriers]
         min_p = min(ps) if ps else float("nan")
         reads, vafs = [], []
+        pool_alt = pool_ref = 0
         for c in carriers:
             g = gt.get(c, {}).get(loc)
             if g:
                 reads.append(f"{c}:{g['n_alt']}/{g['n_ref']}/{g['n_uninf']}")
+                pool_alt += int(fnum(g.get("n_alt"), 0))
+                pool_ref += int(fnum(g.get("n_ref"), 0))
                 v = fnum(g.get("vaf"))
                 if v == v:
                     vafs.append(v)
@@ -651,10 +728,22 @@ def main():
         lo_note = local_origin(loc, evid, cons, reads_by, genome, a.local_window) if not (k or tprt_like) else ""
         if lo_note:
             notes.append(lo_note)
+        if a.het_alpha > 0 and not k and pool_alt + pool_ref > 0:
+            kind = j.get("locus_kind") or f2.get("locus_kind", "")
+            b = bias.get(kind, bias.get("global", 1.0))
+            ph = binom_cdf(pool_alt, pool_alt + pool_ref, b / (1 + b))
+            if ph < a.het_alpha:
+                notes.append(f"allele fraction {pool_alt}/{pool_alt + pool_ref} below heterozygous "
+                             f"(expected {b / (1 + b):.2f}, p = {ph:.2g})")
         if notes and tier in ("B", "C"):
             notes.insert(0, f"tier {tier} -> D")
             tier = "D"
         violations, support = hard_rules(loc, reads_by, bool(a.insertions_dir), cons)
+        if a.insertions_dir and genome is not None:
+            ln, rn = clip_len(cons, evid, loc, "L"), clip_len(cons, evid, loc, "R")
+            if ln <= SHORT_CLIP_BP and rn <= SHORT_CLIP_BP and nonlocal_mates(loc, reads_by, genome, a.local_window) == 0:
+                violations.append(f"both clips <= {SHORT_CLIP_BP} bp (L{ln}/R{rn}) and no mate with sequence "
+                                  f"off the local reference (+-{a.local_window} bp)")
         if violations and k:
             notes.append("KNOWN but fails: " + "; ".join(violations))
         p = parse_locus(loc) or ("", "", "")
@@ -696,8 +785,10 @@ def main():
               ["excluded", f"{len(excluded)}  -  hard rules: |TSD/deletion| <= {MAX_SITE_GAP} bp; >= {MIN_JUNCTION_FRAGMENTS} "
                            "independent fragments (CLIP/POLYA; beside a clip also SHORT, and DISC pairs whose inside mate "
                            f"agrees with the clip's insert over >= {AGREE_MIN_BP} bp at >= {int(AGREE_MIN_ID * 100)} % (poly-A / simple repeats never count); "
-                           f"read+mate within {DUP_SHIFT} bp = one PCR molecule) on BOTH ends in one colony"
-                           + ("" if a.insertions_dir else "  [fragment rule NOT checked: no --insertions-dir]")],
+                           f"read+mate within {DUP_SHIFT} bp = one PCR molecule) on BOTH ends in one colony; "
+                           f"not both clips <= {SHORT_CLIP_BP} bp without a mate off the local reference"
+                           + ("" if a.insertions_dir else "  [fragment rule NOT checked: no --insertions-dir]")
+                           + ("" if genome else "  [short-clip rule NOT checked: no --genome]")],
               ["", ""],
               ["inputs", ""],
               ["genotype2 joint", os.path.abspath(a.joint)],
@@ -709,8 +800,10 @@ def main():
               ["", ""],
               ["columns", ""],
               ["tier_note", "why a call was capped at tier D: phylo_violating (tree_fit genotype2), alt reads in more than "
-                            f"{a.max_noncarrier_colonies} non-carrier colonies (private calls), or local origin -- every clip is "
-                            f"reference within {a.local_window} bp and the mates lie in the flanks, so nothing was inserted"
+                            f"{a.max_noncarrier_colonies} non-carrier colonies (private calls), local origin -- every clip is "
+                            f"reference within {a.local_window} bp and the mates lie in the flanks, so nothing was inserted -- "
+                            f"or an allele fraction below heterozygous (pooled carrier alt reads, one-sided binomial "
+                            f"p < {a.het_alpha} against b/(1+b), b = the joint reference bias; a colony is clonal)"
                             + ("" if genome else " (local-origin check OFF: no --genome)")],
               ["source", "genotype2 = joint step places it on a branch below the root; legacy = legacy tree_fit "
                          "calls it private / phylo-consistent shared; both; known = only via the known list"],

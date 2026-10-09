@@ -177,6 +177,12 @@ CONFIG = {
         'slippage_min_structured': 10, #clip remainder (after the repeat, before the next long homopolymer) shorter than this = nothing but the tract
         'far_pair_strict': True, #L1DEL/L1DUP pairs (gap < -30 / > 40) need element sequence (sense) on the complex clip, poly-A on the other, same element class beyond the tail, same colonies at both breakpoints
         'far_pair_split': True, #a failing far pair keeps its poly-A junction as a one-sided locus (absorbed into another colony's call of that junction when there is one); False = drop
+        'foldback_filter': True, #Rust combine: drop a locus whose POOLED clip is an inverted copy of the flank (cruciform hairpin, Ellis 2021 Nat Protoc Fig. 3): either end a full 20-mer, or both ends (a 12-19 bp clip only with a fold-back partner); per-colony discovery SPEC-9 misses short / one-mismatch hairpins. PD45886: 17 of the 93 private calls left by discovery, 6/2573 germline MEIs
+        'foldback_k': 20,
+        'foldback_min_short': 12,
+        'foldback_window': 50, #bp either side of the junction (+-100: +1 call, +2 germline; +-200: +8 calls, +7 germline)
+        'foldback_max_mismatch': 1,
+        'foldback_min_entropy': 1.0,
     },
     'annotate': { #necessary for annotate_v2.py (step 3, optional element classification)
         # NOTE: annotate works in bowtie2_index2 (hs1) space, NOT GRCh38 — so rmsk and

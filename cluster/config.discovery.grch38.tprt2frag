@@ -107,6 +107,7 @@ foldback_filter = true
 foldback_reference = /lustre/scratch126/casm/teams/team273/users/jd43/hg38.2bit
 foldback_k = 20
 foldback_min_short = 12
+foldback_min_entropy = 1.0       # AT-rich inverted repeats (the classic cruciform formers) have 2-letter clips < 1.5 bits: PD45886 +43 private calls dropped for +1 germline (an L1MB2 relic)
 foldback_window = 50
 
 # --- verbatim copy of config.discovery.grch38 follows ---

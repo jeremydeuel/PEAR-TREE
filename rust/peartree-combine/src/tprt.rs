@@ -330,6 +330,12 @@ pub(crate) mod tests {
             far_pair_allow_antisense: false,
             far_pair_colony_frac: 0.2,
             far_pair_colony_tol: 5,
+            foldback_filter: false,
+            foldback_k: 20,
+            foldback_min_short: 12,
+            foldback_window: 50,
+            foldback_max_mismatch: 1,
+            foldback_min_entropy: 1.0,
             config_dir: None,
         }
     }

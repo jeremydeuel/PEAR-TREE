@@ -104,6 +104,17 @@ pub struct Config {
     /// `far_pair_colony_tol` (5) (python `int(...)`)
     pub far_pair_colony_tol: i64,
 
+    // ---- cruciform fold-back filter (Rust only; src/foldback.rs)
+    /// `foldback_filter` (False)
+    pub foldback_filter: bool,
+    /// `foldback_k` (20), `foldback_min_short` (12), `foldback_window` (50),
+    /// `foldback_max_mismatch` (1), `foldback_min_entropy` (1.0)
+    pub foldback_k: usize,
+    pub foldback_min_short: usize,
+    pub foldback_window: i64,
+    pub foldback_max_mismatch: usize,
+    pub foldback_min_entropy: f64,
+
     /// directory of the config file (python repo-root fallback for relative paths)
     pub config_dir: Option<PathBuf>,
 }
@@ -260,6 +271,12 @@ impl Config {
             short_mate_min_mapq: ci.int("short_mate_min_mapq", 20)?,
             slippage_reject: ci.flag("slippage_reject", false),
             far_pair_strict: ci.flag("far_pair_strict", false),
+            foldback_filter: ci.flag("foldback_filter", false),
+            foldback_k: ci.uint("foldback_k", 20)?,
+            foldback_min_short: ci.uint("foldback_min_short", 12)?,
+            foldback_window: ci.int("foldback_window", 50)?,
+            foldback_max_mismatch: ci.uint("foldback_max_mismatch", 1)?,
+            foldback_min_entropy: ci.float("foldback_min_entropy", 1.0)?,
             far_pair_split: ci.flag("far_pair_split", true),
             rte_library,
             slippage_min_ref_run_combine: ci.uint("slippage_min_ref_run_combine", 8)?,

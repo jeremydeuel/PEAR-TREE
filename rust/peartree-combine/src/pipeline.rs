@@ -303,6 +303,22 @@ pub fn run(args: &Args) -> Result<(), String> {
     println!("detected {} insertions where the clipped part maps near the breakpoint. Removing these", filter_reads.len());
     drop_filtered(&mut insertions, &filter_reads, &ctx.contigs);
 
+    // ---- 8b. cruciform fold-back filter on the pooled clips (Rust only, default off)
+    if cfgc.foldback_filter {
+        let fp = crate::foldback::Params {
+            k: cfgc.foldback_k,
+            min_short: cfgc.foldback_min_short,
+            window: cfgc.foldback_window,
+            max_mismatch: cfgc.foldback_max_mismatch,
+            min_entropy: cfgc.foldback_min_entropy,
+        };
+        let n0 = insertions.len();
+        insertions.retain(|i| !crate::foldback::insertion_is_foldback(i, &ctx.contigs, &ctx.genome, &fp));
+        println!(
+            "fold-back filter: removed {} insertions whose clips are inverted copies of the flank (k {}, +-{} bp, <= {} mismatch)",
+            n0 - insertions.len(), fp.k, fp.window, fp.max_mismatch
+        );
+    }
     crate::diag::memlog("clipped remap");
     // ---- 9. fold surviving one-sided loci
     if let Some(state) = evidence.as_mut() {
