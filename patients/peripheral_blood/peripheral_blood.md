@@ -53,3 +53,21 @@ Single-cell / single-stem-cell-derived WGS. TSVs are placeholders pending the fa
 | PD47695 | PD47695 | 5 | ✓ |
 | PD47696 | PD47696 | 5 | ✓ |
 | PD47700 | PD47700 | 4 | ✓ |
+
+## CML — Kamizela 2025 Nature (BCR::ABL1), GRCh38
+
+Trees from nangalialab/CML @0991125 `cache/PDD_A.RDS` / `PDD_B.RDS` (`pdx$tree_ml`, outgroup `zeros`
+dropped), tips renamed to sample ids via `data/EGAD00001015353.sample_manifest.n1023.csv`
+(cluster/trees/kamizela_cml_trees.R). `<P>.bcr_abl1.tsv` marks the BCR::ABL1 clade tips (`$nodes`).
+
+| patient | tips | BCR::ABL1 tips | tree |
+|---|---|---|---|
+| PD51632 | 83 | 59 | ✓ |
+| PD51633 | 81 | 4 | ✓ |
+| PD51634 | 123 | 75 | ✓ |
+| PD51635 | 117 | 32 | ✓ |
+| PD56961 | 163 | 58 | ✓ |
+| PD57332 | 35 | 35 | ✓ |
+| PD57333 | 75 | 0 (no BCR::ABL1 clade in `$nodes`) | ✓ |
+| PD57334 | 55 | 11 | ✓ |
+| PD57335 | 102 | 91 | ✓ |
