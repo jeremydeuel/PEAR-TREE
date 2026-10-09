@@ -21,6 +21,7 @@ use crate::evidence::{
     FLAG_PAIRED, FLAG_REVERSE, FLAG_SUPPLEMENTARY,
 };
 use crate::exons::GeneModel;
+use crate::foldback::{breakpoint_is_foldback, TwoBit};
 use crate::filters::{both_clips_slippage, clean_clipped_seq, is_adapter, is_low_complexity, is_slippage_clip, longest_homopolymer_run, mean_kmer_diversity};
 use crate::intervals::IntervalIndex;
 use crate::model::{agrees, count_fragments, join, mate_site_forward, Breakpoint};
@@ -422,6 +423,10 @@ pub struct Discovery {
     /// `polya_rescue_min_fragments`: Bp+polyA emissions refused by `output` (stored, not
     /// added, so the sidecar dry run of `output` does not double count).
     pa_pair_floor_rejected: std::cell::Cell<u64>,
+    /// SPEC-9 fold-back gate: the reference (set when `foldback_filter` is on) and the
+    /// breakpoints it dropped (output + discordant rescue).
+    foldback: Option<TwoBit>,
+    foldback_rejected: std::cell::Cell<u64>,
 }
 
 impl Discovery {
@@ -457,6 +462,8 @@ impl Discovery {
             sc_disc_tmp: Vec::new(),
             sc_short: None,
             pa_pair_floor_rejected: std::cell::Cell::new(0),
+            foldback: None,
+            foldback_rejected: std::cell::Cell::new(0),
         }
     }
 
@@ -555,10 +562,14 @@ impl Discovery {
 
     /// OBS-1 reject-counter sidecar, serialised as JSON.
     pub fn stats_json(&self) -> String {
-        if self.config.polya_rescue_min_fragments == 0 && !self.config.disc_agree_active() {
+        if self.config.polya_rescue_min_fragments == 0 && !self.config.disc_agree_active() && self.foldback.is_none() {
             return self.stats.to_json();
         }
         let mut st = self.stats.clone();
+        if self.foldback.is_some() {
+            st.foldback_on = true;
+            st.foldback_rejected = self.foldback_rejected.get();
+        }
         if self.config.polya_rescue_min_fragments != 0 {
             st.polya_floor_on = true;
             st.pa_pair_floor_rejected = self.pa_pair_floor_rejected.get();
@@ -573,6 +584,24 @@ impl Discovery {
     }
 
     /// D5: install the exon model used for the splice / pseudogene annotation.
+    /// SPEC-9: install the fold-back gate's reference (None = gate off).
+    pub fn set_foldback(&mut self, tb: Option<TwoBit>) {
+        self.foldback = tb;
+    }
+
+    /// SPEC-9: keep the breakpoints that are not cruciform fold-backs (no-op when off).
+    /// `count` adds the dropped ones to the stats counter (output only: the discordant
+    /// rescue re-screens breakpoints output already judged).
+    fn retain_not_foldback(&self, rn: &str, v: &mut Vec<&Breakpoint>, count: bool) {
+        let Some(tb) = &self.foldback else { return };
+        let (k, w) = (self.config.foldback_k, self.config.foldback_window);
+        let before = v.len();
+        v.retain(|b| !breakpoint_is_foldback(tb, rn, b.side, &b.clipped.seq, b.breakpoint, k, w));
+        if count {
+            self.foldback_rejected.set(self.foldback_rejected.get() + (before - v.len()) as u64);
+        }
+    }
+
     pub fn set_exon_model(&mut self, m: Option<GeneModel>) {
         self.exon_model = m;
     }
@@ -2001,6 +2030,23 @@ impl Discovery {
             .collect())
     }
 
+    /// The header's (contig, length) pairs, for the SPEC-9 reference/assembly check.
+    pub fn reference_lengths(&self) -> io::Result<Vec<(String, usize)>> {
+        let header = if is_cram(&self.filepath) {
+            open_cram(&self.filepath, self.reference_path.as_deref())?.read_header()?
+        } else {
+            open_bam(&self.filepath, 1)?.read_header()?
+        };
+        Ok(header
+            .reference_sequences()
+            .iter()
+            .map(|(k, v)| {
+                let b: &[u8] = k.as_ref();
+                (String::from_utf8_lossy(b).into_owned(), v.length().get())
+            })
+            .collect())
+    }
+
     /// Feature A: find a discordant cluster on `contig` with the given `role` whose
     /// representative position lies in [lo, hi]. Returns the one with the most reads.
     /// Dormant since the both-sided rescue rework; retained for a possible future one-sided
@@ -2193,6 +2239,11 @@ impl Discovery {
                 l.retain(keep);
                 r.retain(keep);
             }
+
+            // SPEC-9: drop cruciform fold-back clip clusters (clip = inverted copy of the
+            // flank). Poly-A-mate breakpoints (`p`) carry no clip to judge.
+            self.retain_not_foldback(rn, &mut l, true);
+            self.retain_not_foldback(rn, &mut r, true);
 
             // Emissions are buffered per contig (left, right, poly-A pools) and flushed in
             // order below, so the optional post-TSD pairing modes can add pairs and upgrade a
@@ -2560,6 +2611,7 @@ impl Discovery {
                 )
             });
         }
+        self.retain_not_foldback(rn, v, false);
     }
 }
 

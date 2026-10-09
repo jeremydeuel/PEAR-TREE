@@ -1,12 +1,14 @@
 # GENERATED COPY of config.discovery.grch38.tprt2frag for GRCh37 / hs37d5 colony BAMs (native
-# GRCh37 runs, cluster/hsc_run.sh; PD37580 first). EXACTLY two lines differ from the GRCh38 file:
+# GRCh37 runs, cluster/hsc_run.sh; PD37580 first). EXACTLY three lines differ from the GRCh38 file:
 #   contig_allowlist  1..22,X,Y  (hs37d5 numeric names; chr1.. would match ZERO contigs and give
 #                     silently EMPTY discovery files)
 #   exon_annotation   grch37.exons.bed.gz (Feature B splice track; must match the BAM's contigs)
-# Every evidence/TPRT/slippage key is the GRCh38 deploy setting -- none of them reads a reference.
+#   foldback_reference  hg19.2bit (SPEC-9 fold-back gate; discovery length-checks it vs the BAM)
+# Every other evidence/TPRT/slippage key is the GRCh38 deploy setting and reads no reference.
 # Regenerate after editing the GRCh38 file:
 #   sed -e 's/^contig_allowlist = chr1,.*/contig_allowlist = 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,X,Y/' \
 #       -e 's#^exon_annotation = \(.*\)/grch38\.exons\.bed\.gz#exon_annotation = \1/grch37.exons.bed.gz#' \
+#       -e 's#^foldback_reference = \(.*\)/hg38\.2bit#foldback_reference = \1/hg19.2bit#' \
 #       config.discovery.grch38.tprt2frag   (below this header)
 #
 # COPY of config.discovery.grch38.tprt for TPRT A/B arm C. The ONLY setting that differs:
@@ -98,6 +100,20 @@ short_overhang_evidence = true     # sidecar SHORT rows (reads crossing a juncti
 short_overhang_window = 3
 short_overhang_max = 20
 max_short_per_breakpoint = 100
+
+# SPEC-9 -- cruciform fold-back gate (Jeremy 2026-10-09). Drops a clip breakpoint whose 20
+# junction-proximal clip bases occur reverse-complemented in the reference within +-50 bp: the
+# hairpin product of cruciform DNA at an inverted repeat in enzymatic-fragmentation (low-input)
+# libraries (Ellis et al. 2021 Nat Protoc, Fig. 3). Their near-identical starts escape duplicate
+# marking, so they pass the >= 2-fragment rule (PD45886: 15 of 27 colonies, 470/489 private
+# calls; lo0019 12:81477172 = 84 reads in 170 bp, mates with mirror clips 97M54S/54S97M).
+# Measured on combine junctions: 2/2573 germline MEIs flagged (PD45886), 0/1476 (PD37580),
+# ~40 % of PD45886's private calls removed. foldback_reference MUST be the BAM's assembly
+# (hg19.2bit serves hs37d5): discovery length-checks every shared contig and exits otherwise.
+foldback_filter = true
+foldback_reference = /lustre/scratch126/casm/teams/team273/users/jd43/hg19.2bit
+foldback_k = 20
+foldback_window = 50
 
 # --- verbatim copy of config.discovery.grch38 follows ---
 # PEAR-TREE Rust discovery config for GRCh38 BAMs (Sanger canpipe output).

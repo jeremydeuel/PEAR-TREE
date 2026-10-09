@@ -379,6 +379,21 @@ pub struct DiscoveryConfig {
     pub sidecar_indexed_fetch: bool,
     /// Gap (bp) below which neighbouring fetch windows are read through, not re-seeked.
     pub sidecar_fetch_gap: i64,
+    /// SPEC-9: drop a clip breakpoint whose clip is a **cruciform fold-back** — the
+    /// junction-proximal `foldback_k` clip bases occur, reverse-complemented, in the
+    /// reference within ±`foldback_window` bp of the breakpoint. Enzymatic-fragmentation
+    /// (low-input) libraries resolve cruciform DNA at inverted repeats into hairpin
+    /// fragments carrying a short inverted copy of the adjacent sequence (Ellis et al.
+    /// 2021 Nat Protoc, Fig. 3); their near-identical starts escape duplicate marking, so
+    /// they pass the >= 2-fragment rule. Low-complexity probes (poly-A, STRs) are never
+    /// judged. Needs `foldback_reference` (a .2bit of the BAM's assembly; hg19.2bit serves
+    /// hs37d5 BAMs, contig names are matched with or without `chr`). Measured 2026-10-09:
+    /// k=20, ±50 bp flags 2/2573 germline MEIs (PD45886) and 0/1476 (PD37580) while
+    /// removing ~40 % of PD45886's private calls. Off = byte-identical.
+    pub foldback_filter: bool,
+    pub foldback_reference: Option<String>,
+    pub foldback_k: usize,
+    pub foldback_window: i64,
 }
 
 impl Default for DiscoveryConfig {
@@ -470,6 +485,10 @@ impl Default for DiscoveryConfig {
             max_short_per_breakpoint: 100,
             sidecar_indexed_fetch: false,
             sidecar_fetch_gap: 16384,
+            foldback_filter: false,
+            foldback_reference: None,
+            foldback_k: 20,
+            foldback_window: 50,
         }
     }
 }
@@ -643,6 +662,10 @@ impl DiscoveryConfig {
             "max_short_per_breakpoint" => self.max_short_per_breakpoint = parse_num(val)?,
             "sidecar_indexed_fetch" => self.sidecar_indexed_fetch = parse_bool(val)?,
             "sidecar_fetch_gap" => self.sidecar_fetch_gap = parse_num(val)?,
+            "foldback_filter" => self.foldback_filter = parse_bool(val)?,
+            "foldback_reference" => self.foldback_reference = Some(val.to_string()),
+            "foldback_k" => self.foldback_k = parse_num(val)?,
+            "foldback_window" => self.foldback_window = parse_num(val)?,
             other => eprintln!("warning: ignoring unknown config key '{other}'"),
         }
         Ok(())

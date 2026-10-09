@@ -90,6 +90,20 @@ short_overhang_window = 3
 short_overhang_max = 20
 max_short_per_breakpoint = 100
 
+# SPEC-9 -- cruciform fold-back gate (Jeremy 2026-10-09). Drops a clip breakpoint whose 20
+# junction-proximal clip bases occur reverse-complemented in the reference within +-50 bp: the
+# hairpin product of cruciform DNA at an inverted repeat in enzymatic-fragmentation (low-input)
+# libraries (Ellis et al. 2021 Nat Protoc, Fig. 3). Their near-identical starts escape duplicate
+# marking, so they pass the >= 2-fragment rule (PD45886: 15 of 27 colonies, 470/489 private
+# calls; lo0019 12:81477172 = 84 reads in 170 bp, mates with mirror clips 97M54S/54S97M).
+# Measured on combine junctions: 2/2573 germline MEIs flagged (PD45886), 0/1476 (PD37580),
+# ~40 % of PD45886's private calls removed. foldback_reference MUST be the BAM's assembly
+# (hg19.2bit serves hs37d5): discovery length-checks every shared contig and exits otherwise.
+foldback_filter = true
+foldback_reference = /lustre/scratch126/casm/teams/team273/users/jd43/hg38.2bit
+foldback_k = 20
+foldback_window = 50
+
 # --- verbatim copy of config.discovery.grch38 follows ---
 # PEAR-TREE Rust discovery config for GRCh38 BAMs (Sanger canpipe output).
 #

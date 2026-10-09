@@ -8,6 +8,7 @@ mod discovery;
 mod evidence;
 mod exons;
 mod filters;
+mod foldback;
 mod intervals;
 mod mem;
 mod model;
@@ -321,10 +322,49 @@ fn main() -> io::Result<()> {
         eprintln!("warning: fetch_all_mates has no effect without evidence_sidecar");
     }
 
+    let foldback_cfg = config
+        .foldback_filter
+        .then(|| (config.foldback_reference.clone(), config.foldback_k, config.foldback_window));
     let mut d = Discovery::new(bam, threads, config, exclude, rm_mask);
     d.set_discordant_rte(discordant_rte);
     d.set_exon_model(exon_model);
     d.set_reference_path(reference);
+    // SPEC-9: the fold-back gate's reference. Every BAM contig the .2bit also names must
+    // have the same length, so a wrong-assembly .2bit fails here instead of silently
+    // comparing clips against the wrong sequence.
+    if let Some((path, k, window)) = foldback_cfg {
+        let Some(p) = path else {
+            eprintln!("foldback_filter is on but foldback_reference (.2bit) is not set");
+            std::process::exit(1);
+        };
+        let tb = match foldback::TwoBit::open(&p) {
+            Ok(t) => t,
+            Err(e) => {
+                eprintln!("cannot read foldback_reference {p}: {e}");
+                std::process::exit(1);
+            }
+        };
+        let (mut shared, mut bad) = (0usize, Vec::new());
+        for (name, len) in d.reference_lengths()? {
+            if let Some(l2) = tb.len(&name) {
+                shared += 1;
+                if l2 as usize != len {
+                    bad.push(format!("{name} (BAM {len}, 2bit {l2})"));
+                }
+            }
+        }
+        if !bad.is_empty() || shared == 0 {
+            eprintln!(
+                "foldback_reference {p} does not match the BAM's assembly: {} of {shared} shared contigs differ in length{}{}",
+                bad.len(),
+                if bad.is_empty() { "" } else { ": " },
+                bad.iter().take(5).cloned().collect::<Vec<_>>().join(", ")
+            );
+            std::process::exit(1);
+        }
+        eprintln!("fold-back gate: ON (k {k}, window +-{window} bp, {p}, {shared} contigs length-checked)");
+        d.set_foldback(Some(tb));
+    }
     d.discovery()?;
     mem::phase("after discovery (extract+find_mates+cluster)");
     // TPRT: fetch the sidecar's per-read records for exactly the loci output will emit

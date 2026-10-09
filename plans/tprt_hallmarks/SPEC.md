@@ -187,6 +187,16 @@ configs, incl. the evidence sidecar).
 - `clip_slippage_junction_spare` (0=off; 20): SPEC-8b never rejects a pair whose stored clip starts
   with k structured bases (no homopolymer ≥ 8, ≥ 3 distinct bases). Short orphan-transduction tags
   followed by a long poly-A dragged the whole-clip entropy under 1.95 (the orphan TD misses).
+- `foldback_filter` + `foldback_reference` (.2bit of the BAM's assembly) + `foldback_k` (20) +
+  `foldback_window` (50) — SPEC-9, on in both `.tprt2frag` deploy configs (2026-10-09): a clip
+  breakpoint is dropped (before pairing, and in the discordant rescue) when its `k`
+  junction-proximal clip bases occur reverse-complemented in the reference within ±`window` bp.
+  These are cruciform hairpin fragments from enzymatic-fragmentation libraries (Ellis et al. 2021
+  Nat Protoc Fig. 3), whose near-identical starts escape duplicate marking and so satisfy the
+  ≥ 2-fragment rule. Low-complexity probes (entropy < 1.5 bits or a homopolymer ≥ 8) are never
+  judged. Discovery length-checks every contig shared by the BAM and the .2bit and exits on a
+  mismatch. Measured on combine junctions: 2/2573 germline MEIs flagged (PD45886), 0/1476
+  (PD37580); ~40 % of PD45886's private calls removed. `stats.json` gains `foldback.rejected`.
 - `.tprt` also turns on SENS-8 `short_polya_clip` (poly-A clip consensus shortened below 12 bp by
   SBS homopolymer jitter — the other orphan/partnered-TD miss mode).
 - **combine**: `oneside_` tokens parse onto the Feature-A one-real-side types (`TYPE_*_DISC`,
