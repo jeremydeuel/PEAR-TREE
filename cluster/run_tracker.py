@@ -39,7 +39,7 @@ COLUMNS = [
     ("Cohort", "cohort", 34),
     ("Why tracked", "reason", 24),
     ("TP53 on tree", "tp53_on_tree", 30),
-    ("Run unit", "run_unit", 24),
+    ("Run unit (analysed together)", "run_unit", 24),
     ("Assembly", "assembly", 12),
     ("Colonies", "colonies", 9),
     ("Farm run", "farm_status", 15),
@@ -105,6 +105,37 @@ def merge_back(xlsx, rows):
                 row[key] = a
                 edits.append((row["pd"], key, b, a))
     return edits
+
+
+# a run unit (transplant pair, two-timepoint SDS5) is analysed as ONE run: these columns are per run
+UNIT_FIELDS = ["farm_status", "farm_run_dir", "commit", "results_dir", "review_signed_off"]
+DEFAULTS = {"farm_status": "not run", "review_signed_off": "no"}
+
+
+def sync_units(rows, edits):
+    """Give every row of a run unit the same run-level values; a hand edit in the xlsx wins."""
+    edited = {(pd, key) for pd, key, _, _ in edits}
+    units = {}
+    for r in rows:
+        if r["run_unit"]:
+            units.setdefault(r["run_unit"], []).append(r)
+    changed = []
+    for unit, members in units.items():
+        if len(members) < 2:
+            continue
+        for key in UNIT_FIELDS:
+            vals = [r[key] for r in members if (r["pd"], key) in edited] or \
+                   [r[key] for r in members if r[key] not in ("", DEFAULTS.get(key))]
+            if not vals:
+                continue
+            if len(set(vals)) > 1:
+                print(f"WARNING {unit} {key}: conflicting values {sorted(set(vals))}; keeping {vals[0]!r}",
+                      file=sys.stderr)
+            for r in members:
+                if r[key] != vals[0]:
+                    changed.append((r["pd"], key, r[key], vals[0]))
+                    r[key] = vals[0]
+    return changed
 
 
 def patient_dir(run_unit):
@@ -265,13 +296,16 @@ def build(out, rows, root):
         c.font = Font(bold=True)
     groups = [("TP53 clade", lambda r: "TP53" in r["reason"]),
               ("BCR::ABL1", lambda r: "BCR::ABL1" in r["reason"]),
-              ("transplant pair", lambda r: "transplant" in r["reason"]),
+              ("transplant pair (people)", lambda r: "transplant" in r["reason"]),
               ("all", lambda r: True)]
     for name, pred in groups:
         g = [r for r in rows if pred(r)]
         s.append([name, len(g), sum(r["farm_status"] == "done" for r in g),
                   sum(r["data_local"] == "yes" for r in g), sum(r["review_signed_off"] == "yes" for r in g)])
     s.append([])
+    s.append(["Rows with the same Run unit (transplant donor + recipient, SDS5's two time points) are ONE run "
+              "on one shared tree: Farm run, run dir, commit, results and sign-off are kept identical across them; "
+              "editing one row updates the others. hsc_run.sh refuses to submit one PD id of a unit alone."])
     s.append(["Manual columns (edit here, they survive a rebuild): Farm run, Farm run dir, PEAR-TREE commit, "
               "Results dir, Review signed off, Notes."])
     s.append(["Automatic columns (rebuilt from ~/Documents/hsc_results): Colonies, Data local, Somatic rows, "
@@ -296,7 +330,10 @@ def main():
     edits = merge_back(a.out, rows)
     for pd, key, old, new in edits:
         print(f"xlsx edit kept: {pd} {key}: {old!r} -> {new!r}")
-    if edits:
+    synced = sync_units(rows, edits)
+    for pd, key, old, new in synced:
+        print(f"run unit sync: {pd} {key}: {old!r} -> {new!r}")
+    if edits or synced:
         write_tsv(a.tsv, comments, rows)
     full = [dict(r, **auto_fields(a.results, r)) for r in rows]
     build(a.out, full, a.results)

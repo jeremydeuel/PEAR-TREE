@@ -226,6 +226,12 @@ cmd_submit() {
     local PROJECT_ID="${1:?usage: pipeline.sh submit <PROJECT_ID> <PATIENT_ID>}"
     PATIENT_ID="${2:?usage: pipeline.sh submit <PROJECT_ID> <PATIENT_ID>}"
     local RUNDIR="$WORKROOT/$PATIENT_ID"
+    # one person of a shared-tree unit (transplant Pair<N>_<donor>_<recipient>, SDS5_PD42190_PD45888)
+    # is never run alone: the pair is analysed together (cluster/hsc_run.sh submit <unit>)
+    local unit; unit=$(ls -d "$PT_ROOT"/patients/*/*_"$PATIENT_ID" "$PT_ROOT"/patients/*/*_"$PATIENT_ID"_* 2>/dev/null | head -1)
+    if [ -n "$unit" ] && [ "${PT_ALLOW_SPLIT:-0}" != 1 ]; then
+        echo "$PATIENT_ID is one half of $(basename "$unit") (one shared tree): run the unit with cluster/hsc_run.sh submit $(basename "$unit") (PT_ALLOW_SPLIT=1 overrides)" >&2; exit 1
+    fi
     [ -r "$IRODS_TXT" ] || { echo "cannot read IRODS_TXT=$IRODS_TXT" >&2; exit 1; }
     preflight_binaries
     mkdir -p "$RUNDIR"/{discovery,genotypes,insertions,stats,logs,missing}

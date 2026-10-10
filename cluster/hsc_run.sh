@@ -49,6 +49,13 @@ note() { echo "[$(date +%H:%M:%S)] $*" >&2; }
 
 patient_dir() {
     local d; d=$(ls -d "$PT_ROOT"/patients/*/"$1" 2>/dev/null || true)
+    if [ -z "$d" ]; then
+        # a PD id that is one half of a shared-tree folder (transplant Pair<N>_<donor>_<recipient>,
+        # SDS5_PD42190_PD45888): that folder is the unit -- never analyse one person of a pair alone
+        d=$(ls -d "$PT_ROOT"/patients/*/*_"$1" "$PT_ROOT"/patients/*/*_"$1"_* 2>/dev/null || true)
+        [ "$(printf '%s\n' "$d" | grep -c .)" -eq 1 ] \
+            && die "$1 shares one tree with the other PD id(s) in $(basename "$d"); run that unit: hsc_run.sh ${CMD:-submit} $(basename "$d")"
+    fi
     [ "$(printf '%s\n' "$d" | grep -c .)" -eq 1 ] || die "expected exactly one patients/*/$1 in $PT_ROOT, found: ${d:-none}"
     echo "$d"
 }
@@ -231,6 +238,8 @@ cmd_status() {
     PT_JOB_PREFIX="${P}_hsc" WORKROOT="$HSC_ROOT/$P" bash "$PT_ROOT/cluster/pipeline.sh" status "$P"
 }
 
+CMD="${1:-}"
+CMD="${1:-}"
 case "${1:-}" in
     setup)    shift; cmd_setup "$@" ;;
     populate) shift; cmd_populate "$@" ;;
