@@ -1,4 +1,4 @@
-# Bone marrow — 9 patients, 2644 tips total
+# Bone marrow — 14 patients, 2772 tips total
 
 Single-cell / single-stem-cell-derived WGS. TSVs are placeholders pending the farm probe (see [PLAN](../PLAN.md)).
 
@@ -13,3 +13,8 @@ Single-cell / single-stem-cell-derived WGS. TSVs are placeholders pending the fa
 | PD5847 | PD5847 | 99 | ✓ |
 | PD45886 | PD45886 (SDS10, Machado 2023 Nat Commun; GRCh37) | 27 | ✓ |
 | SDS5_PD42190_PD45888 | PD42190 + PD45888 (SDS5, one individual at ages 22.2 / 24.1, Machado 2023 Nat Commun; GRCh37) | 100 | ✓ |
+| PD43975 | PD43975 (SDS2, Machado 2023 Nat Commun; GRCh37) | 38 | ✓ |
+| PD43293 | PD43293 (SDS4, Machado 2023 Nat Commun; GRCh37) | 18 | ✓ |
+| PD45887 | PD45887 (SDS6, Machado 2023 Nat Commun; GRCh37) | 27 | ✓ |
+| PD44706 | PD44706 (SDS7, Machado 2023 Nat Commun; GRCh37) | 35 | ✓ |
+| PD42191 | PD42191 (SDS8, Machado 2023 Nat Commun; GRCh37) | 10 | ✓ |

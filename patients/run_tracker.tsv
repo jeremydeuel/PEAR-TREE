@@ -5,7 +5,7 @@
 pd	role	cohort	reason	tp53_on_tree	run_unit	assembly	farm_status	farm_run_dir	commit	results_dir	review_signed_off	notes
 PD37580	PX007	Mitchell 2025 Nat Genet (chemo)	TP53 clade	I195F+C176Y (8 col), Y234C (3), K132R (2), S241C, K120M	PD37580	GRCh37	done	/lustre/scratch126/casm/teams/team273/users/jd43/hsc/PD37580/PD37580	~08dbac3 (inferred, hsc-deploy 2026-10-07); report 700ecf8		no	native GRCh37 run 2026-10-07; old-pipeline results also in ~/Documents/retrotransposons_sanger/results/PD37580
 PD47703	PX001	Mitchell 2025 Nat Genet (chemo)	TP53 clade	P128fs, V274A (tree 1); V172F (tree 2)	PD47703	GRCh37	not run				no	old-pipeline results only (~/Documents/retrotransposons_sanger/results/PD47703)
-PD45534	KX004	Mitchell 2022 Nature (ageing)	TP53 clade	V157I	PD45534	mixed GRCh38/GRCh37	not run				no	colonies.tsv has 450 GRCh38 + 472 hs37d5 BAMs -> pick one assembly per colony; old-pipeline results in ~/Documents/retrotransposons_sanger/results/PD45534
+PD45534	KX004	Mitchell 2022 Nature (ageing)	TP53 clade	V157I	PD45534	GRCh38 (repopulate)	not run				no	populate took the first WGS release per colony -> 450 GRCh38 (proj 2450) + 472 hs37d5 (proj 2515); farm has 945 GRCh38 BAMs in 2450/3819/3838 -> repopulate preferring GRCh38 (REPOPULATE=1 PREFER_ASSEMBLY / PREFER_PROJECTS). Old-pipeline results in ~/Documents/retrotransposons_sanger/results/PD45534
 PD45792	Pair11 donor	Spencer Chapman 2024 Nature (allo-HCT)	TP53 clade; transplant pair	R273H	Pair11_PD45792_PD45793	GRCh37	not run				no	
 PD45793	Pair11 recipient	Spencer Chapman 2024 Nature (allo-HCT)	transplant pair		Pair11_PD45792_PD45793	GRCh37	not run				no	
 PD45794	Pair13 donor	Spencer Chapman 2024 Nature (allo-HCT)	TP53 clade; transplant pair	R158H	Pair13_PD45794_PD45795	GRCh37	not run				no	
@@ -15,15 +15,15 @@ PD45809	Pair38 recipient	Spencer Chapman 2024 Nature (allo-HCT)	TP53 clade; tran
 PD45810	Pair40 donor	Spencer Chapman 2024 Nature (allo-HCT)	transplant pair		Pair40_PD45810_PD45811	GRCh37	not run				no	
 PD45811	Pair40 recipient	Spencer Chapman 2024 Nature (allo-HCT)	TP53 clade; transplant pair	N239D	Pair40_PD45810_PD45811	GRCh37	not run				no	
 PD49229	BCL002 (SCD4)	Spencer Chapman 2023 Nat Med (SCD gene therapy)	TP53 clade	R273H	PD49229	GRCh37	report incomplete	/lustre/scratch126/casm/teams/team273/users/jd43/hsc/PD49229/PD49229	~7d9e241 (inferred, hsc-deploy 2026-10-07); annotate rerun on 59b75b6 (Rust RTE)		no	722 colonies; annotated + joint table copied, no tree_fit / somatic.xlsx yet (annotate OOM at 32 GB -> Rust RTE rerun)
-PD43975	SDS2	Machado 2023 Nat Commun (Shwachman-Diamond)	TP53 clade	C141Y		GRCh37	not run				no	no patients/ folder or tree yet
-PD43293	SDS4	Machado 2023 Nat Commun (Shwachman-Diamond)	TP53 clade	R273L		GRCh37	not run				no	no patients/ folder or tree yet
+PD43975	SDS2	Machado 2023 Nat Commun (Shwachman-Diamond)	TP53 clade	C141Y	PD43975	GRCh37	not run				no	tree added 2026-10-10 (zeros outgroup dropped); colonies.tsv placeholder -> hsc_run.sh populate
+PD43293	SDS4	Machado 2023 Nat Commun (Shwachman-Diamond)	TP53 clade	R273L	PD43293	GRCh37	not run				no	tree added 2026-10-10 (zeros outgroup dropped); colonies.tsv placeholder -> hsc_run.sh populate
 PD42190	SDS5 (timepoint 1)	Machado 2023 Nat Commun (Shwachman-Diamond)	TP53 clade	R248W (3), A159V (2), P151S (2) + 5 single	SDS5_PD42190_PD45888	GRCh37	not run				no	one tree with PD45888; colonies.tsv placeholder
 PD45888	SDS5 (timepoint 2)	Machado 2023 Nat Commun (Shwachman-Diamond)	TP53 clade	(shared SDS5 tree)	SDS5_PD42190_PD45888	GRCh37	not run				no	one tree with PD42190; colonies.tsv placeholder
-PD45887	SDS6	Machado 2023 Nat Commun (Shwachman-Diamond)	TP53 clade	E258K, G245S, I195F, R175H, V157F		GRCh37	not run				no	no patients/ folder or tree yet
-PD44706	SDS7	Machado 2023 Nat Commun (Shwachman-Diamond)	TP53 clade	C275Y, V272M, G245S, Y205F, H179Q, V173M		GRCh37	not run				no	no patients/ folder or tree yet
-PD42191	SDS8	Machado 2023 Nat Commun (Shwachman-Diamond)	TP53 clade	I254F+R248Q biallelic trunk (all 10 col)		GRCh37	not run				no	no patients/ folder or tree yet
+PD45887	SDS6	Machado 2023 Nat Commun (Shwachman-Diamond)	TP53 clade	E258K, G245S, I195F, R175H, V157F	PD45887	GRCh37	not run				no	tree added 2026-10-10 (zeros outgroup dropped); colonies.tsv placeholder -> hsc_run.sh populate
+PD44706	SDS7	Machado 2023 Nat Commun (Shwachman-Diamond)	TP53 clade	C275Y, V272M, G245S, Y205F, H179Q, V173M	PD44706	GRCh37	not run				no	tree added 2026-10-10 (zeros outgroup dropped); colonies.tsv placeholder -> hsc_run.sh populate
+PD42191	SDS8	Machado 2023 Nat Commun (Shwachman-Diamond)	TP53 clade	I254F+R248Q biallelic trunk (all 10 col)	PD42191	GRCh37	not run				no	tree added 2026-10-10 (zeros outgroup dropped); colonies.tsv placeholder -> hsc_run.sh populate
 PD45886	SDS10	Machado 2023 Nat Commun (Shwachman-Diamond)	TP53 clade	H179Q (3)	PD45886	GRCh37	done	/lustre/scratch126/casm/teams/team273/users/jd43/hsc_foldback/PD45886/PD45886	~5ed4f32 (inferred, main 2026-10-09, fold-back gate); first run ~59b75b6	PD45886_foldback/PD45886	no	27 colonies, proj 2045; first run (489 private calls = cruciform artefacts) in ~/Documents/hsc_results/PD45886
-PD54832		Leongamornlert 2026 Cancer Discov (TN-ET)	TP53 clade	S215N		GRCh38?	not run				no	no patients/ folder or tree yet; assembly unchecked
+PD54832		Leongamornlert 2026 Cancer Discov (TN-ET)	TP53 clade	S215N	PD54832	GRCh37	not run				no	tree added 2026-10-10 (zeros outgroup dropped); colonies.tsv placeholder -> hsc_run.sh populate; tips renamed lo00NN -> PD54832b_lo00NN; tissue folder (peripheral_blood) not verified
 PD51635		Kamizela 2025 Nature (CML)	TP53 clade; BCR::ABL1	L130F (BCR::ABL1-negative colony)	PD51635	GRCh38	done	/lustre/scratch126/casm/teams/team273/users/jd43/hsc/PD51635/PD51635	~42d6e74 (inferred, hsc-deploy 2026-10-06); report 700ecf8		no	first HSC patient; review export in ~/Documents/hsc_results/PD51635/review_export
 PD51632		Kamizela 2025 Nature (CML)	BCR::ABL1		PD51632	GRCh38	not run				no	
 PD51633		Kamizela 2025 Nature (CML)	BCR::ABL1		PD51633	GRCh38	not run				no	

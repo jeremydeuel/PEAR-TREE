@@ -44,6 +44,8 @@
 #   PAR         parallel probes     (default 12; keep modest — these are iRODS-backed NFS)
 #   READLEN_MODE  header|record     (default header) — see below
 #   ONLY        space-separated organ groups to restrict to (default: all mappable)
+#   PREFER_ASSEMBLY  GRCh38|hs37d5_GRCh37|...: a colony with WGS releases on several assemblies takes
+#               this one (default: the first WGS release found)
 set -uo pipefail
 export LC_ALL=C
 
@@ -58,6 +60,7 @@ export LC_ALL=C
 #           not a stage and not a scan — but it IS a record read off nst_links, so it is
 #           OFF by default and you are opting into it knowingly. Use only if you accept that.
 READLEN_MODE="${READLEN_MODE:-header}"
+PREFER_ASSEMBLY="${PREFER_ASSEMBLY:-}"
 
 command -v git >/dev/null || { echo "git not found" >&2; exit 1; }
 REPO="${REPO:-$(git rev-parse --show-toplevel 2>/dev/null)}"
@@ -152,14 +155,21 @@ probe_sample() {                # args: patient_key  raw_tip
     if [ -z "${sample:-}" ]; then
         printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$donor" "-" "MISSING" "NA" "NA" "NA" "$tip" > "$out"; return
     fi
-    # choose the WGS project (DS discriminates assay — NOT project id, name, or read length)
+    # choose the WGS project (DS discriminates assay — NOT project id, name, or read length).
+    # PREFER_ASSEMBLY (e.g. GRCh38): among the colony's WGS releases take the one on that assembly,
+    # else the first WGS one -- PD45534 has colonies released on GRCh38 AND hs37d5 in different projects
     for proj in "${projs[@]}"; do
         bam="$NST/$proj/$sample/$sample.sample.dupmarked.bam"
         [ -s "$bam" ] || continue
         hdr="$(samtools view -H "$bam" 2>/dev/null)" || continue
         ds="$(printf '%s\n' "$hdr" | awk -F'\t' '/^@RG/{for(i=1;i<=NF;i++) if($i ~ /^DS:/){sub(/^DS:/,"",$i); print $i}}' | sort -u | paste -sd, -)"
         case "$ds" in
-            WGS*) chosen="$proj"; chosends="$ds"; break ;;
+            WGS*)
+                case "$chosends" in WGS*) : ;; *) chosen="$proj"; chosends="$ds" ;; esac
+                [ -z "${PREFER_ASSEMBLY:-}" ] && break
+                if [ "$(printf '%s\n' "$hdr" | grep '^@SQ' | assembly_from_header)" = "$PREFER_ASSEMBLY" ]; then
+                    chosen="$proj"; chosends="$ds"; break
+                fi ;;
             *)    [ -z "$chosends" ] && { chosen="$proj"; chosends="$ds"; } ;;   # remember a fallback
         esac
     done
@@ -185,7 +195,7 @@ probe_sample() {                # args: patient_key  raw_tip
     printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$donor" "$chosen" "$chosends" "$rl" "$mapped" "$asm" "$sample" > "$out"
 }
 export -f probe_sample candidates assembly_from_header
-export NST WORK READLEN_MODE
+export NST WORK READLEN_MODE PREFER_ASSEMBLY
 
 # ── build the work list: (patient_key, tree, tip) for every unpopulated, mappable patient ──
 ONLY="${ONLY:-}"

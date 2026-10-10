@@ -1,4 +1,4 @@
-# Peripheral blood / BM — 49 patients, 5472 tips total
+# Peripheral blood / BM — 50 patients, 5521 tips total
 
 Single-cell / single-stem-cell-derived WGS. TSVs are placeholders pending the farm probe (see [PLAN](../PLAN.md)).
 
@@ -53,6 +53,7 @@ Single-cell / single-stem-cell-derived WGS. TSVs are placeholders pending the fa
 | PD47695 | PD47695 | 5 | ✓ |
 | PD47696 | PD47696 | 5 | ✓ |
 | PD47700 | PD47700 | 4 | ✓ |
+| PD54832 | PD54832 (triple-negative ET, Leongamornlert 2026 Cancer Discov; GRCh37; tissue not verified) | 49 | ✓ |
 
 ## CML — Kamizela 2025 Nature (BCR::ABL1), GRCh38
 

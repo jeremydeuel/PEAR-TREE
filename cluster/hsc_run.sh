@@ -20,6 +20,8 @@
 # Usage (head node, from anywhere):
 #   bash <checkout>/cluster/hsc_run.sh setup              # build binaries, venv link, src/config.py
 #   bash <checkout>/cluster/hsc_run.sh populate <P>       # fill patients/*/<P>/colonies.tsv (nst_links headers; iRODS fallback)
+#        REPOPULATE=1 redoes a populated one; PREFER_ASSEMBLY (nst_links) / PREFER_PROJECTS (iRODS) pick
+#        among a colony's several releases
 #   bash <checkout>/cluster/hsc_run.sh submit <P>         # samples.tsv + the whole pipeline
 #   bash <checkout>/cluster/hsc_run.sh status <P>
 #
@@ -92,10 +94,16 @@ cmd_populate() {
     local P="${1:?usage: hsc_run.sh populate <PATIENT_ID>}" d org
     d="$(patient_dir "$P")"; org="$(basename "$(dirname "$d")")"
     local nst="${NST:-/nfs/cancer_ref01/nst_links/live}"
+    # REPOPULATE=1: redo an already-populated colonies.tsv (kept as colonies.tsv.bak.<date>)
+    if [ "${REPOPULATE:-0}" = 1 ] && awk '!/^#/ && !/^donor\t/ && NF {f=1; exit} END {exit !f}' "$d/colonies.tsv"; then
+        cp "$d/colonies.tsv" "$d/colonies.tsv.bak.$(date +%Y%m%d%H%M%S)"
+        printf 'donor\tproj\tds\treadlen\tmapped\tassembly\tsample\n# PENDING -- REPOPULATE=1\n' > "$d/colonies.tsv"
+        note "REPOPULATE=1: old colonies.tsv kept as $(ls -t "$d"/colonies.tsv.bak.* | head -1)"
+    fi
     if [ -d "$nst" ]; then
         # header reads on nst_links, run HERE (compute nodes may not mount it: PD51635 node-13-14)
         cd "$PT_ROOT"
-        ONLY="$org" PAR="${PAR:-4}" bash cluster/populate_colonies_tsv.sh
+        ONLY="$org" PAR="${PAR:-4}" PREFER_ASSEMBLY="${PREFER_ASSEMBLY:-}" bash cluster/populate_colonies_tsv.sh
     else
         note "nst_links not visible on $(hostname) ($nst): tip -> project from iRODS (iquest)"
         populate_irods "$P" "$d" "${HSC_ASSEMBLY:-GRCh38}"
@@ -108,7 +116,9 @@ cmd_populate() {
 # (no header access without nst_links): rows say ds=WGS_unverified / assembly=GRCh38 (or
 # hs37d5_GRCh37 with HSC_ASSEMBLY=GRCh37), and `submit` always runs pipeline.sh's per-BAM header
 # gate (PT_HEADER_GATE=<assembly>) after staging, which also catches a wrong guess here.
-# A tip found in more than one project (WGS + targeted twins, Chapman 2024) is left out.
+# A tip found in more than one project (WGS + targeted twins, Chapman 2024) is left out, unless
+# PREFER_PROJECTS="p1 p2 ..." names one of them (first listed wins): PD45534's GRCh38 releases are
+# 2450/3819/3838, its hs37d5 + targeted ones 2515/2566/2902/3191.
 populate_irods() {
     local P="$1" d="$2" label tips hits
     case "$3" in GRCh38) label=GRCh38 ;; GRCh37) label=hs37d5_GRCh37 ;; *) die "HSC_ASSEMBLY must be GRCh38 or GRCh37, got '$3'" ;; esac
@@ -129,12 +139,21 @@ populate_irods() {
     {
         printf 'donor\tproj\tds\treadlen\tmapped\tassembly\tsample\n'
         printf '# populated %s by cluster/hsc_run.sh populate from iRODS (iquest; nst_links not mounted). ds/assembly NOT read from headers: verified per BAM after staging (PT_HEADER_GATE=%s).\n' "$(date +%F)" "$3"
-        awk -F'\t' -v donor="$P" -v asm="$label" 'NR==FNR {tip[$1]=1; next}
-            ($1 in tip) {n[$1]++; proj[$1]=$2}
-            END {for (s in n) if (n[s]==1) print donor "\t" proj[s] "\tWGS_unverified\tNA\tNA\t" asm "\t" s}' "$tips" "$hits" | sort -t$'\t' -k7,7
+        awk -F'\t' -v donor="$P" -v asm="$label" -v pref="${PREFER_PROJECTS:-}" '
+            BEGIN {np = split(pref, pp, " "); for (i = 1; i <= np; i++) rank[pp[i]] = i}
+            NR==FNR {tip[$1]=1; next}
+            ($1 in tip) {n[$1]++; proj[$1]=$2
+                         if (($2 in rank) && (!($1 in best) || rank[$2] < rank[best[$1]])) best[$1]=$2}
+            END {for (s in n) {
+                     if (s in best) print donor "\t" best[s] "\tWGS_unverified\tNA\tNA\t" asm "\t" s
+                     else if (n[s]==1 && np == 0) print donor "\t" proj[s] "\tWGS_unverified\tNA\tNA\t" asm "\t" s}}' "$tips" "$hits" | sort -t$'\t' -k7,7
     } > "$tmp" && mv -f "$tmp" "$d/colonies.tsv"
     awk -F'\t' 'NR==FNR {tip[$1]=1; next} ($1 in tip) {n[$1]++; p[$1]=p[$1] " " $2}
-        END {for (s in n) if (n[s]>1) print "  left out (in several projects):" , s, p[s]}' "$tips" "$hits" >&2
+        END {for (s in n) if (n[s]>1) print "  in several projects:" , s, p[s]}' "$tips" "$hits" >&2
+    [ -z "${PREFER_PROJECTS:-}" ] || awk -F'\t' -v pref="$PREFER_PROJECTS" '
+        BEGIN {np = split(pref, pp, " "); for (i = 1; i <= np; i++) ok[pp[i]] = 1}
+        NR==FNR {tip[$1]=1; next} ($1 in tip) {seen[$1]=1; if ($2 in ok) good[$1]=1; p[$1]=p[$1] " " $2}
+        END {for (s in seen) if (!(s in good)) print "  no release in PREFER_PROJECTS, left out:", s, p[s]}' "$tips" "$hits" >&2
     awk -F'\t' 'NR==FNR {seen[$1]=1; next} !($1 in seen) {print "  tree tip with no BAM in iRODS:", $1}' "$hits" "$tips" >&2
     note "projects: $(awk -F'\t' 'NR==FNR {tip[$1]=1; next} ($1 in tip) {c[$2]++} END {for (k in c) printf "%s=%d ", k, c[k]}' "$tips" "$hits")"
     rm -f "$tips" "$hits"
