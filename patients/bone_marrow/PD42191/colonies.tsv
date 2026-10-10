@@ -1,2 +1,12 @@
 donor	proj	ds	readlen	mapped	assembly	sample
-# PENDING — populated from the farm per-tip header probe (see patients/PLAN.md); placeholder only
+# populated 2026-10-10 by cluster/hsc_run.sh populate from iRODS (iquest; nst_links not mounted). ds/assembly NOT read from headers: verified per BAM after staging (PT_HEADER_GATE=GRCh37).
+PD42191	2045	WGS_unverified	NA	NA	hs37d5_GRCh37	PD42191b
+PD42191	2045	WGS_unverified	NA	NA	hs37d5_GRCh37	PD42191d
+PD42191	2045	WGS_unverified	NA	NA	hs37d5_GRCh37	PD42191e
+PD42191	2045	WGS_unverified	NA	NA	hs37d5_GRCh37	PD42191f
+PD42191	2045	WGS_unverified	NA	NA	hs37d5_GRCh37	PD42191g
+PD42191	2045	WGS_unverified	NA	NA	hs37d5_GRCh37	PD42191h
+PD42191	2045	WGS_unverified	NA	NA	hs37d5_GRCh37	PD42191i
+PD42191	2045	WGS_unverified	NA	NA	hs37d5_GRCh37	PD42191j
+PD42191	2045	WGS_unverified	NA	NA	hs37d5_GRCh37	PD42191k
+PD42191	2045	WGS_unverified	NA	NA	hs37d5_GRCh37	PD42191l
