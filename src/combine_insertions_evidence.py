@@ -405,10 +405,16 @@ def _is_dup(a: Fragment, b: Fragment, p: DedupParams):
     """SPEC rule 2 (same sample only). Returns '' (not a duplicate), 'coord' (mate placed on
     both: coordinates within tol + lenient clip sequence) or 'seq' (mate unplaced on both:
     read outer within tol + lenient clip AND mate sequence). Also tried with b seen from its
-    other read (b.swapped()): copies of one molecule may carry the evidence on different reads."""
+    other read (b.swapped()): copies of one molecule may carry the evidence on different reads,
+    and 'coord' when either is a supplementary clip whose template's other read is the other's
+    evidence read (_is_mate_twin)."""
     k = _is_dup_oriented(a, b, p)
-    if k or a.strand == b.strand:
+    if k:
         return k
+    if _is_mate_twin(a, b, p) or _is_mate_twin(b, a, p):
+        return "coord"
+    if a.strand == b.strand:
+        return ""
     for x, y in ((a, b.swapped()), (a.swapped(), b)):
         if x is None or y is None or not x.primary.mapped or not y.primary.mapped:
             continue
@@ -416,6 +422,46 @@ def _is_dup(a: Fragment, b: Fragment, p: DedupParams):
         if k:
             return k
     return ""
+
+
+def _is_mate_twin(a: Fragment, b: Fragment, p: DedupParams) -> bool:
+    """a's evidence read is a SUPPLEMENTARY record (the junction clip of a chimeric read) and b's
+    evidence read is a copy of the OTHER read of a's template: b's primary sits at a's mate
+    placement (POS within tol, strand, other read number) and b's mate record carries a's read
+    sequence (a's own primary lies elsewhere -- its SA -- and is not in the sidecar). Markdup flags
+    a duplicate's primary but not its supplementary, so a copy that kept only the supplementary
+    clip pairs up with the other copy's mate-side DISC read and counted twice (PD45886b_lo0002
+    13:46537573-46537585 RIGHT, 2026-10-10). Primary clip reads are left to the swapped() rule:
+    a LEFT clip's POS is the junction itself, so POS equality says nothing about the molecule."""
+    pa, pb, tol = a.primary, b.primary, p.tol
+    if not pa.flag & 0x800 or not (pa.mate_mapped and pb.mapped):
+        return False
+    if not pa.r12 or not pb.r12 or pa.r12 == pb.r12:
+        return False
+    if pb.ref != pa.mref or pb.strand != pa.mstrand or abs(pb.pos - pa.mpos) > tol:
+        return False
+    m = b.mate
+    if m is None:
+        return False
+    x, y = pa.seq.upper(), m.seq.upper()
+    return _read_close(x, y, p) or _read_close(x, revcomp(y), p)
+
+
+_TWIN_MIN_READ = 50
+
+
+def _read_close(x: str, y: str, p: DedupParams) -> bool:
+    """Two records of one READ (copies of it): whole sequences homopolymer-compressed (no cut
+    after a poly-A -- unlike _seq_close, which would compare only the bases before a poly-T near
+    the read start), within the edit budget, either start shifted by up to tol bases."""
+    if len(x) < _TWIN_MIN_READ or len(y) < _TWIN_MIN_READ:
+        return False
+    hp = lambda z: _hp_compress_cut(z, len(z) + 1)
+    hx, hy = hp(x), hp(y)
+    for k in range(p.tol + 1):
+        if _semi_close(hp(x[k:]), hy, p.budget) or (k and _semi_close(hx, hp(y[k:]), p.budget)):
+            return True
+    return False
 
 
 def _is_dup_oriented(a: Fragment, b: Fragment, p: DedupParams):

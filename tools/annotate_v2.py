@@ -952,6 +952,59 @@ class Insertion:
             return False
         return True
 
+    # ------------------------------------------------- unrelated partners (two independent chimeras)
+    _PARTNER_REPEAT_CLASSES = _RTE_REPCLASSES + ("Simple_repeat", "Low_complexity", "Satellite")
+
+    @staticmethod
+    def _rep_class(r):
+        """repClass as a string (RepeatMasker_Annotation keeps a slash-less class as a 1-list)."""
+        c = getattr(r, 'repClass', None)
+        return c[0] if isinstance(c, list) and c else c
+
+    def _partner_conflict(self):
+        """Both clips map UNIQUELY, to genomic loci that cannot be one inserted piece: different
+        contigs, or more than partner_max_span (10 kb) apart. A real insertion's two clips are
+        the two ends of ONE inserted sequence, so this is two unrelated chimeric junctions that
+        sit a few bp apart and were paired into a fake TSD (PD45886b_lo0002 13:46537573-46537585:
+        left clip chr9, right clip chr5, 2026-10-10). Returns a description, or None.
+
+        Applied only to genuinely unique placements -- multimappers are never judged:
+          * each side has exactly ONE remap position, every remap at MAPQ >= sv_min_mapq (30)
+          * each clip is long and complex enough to place on merit: >= partner_clip_min_len (25)
+            bp, Shannon entropy >= partner_clip_min_entropy (1.5), A+T <= partner_clip_max_at
+            (0.8) -- looser than the SV note's guard (entropy 1.9), which rejects both of the
+            PD45886 clips (1.81 / 1.85) although they map uniquely
+          * no Dfam hit on either clip, and neither placement carries (in the +-100 bp get_rmsk
+            window) a RepeatMasker retrotransposon -- the element itself on some paralog, not a
+            chimera partner -- or a Simple_repeat / Low_complexity / Satellite -- a tandem-repeat
+            clip's 'unique' hit is chance (PD45886 germline (AC)n / (TCATCA)n loci)."""
+        A = CONFIG['annotate']
+        if self.left_dfams or self.right_dfams:
+            return None
+        floor = A.get('sv_min_mapq', 30)
+        clips = dict(zip(('left', 'right'), (c.upper() for c in self._insert_clips())))
+        parts = []
+        for side, maps in (('left', self.left_maps), ('right', self.right_maps)):
+            clip = clips[side]
+            if (not maps or len(clip) < A.get('partner_clip_min_len', 25)
+                    or self._shannon(clip) < A.get('partner_clip_min_entropy', 1.5)
+                    or (clip.count('A') + clip.count('T')) / len(clip) > A.get('partner_clip_max_at', 0.8)):
+                return None
+            places = {pos for pos, _, _, _ in maps}
+            if len(places) != 1 or any(q is None or q < floor for _, q, _, _ in maps):
+                return None
+            if any(self._rep_class(r) in self._PARTNER_REPEAT_CLASSES
+                   for _, _, rmsks, _ in maps for r in (rmsks or [])):
+                return None
+            m = self._MAP_RE.match(next(iter(places)))
+            if not m:
+                return None
+            parts.append((m.group(1), int(m.group(2))))
+        (lc, lp), (rc, rp) = parts
+        if lc == rc and abs(lp - rp) <= A.get('partner_max_span', 10000):
+            return None
+        return f"left clip -> {lc}:{lp}, right clip -> {rc}:{rp} (both unique)"
+
     # ---------------------------------------------------------- (E) split / local-remap subtype
     def _local_remap_subtype(self):
         """Feature E: when the whole-clip --end-to-end remap failed but a bowtie2 --local pass
@@ -2381,6 +2434,8 @@ class VariantAnnotationContainer:
         joint = bool(getattr(self, 'joint', None))
         if joint:
             cols = cols + [f'joint_{c}' for c in self.JOINT_COLUMNS]
+        # last, so positional readers of the older layout are unaffected
+        cols = cols + ['partner_conflict']
         n = 0
         with opener(path, 'wt') as fh:
             fh.write('\t'.join(cols) + '\n')
@@ -2408,6 +2463,7 @@ class VariantAnnotationContainer:
                     row += [(ins.gt_core or '.').replace('\t', ' ')]
                 if joint:
                     row += [(getattr(ins, 'joint', None) or {}).get(c, '') or '.' for c in self.JOINT_COLUMNS]
+                row += [ins._partner_conflict() or '.']
                 fh.write('\t'.join(row) + '\n')
                 n += 1
         print(f"wrote annotation table ({n} loci) to {path}")

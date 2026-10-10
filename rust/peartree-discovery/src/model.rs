@@ -42,6 +42,12 @@ pub struct Breakpoint {
     /// (sidecar indexed fetch); -1 when unset or for a synthesised breakpoint.
     pub mref: i32,
     pub mpos: i64,
+    /// supplementary clip record only: (ref id, 0-based POS) of its PRIMARY record (first SA
+    /// entry); (-1, -1) for a primary record / synthesised breakpoint. Lets the disc_agree
+    /// duplicate check recognise a discordant anchor that is the clip template's OTHER read
+    /// (see `AgreePending::same_molecule`). A primary clip read is not covered: a LEFT clip's
+    /// POS is the junction itself, so it does not identify the molecule.
+    pub own: (i32, i64),
     /// distinct fragments whose clip spans the whole poly-A tail into structured sequence
     /// (`spans_polya`); computed only when `one_sided_min_spanning_fragments` > 0
     pub n_frags_span_polya: usize,
@@ -87,6 +93,7 @@ impl Breakpoint {
             flag: 0,
             mref: -1,
             mpos: -1,
+            own: (-1, -1),
             n_frags_span_polya: 0,
             agree: None,
         }
@@ -117,6 +124,9 @@ pub struct ClipMol {
     pub outer5: i64,
     pub mref: i32,
     pub mpos: i64,
+    /// supplementary clip: (ref id, POS) of its primary record (`Breakpoint::own`); else (-1, -1)
+    pub oref: i32,
+    pub opos: i64,
 }
 
 /// Payload of a PENDING single-molecule junction (`disc_agree_second_fragment`).
@@ -136,7 +146,13 @@ pub struct AgreePending {
 impl AgreePending {
     /// True when the anchor `d` is (by the lenient rule) the same molecule as one of the clip
     /// reads: same qname, or (tol > 0) 5' outer end AND mate start each within `tol` bp
-    /// (both mates unplaced: the outer end alone decides) -- the `count_frag_keys` rule.
+    /// (both mates unplaced: the outer end alone decides) -- the `count_frag_keys` rule --
+    /// or (tol > 0, supplementary clip) `d` is a copy of the clip template's OTHER read: `d` sits
+    /// where the clip read's mate sits and `d`'s mate sits where the clip read's primary sits. That is how a
+    /// markdup-missed copy shows up when the clip is a supplementary record: markdup flags the
+    /// duplicate's primary but not its supplementary, and the kept copy's own clip can fail
+    /// the MAPQ floor, leaving its mate-side read as the "independent" discordant anchor
+    /// (PD45886b_lo0002 13:46537573-46537585 RIGHT, 2026-10-10).
     pub fn same_molecule(&self, d: &DiscLite, tol: i64) -> bool {
         let outer5 = if d.is_reverse() { d.end } else { d.start };
         self.clips.iter().any(|c| {
@@ -148,8 +164,20 @@ impl AgreePending {
                     } else {
                         c.mref < 0 && d.mref < 0
                     })
+                || (tol > 0 && mate_twin(c, d, tol))
         })
     }
+}
+
+/// `d` is the clip template's other read (record positions = POS, so an exact copy matches
+/// at 0 bp): `d` at the clip read's RNEXT/PNEXT and `d`'s mate at the clip read's primary.
+fn mate_twin(c: &ClipMol, d: &DiscLite, tol: i64) -> bool {
+    c.mref >= 0
+        && c.oref >= 0
+        && d.ref_id == c.mref
+        && (d.start - c.mpos).abs() <= tol
+        && d.mref == c.oref
+        && (d.mpos - c.opos).abs() <= tol
 }
 
 /// `mate` and `insert` share >= AGREE_MIN_BP bases on one diagonal at >= AGREE_MIN_ID identity
@@ -512,7 +540,7 @@ pub fn join(mut breakpoints: Vec<Breakpoint>, cfg: &DiscoveryConfig, evidence_fl
                     (false, true) => bp.breakpoint - ulen,
                     (false, false) => bp.breakpoint + clen,
                 };
-                (bp.clipped.seq.clone(), ClipMol { frag: bp_frag(bp), outer5, mref: bp.mref, mpos: bp.mpos })
+                (bp.clipped.seq.clone(), ClipMol { frag: bp_frag(bp), outer5, mref: bp.mref, mpos: bp.mpos, oref: bp.own.0, opos: bp.own.1 })
             })
             .collect()
     } else {
@@ -1059,7 +1087,7 @@ mod tests {
     #[test]
     fn anchor_duplicate_rule() {
         let a = AgreePending {
-            clips: vec![ClipMol { frag: 1, outer5: 1110, mref: 0, mpos: 50_000 }],
+            clips: vec![ClipMol { frag: 1, outer5: 1110, mref: 0, mpos: 50_000, oref: -1, opos: -1 }],
             ..Default::default()
         };
         let d = |frag, flag: u16, start, end, mref, mpos| DiscLite { frag, flag, ref_id: 0, start, end, mref, mpos };
@@ -1068,6 +1096,30 @@ mod tests {
         assert!(!a.same_molecule(&d(2, 0x10, 1000, 1113, 0, 49_990), 5), "mate 10 bp away");
         assert!(!a.same_molecule(&d(2, 0x10, 1000, 1120, 0, 50_000), 5), "outer end 10 bp away");
         assert!(a.same_molecule(&d(2, 0x0, 1110, 1200, 0, 50_000), 5), "forward: start is the 5' end -> 1110 matches");
+    }
+
+    /// PD45886b_lo0002 13:46537573-46537585 RIGHT: the clip is the supplementary of a
+    /// dup-flagged template (primary chr5:168032175, mate 13:46537303); the kept copy's mate-side
+    /// read at 13:46537303 (mate chr5:168032175) is the same molecule, not a second fragment.
+    #[test]
+    fn anchor_mate_twin_of_supplementary_clip() {
+        let (c13, c5) = (12, 4);
+        let a = AgreePending {
+            clips: vec![ClipMol { frag: 1, outer5: 46_537_695, mref: c13, mpos: 46_537_302, oref: c5, opos: 168_032_174 }],
+            ..Default::default()
+        };
+        let d = |start, mref, mpos| DiscLite { frag: 2, flag: 0x1 | 0x80, ref_id: c13, start, end: start + 151, mref, mpos };
+        assert!(a.same_molecule(&d(46_537_302, c5, 168_032_174), 5), "exact twin");
+        assert!(a.same_molecule(&d(46_537_305, c5, 168_032_171), 5), "shifted twin within tol");
+        assert!(!a.same_molecule(&d(46_537_302, c5, 168_032_174), 0), "legacy tol 0: qname only");
+        assert!(!a.same_molecule(&d(46_537_302, c5, 168_040_000), 5), "mate elsewhere on chr5");
+        assert!(!a.same_molecule(&d(46_537_302, 8, 168_032_174), 5), "mate on another contig");
+        assert!(!a.same_molecule(&d(46_537_320, c5, 168_032_174), 5), "anchor 18 bp from the clip's mate");
+        let unknown = AgreePending {
+            clips: vec![ClipMol { frag: 1, outer5: 46_537_695, mref: c13, mpos: 46_537_302, oref: -1, opos: -1 }],
+            ..Default::default()
+        };
+        assert!(!unknown.same_molecule(&d(46_537_302, c5, 168_032_174), 5), "no SA primary: rule off");
     }
 }
 

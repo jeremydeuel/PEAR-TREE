@@ -34,6 +34,12 @@ Hard rules (Jeremy, 2026-10-08) EXCLUDE a candidate (moved to the `excluded` she
                       that is non-local (>= 30 bp of non-homopolymer sequence that does not place within
                       --local-window bp): no inserted sequence anywhere (Jeremy, 2026-10-09; PD45886:
                       180/489 private calls, 13/2573 germline MEIs)
+  * unrelated partners annotate_v2 `partner_conflict`: both clips map UNIQUELY (one placement, MAPQ
+                      >= 30, trustworthy clip, no Dfam hit) to loci that cannot be one inserted piece
+                      (other contig / > 10 kb apart) -- two independent chimeras paired into a fake TSD
+                      (PD45886b_lo0002 13:46537573-46537585: chr9 | chr5, 2026-10-10); multimapping
+                      / repeat-placed clips are never judged, nor calls with an RTE class or a
+                      TPRT / LIKELY_TPRT call (a 3' transduction has a unique source partner)
   Known insertions (tier A) are kept and only flagged in tier_note.
 Sheets: README, somatic (the table, sorted by tier), excluded (the rule failures), known (the known
 insertions' rows), refbias (the b estimates, when --refbias is given).
@@ -744,6 +750,9 @@ def main():
             if ln <= SHORT_CLIP_BP and rn <= SHORT_CLIP_BP and nonlocal_mates(loc, reads_by, genome, a.local_window) == 0:
                 violations.append(f"both clips <= {SHORT_CLIP_BP} bp (L{ln}/R{rn}) and no mate with sequence "
                                   f"off the local reference (+-{a.local_window} bp)")
+        pc = an.get("partner_conflict", "")
+        if pc and pc != "." and ecls not in RTE_CLASSES and tcall not in TPRT_CALLS:
+            violations.append("unrelated partners: " + pc)
         if violations and k:
             notes.append("KNOWN but fails: " + "; ".join(violations))
         p = parse_locus(loc) or ("", "", "")
@@ -786,7 +795,8 @@ def main():
                            "independent fragments (CLIP/POLYA; beside a clip also SHORT, and DISC pairs whose inside mate "
                            f"agrees with the clip's insert over >= {AGREE_MIN_BP} bp at >= {int(AGREE_MIN_ID * 100)} % (poly-A / simple repeats never count); "
                            f"read+mate within {DUP_SHIFT} bp = one PCR molecule) on BOTH ends in one colony; "
-                           f"not both clips <= {SHORT_CLIP_BP} bp without a mate off the local reference"
+                           f"not both clips <= {SHORT_CLIP_BP} bp without a mate off the local reference; "
+                           "the two clips not uniquely mapped to unrelated loci (annotate partner_conflict)"
                            + ("" if a.insertions_dir else "  [fragment rule NOT checked: no --insertions-dir]")
                            + ("" if genome else "  [short-clip rule NOT checked: no --genome]")],
               ["", ""],

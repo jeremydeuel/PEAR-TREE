@@ -766,6 +766,7 @@ impl Discovery {
         mapq: u8,
         flag: u16,
         mate: (i32, i64),
+        own: (i32, i64),
     ) {
         let mut bp = Breakpoint::new(
             side,
@@ -781,6 +782,7 @@ impl Discovery {
         );
         bp.flag = flag;
         (bp.mref, bp.mpos) = mate;
+        bp.own = own;
         self.temporary_breakpoints.push(bp);
     }
 
@@ -1206,7 +1208,7 @@ impl Discovery {
             } else {
                 full.pyslice(Some(left_len as isize), None)
             };
-            self.add_breakpoint(clip, read.reference_start, &qname, clipped, unclipped, read.is_read1, read.is_forward(), exclude_flag, read.mapq, read.flag, mate_loc(&read));
+            self.add_breakpoint(clip, read.reference_start, &qname, clipped, unclipped, read.is_read1, read.is_forward(), exclude_flag, read.mapq, read.flag, mate_loc(&read), own_loc(&read));
             if let Some(c) = self.sc_short.as_mut() {
                 c.hot(read.reference_start, true);
             }
@@ -1223,7 +1225,7 @@ impl Discovery {
             } else {
                 full.pyslice(None, Some(-(right_len as isize)))
             };
-            self.add_breakpoint(clip, read.reference_end, &qname, clipped, unclipped, read.is_read1, read.is_forward(), exclude_flag, read.mapq, read.flag, mate_loc(&read));
+            self.add_breakpoint(clip, read.reference_end, &qname, clipped, unclipped, read.is_read1, read.is_forward(), exclude_flag, read.mapq, read.flag, mate_loc(&read), own_loc(&read));
             if let Some(c) = self.sc_short.as_mut() {
                 c.hot(read.reference_end, false);
             }
@@ -2644,6 +2646,16 @@ fn mate_loc(read: &BamRead) -> (i32, i64) {
     match read.mate_ref_id {
         Some(i) if read.mate_pos >= 0 => (i as i32, read.mate_pos),
         _ => (-1, -1),
+    }
+}
+
+/// `Breakpoint::own`: the SA primary (ref id, POS) of a supplementary clip record; (-1, -1)
+/// for a primary record or an unparseable SA.
+fn own_loc(read: &BamRead) -> (i32, i64) {
+    if read.is_supplementary {
+        read.sa_primary_loc().unwrap_or((-1, -1))
+    } else {
+        (-1, -1)
     }
 }
 

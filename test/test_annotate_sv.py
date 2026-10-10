@@ -441,3 +441,67 @@ if __name__ == "__main__":
                 fails += 1
                 print(f"FAIL {name}: {e}")
     sys.exit(1 if fails else 0)
+
+
+# --- unrelated partners: two independent chimeras paired into a fake TSD -------------------
+# PD45886b_lo0002 13:46537573-46537585 (2026-10-10): the left clip is unique chr9 sequence, the
+# right clip unique chr5 sequence (hs1 remap coordinates). Not one inserted piece.
+_PD45886_L = "tggaaattagatacaaatagagtgctacaag" + "TGAGACAGGGTCTTGCTCTG"
+_PD45886_R = ("ACTTATTGGTTAATTTGTTTTTTTTTTTTTGAGACAGGGTC"
+              + "caacttaatcaggaaagaaaaactagaattctcaaggacaaaaatcacaaaagcagcaagaactaggacactgggtcctgcagc")
+
+
+def _pd45886(left_maps=(_map("chr9:25648384-", 42, "-"),), right_maps=(_map("chr5:169139946-", 42, "-"),),
+             **kw):
+    return _make("13:46537573-46537585", left_seq=_PD45886_L, right_seq=_PD45886_R,
+                 left_maps=left_maps, right_maps=right_maps, **kw)
+
+
+def test_partner_conflict_two_unique_unrelated_loci():
+    pc = _pd45886()._partner_conflict()
+    assert pc and "chr9:25648384" in pc and "chr5:169139946" in pc
+
+
+def test_partner_conflict_same_source_is_one_piece():
+    # both clips from one source locus (a templated insertion / translocation partner): no conflict
+    assert TRANSLOCATION._partner_conflict() is None
+    assert _pd45886(right_maps=[_map("chr9:25649000+", 42, "+")])._partner_conflict() is None
+    # same contig but 1 Mb apart: conflict
+    assert _pd45886(right_maps=[_map("chr9:26648384-", 42, "-")])._partner_conflict()
+
+
+def test_partner_conflict_ignores_multimappers():
+    assert _pd45886(right_maps=[_map("chr5:169139946-", 0, "-")])._partner_conflict() is None
+    assert _pd45886(right_maps=[_map("chr5:169139946-", 42, "-"),
+                                _map("chr7:1000+", 42, "+")])._partner_conflict() is None
+    assert _pd45886(right_maps=())._partner_conflict() is None                    # unmapped side
+
+
+def test_partner_conflict_ignores_element_calls_and_untrusted_clips():
+    assert _pd45886(right_dfams=[_dfam("AluY", 60.0, "+")])._partner_conflict() is None
+    short = _make("13:46537573-46537585", left_seq="tggaaattagatac" + "TGAGACAGGGTCTTGCTCTG",
+                  right_seq=_PD45886_R, left_maps=[_map("chr9:25648384-", 42, "-")],
+                  right_maps=[_map("chr5:169139946-", 42, "-")])
+    assert short._partner_conflict() is None
+    lowc = _make("13:46537573-46537585", left_seq="atatatatatatatatatatatatatatat" + "TGAGACAGGGTCTTGCTCTG",
+                 right_seq=_PD45886_R, left_maps=[_map("chr9:25648384-", 42, "-")],
+                 right_maps=[_map("chr5:169139946-", 42, "-")])
+    assert lowc._partner_conflict() is None
+
+
+def test_partner_conflict_ignores_rte_partners():
+    # a clip landing in a retrotransposon is the element on a paralog, not a chimera partner
+    rte = _pd45886(right_maps=[_map("chr5:169139946-", 42, "-", rmsks=[_rmsk_rte("L1PA2", "LINE/L1")])])
+    assert rte._partner_conflict() is None
+
+
+def _rmsk_simple(name="(AC)n"):
+    # slash-less class: RepeatMasker_Annotation stores repClass as a 1-element list
+    line = ["100", "0", "0", "0", "chr1", "1", "300", "300", "+", name, "Simple_repeat", "1", "300", "1"]
+    return RepeatMasker_Annotation(line)
+
+
+def test_partner_conflict_ignores_tandem_repeat_partners():
+    # PD45886 germline (AC)n / (TCATCA)n loci: a tandem-repeat clip's 'unique' map is chance
+    sr = _pd45886(left_maps=[_map("chr9:25648384-", 42, "-", rmsks=[_rmsk_simple()])])
+    assert sr._partner_conflict() is None

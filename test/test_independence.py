@@ -175,6 +175,43 @@ def test_pcr_copies_with_evidence_on_different_reads_collapse():
     assert len(clusters) == 1 and n_dup == 1
 
 
+# PD45886b_lo0002 13:46537573-46537585 RIGHT (2026-10-10): one chimeric molecule, two copies.
+# Copy 1 (markdup-flagged primary, so only its unflagged SUPPLEMENTARY clip survives): R1
+# supplementary at 13:46537545 41M110S, mate R2 at 13:46537303. Copy 2 (kept; its own clip
+# failed MAPQ): R2 at 13:46537303 is the DISC read, R1 primary at 5:168032175 is the MATE.
+_SUPP_SEQ = ("ACTTATTGGTTAATTTGTTTTTTTTTTTTTGAGACAGGGTCCAACTTAATCAGGAAAGAAAAACTAGAATTCTCAAGGACAAAAATCAC"
+             "AAAAGCAGCAAGAACTAGGACACTGGGTCCTGCAGCAAGAGCAGCACCCAGCTGCCCTCACC")
+_DISC_SEQ = ("CACAGATTAAGTAATAGCCAGTAAGTGGTGTGCCTACTGAAATCCAGATCATCCGGCCTTACAGACCAAGCTCTTAATCACTTTGTTA"
+             "AAGACTCAACCTACACACCTGCATTTGGGTAGATGTCTAGGGGAAAGGGCTGCCAAAATACCC")
+_MATE_SEQ = revcomp("AACTTATTGGTTAATTTGTTTTTTTTTTTTGAGACAGGGTCCAACTTAATCAGGAAAGAAAAACTAGAATTCTCAAGGACAAAAATCA"
+                    "CAAAAGCAGCAAGAACTAGGACACTGGGTCCTGCAGCAAGAGCAGCACCCAGCTGCCCTCACC")
+
+
+def _supp_twin(supp_flag=2129, mate_seq=_MATE_SEQ, disc_pos=46537302):
+    loc = "13:46537573-46537585"
+    copy1 = [row(locus=loc, frag="5df603eabed89565", r12=1, flag=supp_flag, ref="13", pos=46537544,
+                 strand="-", outer=46537695, mref="13", mpos=46537302, mstrand="+", cigar="41M110S",
+                 clip_at=41, seq=_SUPP_SEQ)]
+    copy2 = [row(locus=loc, frag="87593034e6499aee", r12=2, role="DISC", flag=129, ref="13",
+                 pos=disc_pos, strand="+", outer=disc_pos, mref="5", mpos=168032174, mstrand="+",
+                 cigar="151M", clip_at=-1, seq=_DISC_SEQ),
+             row(locus=loc, frag="87593034e6499aee", r12=1, role="MATE", flag=65, ref="5", pos=168032174,
+                 strand="+", outer=168032174, mref="13", mpos=disc_pos, mstrand="+", cigar="115M36S",
+                 clip_at=-1, seq=mate_seq)]
+    return copy1 + copy2
+
+
+def test_supplementary_clip_and_its_templates_other_read_collapse():
+    clusters, n_dup, _ = independent_clusters(collapse_fragments(_supp_twin()))
+    assert len(clusters) == 1 and n_dup == 1
+
+
+def test_supplementary_twin_needs_position_and_read_sequence():
+    assert n_ind(_supp_twin(disc_pos=46537320)) == 2                      # DISC 18 bp off the mate
+    assert n_ind(_supp_twin(mate_seq="ACGTTGCAGGTCCATGAT" * 8)) == 2      # mate is another read
+    assert n_ind(_supp_twin(supp_flag=81)) == 2                           # primary clip: rule off
+
+
 def test_allele_forward_orientation_of_mates():
     """reads.fa promises allele-forward sequence: a MATE stored on the same strand as its
     partner (placed on a paralog in the opposite orientation) is reverse-complemented."""

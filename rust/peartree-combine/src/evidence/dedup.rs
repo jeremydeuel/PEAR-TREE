@@ -304,8 +304,14 @@ impl<'a> Dd<'a> {
     /// `_is_dup(a, b, p)`
     fn is_dup(&self, a: V, b: V, s: &mut Scratch) -> &'static str {
         let k = self.is_dup_oriented(a, b, s);
-        if !k.is_empty() || self.strand(a) == self.strand(b) {
+        if !k.is_empty() {
             return k;
+        }
+        if self.mate_twin(a, b, s) || self.mate_twin(b, a, s) {
+            return "coord";
+        }
+        if self.strand(a) == self.strand(b) {
+            return "";
         }
         for (x, y) in [(Some(a), b.swapped()), (a.swapped(), Some(b))] {
             let (Some(x), Some(y)) = (x, y) else { continue };
@@ -318,6 +324,25 @@ impl<'a> Dd<'a> {
             }
         }
         ""
+    }
+
+    /// `_is_mate_twin(a, b, p)`: a's evidence read is a SUPPLEMENTARY clip record and b's
+    /// evidence read is a copy of the other read of a's template (b's primary at a's mate
+    /// placement, b's mate record carrying a's read sequence).
+    fn mate_twin(&self, a: V, b: V, s: &mut Scratch) -> bool {
+        let (pa, pb, tol) = (&self.rows[a.pr], &self.rows[b.pr], self.p.tol);
+        if pa.flag & 0x800 == 0 || !(self.info[a.pr].mate_mapped && self.info[b.pr].mapped) {
+            return false;
+        }
+        if pa.r12 == 0 || pb.r12 == 0 || pa.r12 == pb.r12 {
+            return false;
+        }
+        if pb.ref_ != pa.mref || pb.strand != pa.mstrand || (pb.pos - pa.mpos).abs() > tol {
+            return false;
+        }
+        let Some(m) = b.mate else { return false };
+        let (x, y) = (&self.info[a.pr].seq_up, &self.info[m].seq_up);
+        read_close(x, y, self.p, s) || read_close(x, &revcomp(y), self.p, s)
     }
 
     /// `_is_dup_oriented(a, b, p)`
@@ -543,6 +568,40 @@ fn semi_close(a: &[u8], b: &[u8], p: &DedupParams) -> bool {
     align::distance(a, b, Mode::Shw, k, &[]) != -1
 }
 
+/// python `_TWIN_MIN_READ`
+const TWIN_MIN_READ: usize = 50;
+
+/// `_read_close(x, y, p)`: two records of one read -- whole sequences homopolymer-compressed
+/// (no poly-A cut), within the edit budget, either start shifted by up to tol bases.
+fn read_close(x: &[u8], y: &[u8], p: &DedupParams, s: &mut Scratch) -> bool {
+    if x.len() < TWIN_MIN_READ || y.len() < TWIN_MIN_READ {
+        return false;
+    }
+    let mut hx = std::mem::take(&mut s.ha);
+    let mut hy = std::mem::take(&mut s.hb);
+    let mut t: Vec<u8> = Vec::new();
+    hp_compress_cut(x, usize::MAX, &mut hx);
+    hp_compress_cut(y, usize::MAX, &mut hy);
+    let mut ok = false;
+    for k in 0..=p.tol.max(0) as usize {
+        hp_compress_cut(x.get(k..).unwrap_or(&[]), usize::MAX, &mut t);
+        if semi_close(&t, &hy, p) {
+            ok = true;
+            break;
+        }
+        if k > 0 {
+            hp_compress_cut(y.get(k..).unwrap_or(&[]), usize::MAX, &mut t);
+            if semi_close(&hx, &t, p) {
+                ok = true;
+                break;
+            }
+        }
+    }
+    s.ha = hx;
+    s.hb = hy;
+    ok
+}
+
 /// `_prefix_close(a, b, p)`.
 fn prefix_close(a: &[u8], b: &[u8], p: &DedupParams, s: &mut Scratch) -> bool {
     hp_compress_cut(a, p.polya_min, &mut s.ha);
@@ -655,6 +714,36 @@ mod tests {
         let Some(fx) = p3_fixture::full() else { return eprintln!("P3_FULL_DIR not set: skipped") };
         let (n, dups, cross) = check_fixture(&fx);
         eprintln!("full fixture: {n} junction x config evaluations, {dups} dups, {cross} cross");
+    }
+
+    /// PD45886b_lo0002 13:46537573-46537585 RIGHT: a supplementary clip (copy 1, markdup-flagged
+    /// primary) and copy 2's mate-side DISC read are one molecule -- same cases as python
+    /// test_independence.py test_supplementary_*.
+    #[test]
+    fn supplementary_clip_mate_twin() {
+        const SUPP: &str = "ACTTATTGGTTAATTTGTTTTTTTTTTTTTGAGACAGGGTCCAACTTAATCAGGAAAGAAAAACTAGAATTCTCAAGGACAAAAATCACAAAAGCAGCAAGAACTAGGACACTGGGTCCTGCAGCAAGAGCAGCACCCAGCTGCCCTCACC";
+        const DISC: &str = "CACAGATTAAGTAATAGCCAGTAAGTGGTGTGCCTACTGAAATCCAGATCATCCGGCCTTACAGACCAAGCTCTTAATCACTTTGTTAAAGACTCAACCTACACACCTGCATTTGGGTAGATGTCTAGGGGAAAGGGCTGCCAAAATACCC";
+        const MATE_FA: &str = "AACTTATTGGTTAATTTGTTTTTTTTTTTTGAGACAGGGTCCAACTTAATCAGGAAAGAAAAACTAGAATTCTCAAGGACAAAAATCACAAAAGCAGCAAGAACTAGGACACTGGGTCCTGCAGCAAGAGCAGCACCCAGCTGCCCTCACC";
+        let mate = String::from_utf8(revcomp(MATE_FA.as_bytes())).unwrap();
+        let other = "ACGTTGCAGGTCCATGAT".repeat(8);
+        let contigs = Interner::new();
+        let h = crate::evidence::row::SidecarHeader::parse("locus\tside\trole\tfrag\tr12\tflag\tref\tpos\tstrand\touter\tmref\tmpos\tmstrand\ttlen\tmapq\tcigar\tclip_at\tseq\tqual").unwrap();
+        let p = DedupParams { tol: 5, max_edit: 3, max_edit_frac: 0.02, polya_min: 8, mate_min_mapq: 20 };
+        let n_ind = |supp_flag: i64, mate_seq: &str, disc_pos: i64| -> usize {
+            let lines = [
+                format!("13:46537573-46537585\tRIGHT\tCLIP\t5df603eabed89565\t1\t{supp_flag}\t13\t46537544\t-\t46537695\t13\t46537302\t+\t0\t60\t41M110S\t41\t{SUPP}\t*"),
+                format!("13:46537573-46537585\tRIGHT\tDISC\t87593034e6499aee\t2\t129\t13\t{disc_pos}\t+\t{disc_pos}\t5\t168032174\t+\t0\t60\t151M\t-1\t{DISC}\t*"),
+                format!("13:46537573-46537585\tRIGHT\tMATE\t87593034e6499aee\t1\t65\t5\t168032174\t+\t168032174\t13\t{disc_pos}\t+\t0\t60\t115M36S\t-1\t{mate_seq}\t*"),
+            ];
+            let rows: Vec<EvidenceRow> = lines.iter().map(|l| EvidenceRow::parse(l, &h, 0, &contigs).unwrap().unwrap()).collect();
+            let files = vec![crate::model::InputFile::new("S1.txt.gz")];
+            let frags = collapse_fragments(&rows, &files);
+            independent_clusters(&frags, &rows, &p, &contigs).clusters.len()
+        };
+        assert_eq!(n_ind(2129, &mate, 46537302), 1, "twin");
+        assert_eq!(n_ind(2129, &mate, 46537320), 2, "DISC 18 bp off the mate");
+        assert_eq!(n_ind(2129, &other, 46537302), 2, "mate is another read");
+        assert_eq!(n_ind(81, &mate, 46537302), 2, "primary clip: rule off");
     }
 
     #[test]

@@ -289,6 +289,17 @@ impl<'a> BamRead<'a> {
         self.tag_string(Tag::OTHER_ALIGNMENTS)
     }
 
+    /// Placement (reference id, 0-based POS) of this read's PRIMARY record, taken from the
+    /// first SA entry (bwa lists the primary first on a supplementary record). None when
+    /// the SA tag is absent/unparseable or names a contig not in the header.
+    pub fn sa_primary_loc(&self) -> Option<(i32, i64)> {
+        let sa = self.sa()?;
+        let mut f = sa.split(';').next()?.split(',');
+        let (name, pos) = (f.next()?, f.next()?.parse::<i64>().ok()?);
+        let id = self.header.reference_sequences().get_index_of(name.as_bytes())?;
+        Some((id as i32, pos - 1))
+    }
+
     pub fn xa(&self) -> Option<String> {
         self.tag_string(Tag::from([b'X', b'A']))
     }
