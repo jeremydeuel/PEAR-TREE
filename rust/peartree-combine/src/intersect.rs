@@ -399,7 +399,6 @@ pub fn own_members(ins: &Insertion) -> Vec<(FileId, crate::model::LocusKey)> {
 mod tests {
     use super::*;
     use crate::insertion::parse_discovery_file;
-    use crate::region_filter::filter_dense_regions;
     use std::path::Path;
 
     /// expected clusters from python `_fuzzy_clusters(keys, weight, tol)` (as indices into keys)
@@ -541,7 +540,8 @@ mod tests {
     }
 
     /// expected counts and hashes from python (scratch/p1dump.py: parseFile -> contig filter ->
-    /// intersect_insertions -> filter_dense_regions(100, cut)) over the same three files.
+    /// intersect_insertions -> filter_dense_regions(100, cut)) over the same three files; the dense
+    /// filter was removed 2026-10-11, only the intersect columns are checked.
     #[test]
     fn fixture_matches_python() {
         let Some(dir) = fixture_dir() else { return };
@@ -559,27 +559,23 @@ mod tests {
             raw.extend(imp.records);
         }
         assert_eq!(raw.len(), 1758);
-        // (tol, polya_aware, keep_polya, rf_cutoff, n_intersect, hash, n_rf_kept, removed, hot, rf_hash)
-        let cases: &[(i64, bool, bool, usize, usize, u64, usize, usize, usize, u64)] = &[
-            (0, false, false, 4, 1449, 0x678bfe0aa2ba52ed, 1429, 20, 4, 0xaa92dc72dc1b166a),
-            (0, true, false, 2, 1446, 0xd13159a3b9ab4f0f, 1010, 436, 203, 0xe75aa72293ef5709),
-            (5, false, false, 2, 1441, 0x75d42a7aa62d2802, 1018, 423, 197, 0xf02edcc0b0ad8615),
-            (5, true, true, 2, 1438, 0xc5dccd10dcfde531, 1019, 419, 194, 0x38e1a60bf9b3e7ea),
-            (10, true, true, 4, 1429, 0x5d2fd3a666004c3a, 1413, 16, 3, 0xdad1695c568de7d7),
-            (0, false, true, 4, 1451, 0x479950e8afbdc196, 1431, 20, 4, 0xafd5a5a27e0178ad),
-            (3, false, true, 2, 1445, 0x854a39faadf91786, 1016, 429, 199, 0x77ff5e4636b812d5),
+        // (tol, polya_aware, keep_polya, n_intersect, hash)
+        let cases: &[(i64, bool, bool, usize, u64)] = &[
+            (0, false, false, 1449, 0x678bfe0aa2ba52ed),
+            (0, true, false, 1446, 0xd13159a3b9ab4f0f),
+            (5, false, false, 1441, 0x75d42a7aa62d2802),
+            (5, true, true, 1438, 0xc5dccd10dcfde531),
+            (10, true, true, 1429, 0x5d2fd3a666004c3a),
+            (0, false, true, 1451, 0x479950e8afbdc196),
+            (3, false, true, 1445, 0x854a39faadf91786),
         ];
-        for &(tol, pa, kp, cut, n, h, nk, rem, hot, hk) in cases {
+        for &(tol, pa, kp, n, h) in cases {
             let cfg = test_cfg(tol, pa, kp);
             let out = intersect_insertions(raw.clone(), &cfg, &contigs, &files);
             let text = out.iter().map(|i| canon(i, &contigs, &files)).collect::<Vec<_>>().join("\n");
             assert_eq!(out.len(), n, "intersect n tol={tol} pa={pa} kp={kp}");
             assert_eq!(fnv(&text), h, "intersect hash tol={tol} pa={pa} kp={kp}");
             assert!(out.iter().enumerate().all(|(i, x)| x.uid as usize == i));
-            let (kept, removed, nhot) = filter_dense_regions(out, 100, cut);
-            let ktext = kept.iter().map(|i| canon(i, &contigs, &files)).collect::<Vec<_>>().join("\n");
-            assert_eq!((kept.len(), removed, nhot), (nk, rem, hot), "rf tol={tol} pa={pa} kp={kp}");
-            assert_eq!(fnv(&ktext), hk, "rf hash tol={tol} pa={pa} kp={kp}");
         }
     }
 }

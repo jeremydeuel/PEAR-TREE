@@ -24,7 +24,6 @@ import pyliftover
 from config import CONFIG
 from combine_insertions_insertion import Insertion, TYPE_LEFT_POLYA, TYPE_RIGHT_POLYA, TYPE_FULL_INFO, TYPE_LEFT_DISC, TYPE_RIGHT_DISC
 from combine_insertions_intersect_insertions import intersect_insertions
-from combine_insertions_region_filter import filter_dense_regions
 from combine_insertions_get_sequence import get_sequence
 from sequence_checks import sequence_matching_score
 from collections import Counter
@@ -157,11 +156,6 @@ def combine_insertions(input_files, insertions_genotyping_file, combined_inserti
         from combine_insertions_evidence import discovery_breakpoints
         breakpoints = discovery_breakpoints(all_insertions)
     insertions = intersect_insertions(all_insertions)
-    #remove insertions in regions with far too high count
-    bin_range = 100
-    ins_cutoff = 4
-    insertions, removed, regions = filter_dense_regions(insertions, bin_range, ins_cutoff)
-    print(f"filtering regions with very high insertion rate of {ins_cutoff} or higher per {bin_range} bases ,removed {removed} insertions in {regions} regions, {len(insertions)} insertions are remaining")
     # TPRT-hallmarks: pooled per-patient junction evidence from discovery's optional
     # `<sample>.evidence.tsv.gz` sidecars (independent-fragment gate + indel-aware clip
     # consensus). Returns None when no sidecar exists -> legacy behaviour, byte-identical.

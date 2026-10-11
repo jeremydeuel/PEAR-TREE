@@ -13,7 +13,6 @@ use crate::insertion::parse_discovery_file;
 use crate::intersect::intersect_insertions;
 use crate::liftover::LiftOver;
 use crate::model::{FileId, InputFile, Insertion, Interner};
-use crate::region_filter::filter_dense_regions;
 use crate::remap::{
     bowtie2_end_to_end_cmd, bowtie2_local_cmd, clean_remap_names_bam, clip_fastq, clipped_remap_names_bam, consensus_fastq, sh, write_gz,
 };
@@ -147,7 +146,7 @@ fn drop_filtered(insertions: &mut Vec<Insertion>, set: &FxHashSet<String>, conti
 ///     threads <= cpu count), reject duplicate basenames;
 ///  2. parse discovery files in parallel, import loop / exclusion in command-line order (§3.1);
 ///  3. far_pair_strict -> discovery_breakpoints over all accepted records (§3.2);
-///  4. intersect_insertions (§3.3); 5. filter_dense_regions(100, 4) (§3.4);
+///  4. intersect_insertions (§3.3); 5. (removed 2026-10-11: dense-region filter, §3.4);
 ///  6. evidence (if any accepted sidecar) -> apply_evidence (§4);
 ///  7. write `<stem>.fq.gz` consensus FASTQ, bowtie2 end-to-end -> `<stem>.bam` unless it exists,
 ///     clean-remap filter (§5.1);
@@ -249,16 +248,9 @@ pub fn run(args: &Args) -> Result<(), String> {
     // ---- 3. per-sample discovery breakpoints (before intersect merges records)
     let breakpoints = if cfgc.far_pair_strict { Some(discovery_breakpoints(&all)) } else { None };
 
-    // ---- 4/5. intersect + dense-region filter (inputs are consumed)
-    let insertions = intersect_insertions(all, cfgc, &ctx.contigs, &ctx.files);
-    let (bin_range, ins_cutoff) = (100i64, 4usize);
-    let (mut insertions, removed, regions) = filter_dense_regions(insertions, bin_range, ins_cutoff);
-    println!(
-        "filtering regions with very high insertion rate of {ins_cutoff} or higher per {bin_range} bases ,removed {removed} insertions in {regions} regions, {} insertions are remaining",
-        insertions.len()
-    );
-
-    crate::diag::memlog("intersect + dense filter");
+    // ---- 4. intersect (inputs are consumed). No dense-region filter: SPEC.md §3.4.
+    let mut insertions = intersect_insertions(all, cfgc, &ctx.contigs, &ctx.files);
+    crate::diag::memlog("intersect");
     // ---- 6. evidence
     let shard_dir = PathBuf::from(format!("{stem}.evidence_shards"));
     let (ins2, mut evidence) = apply_evidence(insertions, &accepted, &ctx, breakpoints.as_ref(), &shard_dir)?;

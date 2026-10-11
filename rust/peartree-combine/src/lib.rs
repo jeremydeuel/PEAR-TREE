@@ -18,7 +18,6 @@ pub mod liftover;
 pub mod model;
 pub mod pipeline;
 pub mod pyfmt;
-pub mod region_filter;
 pub mod remap;
 pub mod seq;
 pub mod splice;

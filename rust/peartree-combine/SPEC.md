@@ -241,7 +241,12 @@ other.files]`, deduplicated in order; each `m` not in target.member_loci is appe
 `member_sides[m] = sides` (member_sides starts as a copy of target's or empty); files of other not
 in target.files appended.
 
-### 3.4 filter_dense_regions(bin_range=100, ins_cutoff=4) (RF:34) — see `region_filter.rs`.
+### 3.4 (removed 2026-10-11) filter_dense_regions
+
+Was: drop every locus within ~±100 bp of a 100 bp bin holding >= 4 merged loci. Removed from both
+ports: its hot bins grow ~1 per colony (733 at 722 colonies), it dropped ~2.4% of PD49229's
+germline MEIs, and dense windows produced no private calls downstream (their loci genotype as
+germline). Nothing replaces it.
 
 ---------------------------------------------------------------------------------------------
 
@@ -514,7 +519,6 @@ Sets used only for membership/cardinality (`have`, groups, colonies, filter name
 | `seq.rs` | QS, revcomp, SC:89, TF:316-349 | P1 |
 | `insertion.rs` | INS | P1 |
 | `intersect.rs` | ISX | P1 |
-| `region_filter.rs` | RF | P1 |
 | `genome.rs` | GS / py2bit | P1 |
 | `consensus.rs` | IC | P2 |
 | `evidence/row.rs` | EV:80-148, 245-263, 1265 | P3 |
