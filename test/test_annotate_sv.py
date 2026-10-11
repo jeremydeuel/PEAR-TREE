@@ -41,6 +41,9 @@ Insertion = annotate_v2.Insertion
 Dfam_Annotation = annotate_v2.Dfam_Annotation
 RepeatMasker_Annotation = annotate_v2.RepeatMasker_Annotation
 VAC = annotate_v2.VariantAnnotationContainer
+# Fixture coordinates are already in the title's assembly: no remap -> discovery liftover
+# (the configured chain would otherwise lift them as hs1 on the farm). Lift tests set their own.
+Insertion._REMAP_LIFT = None
 
 
 def _dfam(model, bits, strand="-"):
@@ -505,3 +508,75 @@ def test_partner_conflict_ignores_tandem_repeat_partners():
     # PD45886 germline (AC)n / (TCATCA)n loci: a tandem-repeat clip's 'unique' map is chance
     sr = _pd45886(left_maps=[_map("chr9:25648384-", 42, "-", rmsks=[_rmsk_simple()])])
     assert sr._partner_conflict() is None
+
+
+# --- remap (hs1) -> discovery-assembly reconciliation --------------------------------------
+# Clip remaps are in hs1, titles in GRCh37 ("1:...") / GRCh38 ("chr1:..."). PD49229
+# 1:109660358 is one end of a 2 kb local inversion; its clip remaps to hs1 chr1:109152555(-),
+# which is 1:1096624xx in GRCh37 but was compared raw: 508 kb away, and '1' != 'chr1'.
+
+class _ShiftLift:
+    """pyliftover stand-in: hs1 chr1 -> GRCh37 chr1 by a fixed offset; nothing else lifts."""
+    def __init__(self, offset, flip=False):
+        self.offset, self.flip = offset, flip
+
+    def convert_coordinate(self, c, p, s='+'):
+        if c != 'chr1':
+            return []
+        return [(c, p + self.offset, ({'+': '-', '-': '+'}[s] if self.flip else s), 1)]
+
+
+def _with_lift(lift, fn):
+    saved = Insertion._REMAP_LIFT
+    Insertion._REMAP_LIFT = lift
+    try:
+        return fn()
+    finally:
+        Insertion._REMAP_LIFT = saved
+
+
+def test_chr_prefix_does_not_make_a_translocation():
+    # GRCh37 title '1' vs hs1 remap 'chr1', identity lift: same chromosome, not a translocation
+    c = _make("1:5000-5010", right_maps=[_map("chr1:200000-", 60, "-")]).conclusion()
+    assert "inversion junction -> 1:200000" in c, c
+    assert "translocation" not in c, c
+
+
+def test_partner_lifted_into_title_assembly():
+    ins = _make("1:109660358-109660367", right_maps=[_map("chr1:109152555-", 60, "-")])
+    c = _with_lift(_ShiftLift(509857), ins.conclusion)       # hs1 109152555 -> 1:109662412
+    assert "inversion junction -> 1:109662412 (2 kb)" in c, c
+    # unlifted it read as a distal inversion half a megabase away
+    c0 = _with_lift(None, ins.conclusion)
+    assert "inversion junction -> 1:109152555 (508 kb)" in c0, c0
+
+
+def test_lift_into_local_context_is_not_subtyped():
+    ins = _make("1:109660358-109660367", left_maps=[_map("chr1:109150596+", 60, "+")])
+    c = _with_lift(_ShiftLift(509762), ins.conclusion)        # -> 1:109660358, the title itself
+    assert "deletion/duplication" not in c and "inversion" not in c, c
+
+
+def test_unliftable_partner_is_dropped():
+    ins = _make("1:5000-5010", right_maps=[_map("chr2:200000-", 60, "-")])
+    c = _with_lift(_ShiftLift(0), ins.conclusion)             # chr2 has no counterpart
+    assert "translocation junction" not in c and "inversion junction" not in c, c
+
+
+def test_reverse_chain_block_flips_partner_strand():
+    ins = _make("1:5000-5010", right_maps=[_map("chr1:200000+", 60, "+")])
+    c = _with_lift(_ShiftLift(0, flip=True), ins.conclusion)
+    assert "inversion junction" in c, c
+
+
+def test_real_hs1_to_hg19_chain_pd49229():
+    chain = os.path.expanduser("~/.pyliftover/hs1ToHg19.over.chain.gz")
+    try:
+        import pyliftover
+    except ImportError:
+        return
+    if not os.path.exists(chain):
+        return
+    ins = _make("1:109660358-109660367", right_maps=[_map("chr1:109152555-", 60, "-")])
+    c = _with_lift(pyliftover.LiftOver(chain), ins.conclusion)
+    assert "inversion junction -> 1:10966" in c and "(2 kb)" in c, c

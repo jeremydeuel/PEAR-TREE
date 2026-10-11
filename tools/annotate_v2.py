@@ -532,6 +532,49 @@ class Insertion:
         m = self._LOCUS_RE.match(self.title)
         return (m.group(1), int(m.group(2)), int(m.group(3))) if m else None
 
+    # Clip remaps live in bowtie2_index2 space (hs1), the title in the DISCOVERY assembly
+    # (GRCh37 / GRCh38). Every title-vs-partner comparison must first lift the partner through
+    # combine_insertions.bowtie2_index2_lo (the remap -> discovery chain); comparing raw hs1
+    # positions to GRCh37 ones made a 2 kb local inversion (PD49229 1:109660358 <->
+    # 1:109662439) look 508 kb distal, and '1' vs 'chr1' never compared equal at all. The
+    # stored maps stay in hs1 (their rmsk / exon lookups are hs1 tracks); only the SV
+    # arithmetic is lifted. No chain configured = identity (remap genome == discovery genome).
+    _REMAP_LIFT = False   # lazily opened pyliftover.LiftOver; None = identity
+
+    @classmethod
+    def _remap_lifter(cls):
+        if cls._REMAP_LIFT is False:
+            cls._REMAP_LIFT = None
+            chain = CONFIG.get('combine_insertions', {}).get('bowtie2_index2_lo')
+            if chain:
+                try:
+                    import pyliftover
+                    cls._REMAP_LIFT = pyliftover.LiftOver(chain)
+                except Exception as exc:
+                    print(f"annotate: cannot open remap chain {chain} ({exc}); SV partner "
+                          f"coordinates are compared unlifted", file=sys.stderr)
+        return cls._REMAP_LIFT
+
+    @staticmethod
+    def _bare_contig(c):
+        return c[3:] if c.startswith('chr') else c
+
+    def _lift_partner(self, contig, pos, strand):
+        """A remap placement (contig, pos, strand) in the title's assembly and contig naming,
+        or None when the chain has no counterpart (remap-only sequence: no trustworthy distance
+        to the title). The strand flips when the chain block is reverse-oriented."""
+        lo = self._remap_lifter()
+        if lo is not None:
+            hits = lo.convert_coordinate(contig, pos, strand or '+')
+            if not hits:
+                return None
+            contig, pos, strand = hits[0][0], int(hits[0][1]), (hits[0][2] if strand else strand)
+        loc = self._parse_locus()
+        if loc is not None:
+            bare = self._bare_contig(contig)
+            contig = bare if not loc[0].startswith('chr') else 'chr' + bare
+        return contig, pos, strand
+
     def _sv_partner_maps(self, allow_rte):
         """Clip remaps that can be trusted as a rearrangement partner: MAPQ >= sv_min_mapq
         (unique — a dispersed-repeat clip multi-maps at MAPQ 0 and is excluded, which is what
@@ -558,7 +601,10 @@ class Insertion:
                 m = self._MAP_RE.match(pos)
                 if not m:
                     continue
-                out.append((side, m.group(1), int(m.group(2)), strand, is_rte))
+                lifted = self._lift_partner(m.group(1), int(m.group(2)), strand)
+                if lifted is None:
+                    continue
+                out.append((side, lifted[0], lifted[1], lifted[2], is_rte))
         return out
 
     def _sv_subtype(self, allow_rte, inversion_only=False):
@@ -1028,6 +1074,10 @@ class Insertion:
                     continue
                 if qcov < CONFIG['annotate'].get('local_min_qcov', 20):
                     continue
+                lifted = self._lift_partner(pc, pp, strand)
+                if lifted is None:
+                    continue
+                pc, pp = lifted[0], lifted[1]
                 if pc == contig and min(abs(pp - s), abs(pp - e)) < near:
                     cand = (2, "local duplication (confirmed by split remap)")
                 else:
