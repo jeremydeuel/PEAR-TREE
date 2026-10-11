@@ -13,10 +13,22 @@ Artefact checks cap a call at tier D and say why in tier_note:
   * local origin      (--genome) every clip is reference sequence within --local-window bp and the
                       mates lie in the flanks: nothing was inserted (template switch between nearby
                       repeat copies, small del/dup) -- PD37580 lo0077's six L1 "insertions"
-  * low allele frac.  the carriers' pooled alt/(alt+ref) rejects a heterozygote (one-sided binomial
-                      p < --het-alpha, expected b/(1+b) with the joint reference bias b): a colony is
-                      clonal, so a real event sits near 50 %. PD45886's private calls pooled 0.23 vs
-                      0.52 for germline hets; the test caps 1.2 % of germline carrier calls
+  * low allele frac.  the carriers' pooled alt/(alt+ref) rejects a heterozygote (one-sided
+                      beta-binomial p < --het-alpha, expected b/(1+b) with the joint reference bias
+                      b, overdispersion --het-rho): a colony is clonal, so a real event sits near
+                      50 %. PD45886's private calls pooled 0.23 vs 0.52 for germline hets; the test
+                      caps 1.2 % of germline carrier calls.
+                      The counts are overdispersed (Pearson chi2/df = 1.16), so a plain binomial
+                      (--het-rho 0) is anti-conservative where it has most power: on the 214
+                      orthogonally validated somatic insertions of PD49229 it demotes 7.0 % of TRUE
+                      insertions, rising with depth (1 % under 15 reads to 29 % over 40,
+                      Cochran-Armitage P = 0.003) while their allele fraction stays flat.
+                      --het-rho 0.005 restores the nominal rate (5.1 %) and releases only loci at
+                      allele fraction >= 0.45 (4 in PD49229, all validated true insertions; 0 in
+                      PD45886 / PD56961 / PD37580), leaving the 0.18-0.27 artefact band fully capped.
+                      Note the measured expectation there was 0.616 vs the 0.648 the germline-het
+                      refbias gives; that gap is NOT transferable -- a ~5 kb provirus is not an Alu --
+                      so the fix is the dispersion term, not a new b
 
   python cluster/somatic_table.py --patient PD37590 --joint bias3.joint.tsv \
       --genotype-dir V2_refbias/genotypes --fit-v2 V2_refbias/fit/phylo_fit.tsv \
@@ -438,6 +450,31 @@ def binom_cdf(k, n, p):
                         for i in range(0, k + 1)))
 
 
+def betabinom_cdf(k, n, p, rho):
+    """P(X <= k), X ~ BetaBinomial(n, p, rho); rho <= 0 falls back to the binomial.
+
+    Carrier alt/ref counts are overdispersed relative to a binomial: pooling over
+    colonies, libraries and local mappability adds locus-to-locus spread in the alt
+    fraction on top of read sampling. Measured on the 214 orthogonally validated
+    somatic insertions in PD49229 (lentiviral vector integrations, confirmed against
+    the published VIS list): Pearson chi2/df = 1.16, beta-binomial MLE rho = 0.010,
+    LRT chi2 = 4.1 on 1 df. Ignoring it makes the test anti-conservative exactly where
+    it has the most power, so the false-demotion rate of TRUE insertions climbs with
+    depth (1% below 15 reads, 8% at 15-24, 11% at 25-39, 29% at 40+;
+    Cochran-Armitage P = 0.003) while their allele fraction stays flat.
+    """
+    if n <= 0:
+        return 1.0
+    if rho <= 0:
+        return binom_cdf(k, n, p)
+    s = (1.0 - rho) / rho
+    a0, b0 = p * s, (1.0 - p) * s
+    base = math.lgamma(n + 1) + math.lgamma(a0 + b0) - math.lgamma(n + a0 + b0) - math.lgamma(a0) - math.lgamma(b0)
+    return min(1.0, sum(math.exp(base - math.lgamma(i + 1) - math.lgamma(n - i + 1)
+                                 + math.lgamma(i + a0) + math.lgamma(n - i + b0))
+                        for i in range(0, k + 1)))
+
+
 def refbias_b(rows):
     """{kind: b} plus 'global' from the joint refbias table"""
     out = {}
@@ -617,7 +654,14 @@ def main():
     ap.add_argument("--local-window", type=int, default=5000, help="local-origin check: bp either side of the locus")
     ap.add_argument("--het-alpha", type=float, default=0.05,
                     help="cap a call at tier D when its carriers' pooled alt reads reject a heterozygote at this "
-                         "one-sided binomial p (0 = off)")
+                         "one-sided p (0 = off)")
+    ap.add_argument("--het-rho", type=float, default=0.005,
+                    help="overdispersion of the carrier alt fraction for the --het-alpha test (beta-binomial "
+                         "intra-class correlation; 0 = plain binomial). A plain binomial demotes 7%% of the 214 "
+                         "validated somatic insertions in PD49229 rather than the nominal 5%%, and does it more "
+                         "often the deeper the locus. The default 0.005 restores the nominal rate (5.1%%) and only "
+                         "releases loci at allele fraction >= 0.45, where real heterozygotes live; the MLE 0.01 "
+                         "overshoots (4.2%%) and starts releasing PD45886's 0.18-0.27 artefact band")
     ap.add_argument("--out", required=True, help="output .xlsx")
     a = ap.parse_args()
 
@@ -737,10 +781,10 @@ def main():
         if a.het_alpha > 0 and not k and pool_alt + pool_ref > 0:
             kind = j.get("locus_kind") or f2.get("locus_kind", "")
             b = bias.get(kind, bias.get("global", 1.0))
-            ph = binom_cdf(pool_alt, pool_alt + pool_ref, b / (1 + b))
+            ph = betabinom_cdf(pool_alt, pool_alt + pool_ref, b / (1 + b), a.het_rho)
             if ph < a.het_alpha:
                 notes.append(f"allele fraction {pool_alt}/{pool_alt + pool_ref} below heterozygous "
-                             f"(expected {b / (1 + b):.2f}, p = {ph:.2g})")
+                             f"(expected {b / (1 + b):.2f}, rho = {a.het_rho:g}, p = {ph:.2g})")
         if notes and tier in ("B", "C"):
             notes.insert(0, f"tier {tier} -> D")
             tier = "D"
@@ -812,8 +856,9 @@ def main():
               ["tier_note", "why a call was capped at tier D: phylo_violating (tree_fit genotype2), alt reads in more than "
                             f"{a.max_noncarrier_colonies} non-carrier colonies (private calls), local origin -- every clip is "
                             f"reference within {a.local_window} bp and the mates lie in the flanks, so nothing was inserted -- "
-                            f"or an allele fraction below heterozygous (pooled carrier alt reads, one-sided binomial "
-                            f"p < {a.het_alpha} against b/(1+b), b = the joint reference bias; a colony is clonal)"
+                            f"or an allele fraction below heterozygous (pooled carrier alt reads, one-sided "
+                            f"beta-binomial p < {a.het_alpha} against b/(1+b) with overdispersion rho = {a.het_rho:g}, "
+                            f"b = the joint reference bias; a colony is clonal)"
                             + ("" if genome else " (local-origin check OFF: no --genome)")],
               ["source", "genotype2 = joint step places it on a branch below the root; legacy = legacy tree_fit "
                          "calls it private / phylo-consistent shared; both; known = only via the known list"],
