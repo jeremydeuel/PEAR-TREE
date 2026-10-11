@@ -366,6 +366,131 @@ class Insertion:
     def has_left_polyA(self):
         return re.search(r"a{%d}[ACGT]" % self._polya_min_len(), self.left_seq)
 
+    # ---------------------------------------------------------------- proviral LTR termini
+    #
+    # An integrated retrovirus / lentiviral vector is not a retrotransposon, but its junctions
+    # look exactly like an insertion's: a 5 bp target-site duplication (integrase, not TPRT) and
+    # a clip whose inserted part is the provirus. Left unrecognised it classes as `unknown`, or
+    # as `ALU` when it happens to land in a reference Alu -- 204 unknown + 9 ALU out of PD49229's
+    # 214 vector integrations, all confirmed against the published VIS list of Spencer Chapman
+    # 2023 (the BCL11A gene-therapy cohort, [[six-unplaceable-bcl-donors]]).
+    #
+    # An integrated provirus always presents one of its two LTR termini AT the junction, so the
+    # test is anchored there -- the terminus must abut the insert/flank boundary. An unanchored
+    # match is worthless: a 9-12-mer at 3-5 mismatches hits Alus all over the genome.
+    # Empirically (PD49229, 2241 junction reads) the junction is base-exact in 73% of reads and
+    # carries 1-4 bp of microhomology in the rest, hence _LTR_SHIFT.
+    _LTR_U3_5P = "TGGAAGGGCTAATTCACTCCCAA"            # provirus 5' terminus (U3 start)
+    _LTR_U5_3P = "TGTGACTCTGGTAACTAGAGATCCCTCAGACCCTTTTAGTCAGTGTGGAAAATCTCTAGCA"   # 3' (U5 end)
+    # R-region start, immediately 3' of U3. A self-inactivating (SIN) vector deletes nearly all
+    # of U3, so R follows the U3 start within a few dozen bp; a wild-type LTR carries ~450 bp of
+    # U3 (which overlaps nef) in between. That distinguishes a therapeutic vector from an
+    # intact provirus -- PD37580 carries an intact-U3 LTR in ALL 84 colonies, which the joint
+    # step already calls NOISE/ROOT: contamination, not an integration in that patient.
+    _LTR_R_5P = "GGTCTCTCTGGTTAGACCAGAT"
+    _LTR_ANCHOR_BP = 20
+    _LTR_MAX_MM = 2
+    _LTR_SHIFT = 3
+    _LTR_SIN_MAX_U3_BP = 120
+
+    @staticmethod
+    def _revcomp(s):
+        return s.translate(str.maketrans("ACGTacgt", "TGCAtgca"))[::-1].upper()
+
+    @classmethod
+    def _mm(cls, a, b):
+        return sum(x != y for x, y in zip(a, b))
+
+    def _insert_part(self, side):
+        """The inserted (lower-case) part of a junction: everything before the first upper-case
+        base on the left, everything from the first lower-case base on the right. Prefers the
+        combine evidence clip_consensus (>= 2 pooled fragments) over the raw read when present."""
+        seq = (self.evidence_left or self.left_seq) if side == 'L' else (self.evidence_right or self.right_seq)
+        if not seq:
+            return ''
+        if side == 'L':
+            end = next((i for i, ch in enumerate(seq) if ch.isupper()), len(seq))
+            return seq[:end]
+        start = next((i for i, ch in enumerate(seq) if ch.islower()), len(seq))
+        return seq[start:]
+
+    def _ltr_terminus(self, side):
+        """(terminus, strand, mismatches) when this junction's insert abuts a proviral LTR
+        terminus, else None.
+
+        The window compared is the junction-proximal end of the insert: its TAIL on the left,
+        its HEAD on the right, with _LTR_SHIFT bp of slack for junction microhomology. Which end
+        of the terminus lands there depends on the provirus orientation, so BOTH ends of both
+        strands of both termini are tried -- fixing that is worth 21 of PD49229's 214 (they are
+        not short or offset junctions, they are the other orientation)."""
+        ins = self._insert_part(side).upper()
+        L = self._LTR_ANCHOR_BP
+        if len(ins) < L:
+            return None
+        zone = ins[-(L + self._LTR_SHIFT):] if side == 'L' else ins[:L + self._LTR_SHIFT]
+        best = None
+        for name, term in (('U3', self._LTR_U3_5P), ('U5', self._LTR_U5_3P)):
+            for strand, probe in (('+', term), ('-', self._revcomp(term))):
+                for win in (probe[:L], probe[-L:]):
+                    for i in range(0, len(zone) - L + 1):
+                        mm = self._mm(zone[i:i + L], win)
+                        if mm <= self._LTR_MAX_MM and (best is None or mm < best[2]):
+                            best = (name, strand, mm)
+        return best
+
+    def _ltr_u3_intact(self):
+        """True when U3 is intact (wild-type provirus), False when U3 is deleted down to R (a SIN
+        therapeutic vector), 'conflict' when the two junctions disagree, None when no U3 start is
+        visible to judge.
+
+        Both LTRs of one provirus share a structure, so disagreement means the locus is pooling
+        reads from more than one source -- the signature of contamination rather than an
+        integration. PD37580's 3:17443679 is exactly that: ~33 bp from U3 start to R on the left
+        junction but a full nef-overlapping U3 on the right, in all 84 colonies, already NOISE to
+        the joint step. Reporting it as a clean SIN vector would be wrong."""
+        seen = set()
+        for side in ('L', 'R'):
+            ins = self._insert_part(side).upper()
+            if not ins:
+                continue
+            for s in (ins, self._revcomp(ins)):
+                i = s.find(self._LTR_U3_5P[:18])
+                if i < 0:
+                    continue
+                j = s.find(self._LTR_R_5P[:16], i)
+                if j < 0:
+                    continue
+                seen.add((j - i) > self._LTR_SIN_MAX_U3_BP)
+                break
+        if len(seen) > 1:
+            return 'conflict'
+        return seen.pop() if seen else None
+
+    def _provirus_conclusion(self):
+        """'proviral LTR (...)' when either junction is anchored on an LTR terminus, else None.
+        Checked ahead of every element call: 9 of PD49229's 214 integrations land inside a
+        reference Alu, whose flank would otherwise win the class."""
+        hits = {s: self._ltr_terminus(s) for s in ('L', 'R')}
+        hits = {s: h for s, h in hits.items() if h}
+        if not hits:
+            return None
+        strands = {h[1] for h in hits.values()}
+        bits = ', '.join(f"{'left' if s == 'L' else 'right'} {h[0]}{h[1]}"
+                         + (f" ({h[2]} mm)" if h[2] else '')
+                         for s, h in sorted(hits.items()))
+        intact = self._ltr_u3_intact()
+        if intact == 'conflict':
+            kind = 'U3 structure conflicts between junctions, likely contamination'
+        elif intact is False:
+            kind = 'lentiviral vector, U3-deleted (SIN)'
+        elif intact is True:
+            kind = 'U3 intact, not a SIN vector'
+        else:
+            kind = 'U3 not covered'
+        n = 'both junctions' if len(hits) == 2 else 'one junction'
+        orient = f", provirus {strands.pop()}" if len(strands) == 1 else ''
+        return f"proviral LTR ({kind}; {n}: {bits}{orient})"
+
     # SVA is a composite element (CCCTCT hexamer + Alu-like region + VNTR + SINE-R + poly-A).
     # Its diagnostic 5' motif is the (CCCTCT)n hexamer (revcomp (AGAGGG)n), which Alu and L1
     # lack entirely -- so a hexamer tandem in a clip is an SVA-specific fingerprint. A single
@@ -1277,6 +1402,14 @@ class Insertion:
         return out
 
     def _conclusion_no_site(self) -> str:
+        # An integrated provirus wins over every element and SV call: its junction sequence IS
+        # the answer, and the alternatives are wrong rather than incomplete (a vector landing in
+        # a reference Alu is not an Alu insertion). The test is anchored on an LTR terminus, so
+        # it is specific: 0 loci in PD51635 + PD56961 (232k loci), 1 weak 12 bp artefact in
+        # PD45886, against 196 in PD49229.
+        ltr = self._provirus_conclusion()
+        if ltr is not None:
+            return ltr
         sv = self._breakpoint_sv_subtype()
         if sv is not None:
             return sv
@@ -2404,6 +2537,10 @@ class VariantAnnotationContainer:
         # is the SV descriptor — so it still falls through to the non_RTE_SV umbrella below.
         head = conclusion.split(' [SV:', 1)[0].split(' [site:', 1)[0].split(' [gt:', 1)[0]
         u = head.upper()
+        # an integrated retrovirus / lentiviral vector: not an RTE, not an SV, and tested first
+        # because its conclusion names LTR regions that no other branch should read
+        if head.startswith('proviral LTR'):
+            return 'PROVIRUS_LTR'
         # plain local SVs (Jeremy 2026-10-07): a deletion / duplication whose clips are only the
         # locus's own reference is its own class, not an "insertion" of any kind
         if head.startswith('SV_DELETION'):

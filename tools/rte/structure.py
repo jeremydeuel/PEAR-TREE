@@ -394,6 +394,10 @@ def classify(res, lib, ctx=None, cfg=None, novel_finder=None, premrna=None,
             call.element = "POLYA_ONLY"
         elif legacy_class in ("non_RTE_SV", "SV_DELETION", "SV_DUPLICATION", "SV_INVERSION",
                               "microsatellite",
+                              # an integrated retrovirus / lentiviral vector: integrase-mediated,
+                              # so the TPRT hallmarks do not apply (its 5 bp TSD is integrase's,
+                              # and it has no poly-A tail of its own)
+                              "PROVIRUS_LTR",
                               "templated_insertion"):
             call.element = "NON_TPRT"
     if call.element in ("POLYA_ONLY", "ORPHAN_TD", "PSEUDOGENE", "NON_TPRT", "UNKNOWN"):
