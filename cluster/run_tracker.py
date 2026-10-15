@@ -297,6 +297,8 @@ def build(out, rows, root):
     groups = [("TP53 clade", lambda r: "TP53" in r["reason"]),
               ("BCR::ABL1", lambda r: "BCR::ABL1" in r["reason"]),
               ("transplant pair (people)", lambda r: "transplant" in r["reason"]),
+              ("Shwachman-Diamond (SBDS)", lambda r: "Shwachman" in r["cohort"]),
+              ("sickle-cell gene therapy (SCD)", lambda r: "SCD gene therapy" in r["cohort"]),
               ("all", lambda r: True)]
     for name, pred in groups:
         g = [r for r in rows if pred(r)]
