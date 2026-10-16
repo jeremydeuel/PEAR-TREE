@@ -1,2 +1,20 @@
 donor	proj	ds	readlen	mapped	assembly	sample
-# PENDING — populated from the farm per-tip header probe (see patients/PLAN.md); placeholder only
+# populated 2026-10-16 by cluster/hsc_run.sh populate from iRODS (iquest; nst_links not mounted). ds/assembly NOT read from headers: verified per BAM after staging (PT_HEADER_GATE=GRCh37).
+PD43294	2045	WGS_unverified	NA	NA	hs37d5_GRCh37	PD43294b
+PD43294	2045	WGS_unverified	NA	NA	hs37d5_GRCh37	PD43294c
+PD43294	2045	WGS_unverified	NA	NA	hs37d5_GRCh37	PD43294d
+PD43294	2045	WGS_unverified	NA	NA	hs37d5_GRCh37	PD43294f
+PD43294	2045	WGS_unverified	NA	NA	hs37d5_GRCh37	PD43294g
+PD43294	2045	WGS_unverified	NA	NA	hs37d5_GRCh37	PD43294h
+PD43294	2045	WGS_unverified	NA	NA	hs37d5_GRCh37	PD43294i
+PD43294	2045	WGS_unverified	NA	NA	hs37d5_GRCh37	PD43294j
+PD43294	2045	WGS_unverified	NA	NA	hs37d5_GRCh37	PD43294l
+PD43294	2045	WGS_unverified	NA	NA	hs37d5_GRCh37	PD43294m
+PD43294	2045	WGS_unverified	NA	NA	hs37d5_GRCh37	PD43294n
+PD43294	2045	WGS_unverified	NA	NA	hs37d5_GRCh37	PD43294p
+PD43294	2045	WGS_unverified	NA	NA	hs37d5_GRCh37	PD43294q
+PD43294	2045	WGS_unverified	NA	NA	hs37d5_GRCh37	PD43294r
+PD43294	2045	WGS_unverified	NA	NA	hs37d5_GRCh37	PD43294t
+PD43294	2045	WGS_unverified	NA	NA	hs37d5_GRCh37	PD43294u
+PD43294	2045	WGS_unverified	NA	NA	hs37d5_GRCh37	PD43294v
+PD43294	2045	WGS_unverified	NA	NA	hs37d5_GRCh37	PD43294w
