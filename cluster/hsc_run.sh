@@ -20,6 +20,7 @@
 # Usage (head node, from anywhere):
 #   bash <checkout>/cluster/hsc_run.sh setup              # build binaries, venv link, src/config.py
 #   bash <checkout>/cluster/hsc_run.sh populate <P>       # fill patients/*/<P>/colonies.tsv (nst_links headers; iRODS fallback)
+#        HSC_ASSEMBLY=GRCh38|GRCh37 required when nst_links is not mounted (iRODS fallback);
 #        REPOPULATE=1 redoes a populated one; PREFER_ASSEMBLY (nst_links) / PREFER_PROJECTS (iRODS) pick
 #        among a colony's several releases
 #   bash <checkout>/cluster/hsc_run.sh submit <P>         # samples.tsv + the whole pipeline
@@ -101,6 +102,10 @@ cmd_populate() {
     local P="${1:?usage: hsc_run.sh populate <PATIENT_ID>}" d org
     d="$(patient_dir "$P")"; org="$(basename "$(dirname "$d")")"
     local nst="${NST:-/nfs/cancer_ref01/nst_links/live}"
+    # the iRODS fallback cannot read BAM headers, so it must be told the assembly (checked before
+    # REPOPULATE touches colonies.tsv); a GRCh38 default once labelled GRCh37 SDS donors GRCh38
+    [ -d "$nst" ] || [ -n "${HSC_ASSEMBLY:-}" ] \
+        || die "nst_links not visible on $(hostname): the iRODS fallback cannot read BAM headers -- set HSC_ASSEMBLY=GRCh38 or GRCh37 for $P"
     # REPOPULATE=1: redo an already-populated colonies.tsv (kept as colonies.tsv.bak.<date>)
     if [ "${REPOPULATE:-0}" = 1 ] && awk '!/^#/ && !/^donor\t/ && NF {f=1; exit} END {exit !f}' "$d/colonies.tsv"; then
         cp "$d/colonies.tsv" "$d/colonies.tsv.bak.$(date +%Y%m%d%H%M%S)"
@@ -113,15 +118,15 @@ cmd_populate() {
         ONLY="$org" PAR="${PAR:-4}" PREFER_ASSEMBLY="${PREFER_ASSEMBLY:-}" bash cluster/populate_colonies_tsv.sh
     else
         note "nst_links not visible on $(hostname) ($nst): tip -> project from iRODS (iquest)"
-        populate_irods "$P" "$d" "${HSC_ASSEMBLY:-GRCh38}"
+        populate_irods "$P" "$d" "$HSC_ASSEMBLY"
     fi
     grep -v '^#' "$d/colonies.tsv" | awk -F'\t' 'NR>1 {n++; a[$6]++} END {printf "%d BAMs:", n; for (k in a) printf " %s=%d", k, a[k]; print ""}'
 }
 
 # iRODS fallback (farm22-head2 lost /nfs/cancer_ref01, 2026-10-06): one iquest for the donor's
 # *.sample.dupmarked.bam objects, matched to the tree tips. Assay and assembly are NOT read here
-# (no header access without nst_links): rows say ds=WGS_unverified / assembly=GRCh38 (or
-# hs37d5_GRCh37 with HSC_ASSEMBLY=GRCh37), and `submit` always runs pipeline.sh's per-BAM header
+# (no header access without nst_links): rows say ds=WGS_unverified and assembly=GRCh38 or
+# hs37d5_GRCh37 from HSC_ASSEMBLY, which is REQUIRED here; `submit` always runs pipeline.sh's per-BAM header
 # gate (PT_HEADER_GATE=<assembly>) after staging, which also catches a wrong guess here.
 # A tip found in more than one project (WGS + targeted twins, Chapman 2024) is left out, unless
 # PREFER_PROJECTS="p1 p2 ..." names one of them (first listed wins): PD45534's GRCh38 releases are
