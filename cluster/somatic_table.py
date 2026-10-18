@@ -52,6 +52,11 @@ Hard rules (Jeremy, 2026-10-08) EXCLUDE a candidate (moved to the `excluded` she
                       (PD45886b_lo0002 13:46537573-46537585: chr9 | chr5, 2026-10-10); multimapping
                       / repeat-placed clips are never judged, nor calls with an RTE class or a
                       TPRT / LIKELY_TPRT call (a 3' transduction has a unique source partner)
+  * copy-number loss  (--copy-number + --tree) the locus lies in a loss / LOH listed for a clade and its
+                      carriers are exactly the tips OUTSIDE the losing clade(s) (+-5 % of tips): a germline
+                      heterozygous insertion on the lost homolog looks the same, so it cannot be called somatic
+                      (Jeremy, 2026-10-18). copy_number.tsv: region (7 / 7p / 7q / 7:start-end), clade (tips
+                      whose MRCA carries the event), event (loss / LOH / cnLOH; gains are ignored), source
   Known insertions (tier A) are kept and only flagged in tier_note.
 Sheets: README, somatic (the table, sorted by tier), excluded (the rule failures), known (the known
 insertions' rows), refbias (the b estimates, when --refbias is given).
@@ -260,6 +265,96 @@ def hard_rules(loc, reads_by, check_fragments, cons=None):
             bad.append(f"< {MIN_JUNCTION_FRAGMENTS} independent junction fragments on an end in every colony"
                        + (f" (best {txt})" if txt else " (no junction reads)"))
     return bad, txt
+
+
+# ------------------------------------------------------------------ copy-number losses
+CN_EVENTS = {"loss", "loh", "cnloh"}   # events that remove one homolog from a clade (gains never mask)
+CN_TOLERANCE = 0.05                    # share of tips allowed to disagree with the masking pattern
+
+
+def read_centromeres(path, assembly):
+    return {r["chrom"]: (int(r["cen_start"]), int(r["cen_end"]), int(r["length"]))
+            for r in read_tsv(path) if r.get("assembly") == assembly}
+
+
+def cn_region(region, cen):
+    """'7' (whole chromosome), '7p' / '7q' (arm, centromere excluded), '7:1000-2000' -> (chrom, start, end)."""
+    region = (region or "").strip()
+    if region.lower().startswith("chr"):
+        region = region[3:]
+    m = re.match(r"^([0-9]+|X|Y)(?::(\d+)-(\d+)|([pq]))?$", region)
+    if not m:
+        raise ValueError(f"copy-number region '{region}': expected 7, 7p, 7q or 7:start-end")
+    chrom, s, e, arm = m.groups()
+    if s:
+        return chrom, int(s), int(e)
+    if chrom not in cen:
+        raise ValueError(f"copy-number region '{region}': no centromere / length for chromosome {chrom}")
+    cs, ce, length = cen[chrom]
+    return (chrom, 0, cs) if arm == "p" else (chrom, ce, length) if arm == "q" else (chrom, 0, length)
+
+
+def read_copy_number(path, tree_path, colonies, cen):
+    """patients/<organ>/<P>/copy_number.tsv -> [(chrom, start, end, frozenset(clade tips), label)].
+
+    `clade` lists tips whose most recent common ancestor in the patient tree carries the event
+    (one tip = that tip alone); only events that remove a homolog (loss, LOH, cnLOH) are kept."""
+    rows = [r for r in read_tsv(path) if (r.get("region") or "").strip()]
+    if not rows:
+        return []
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+    from tools.phylo.tree import read_newick
+    root = read_newick(tree_path)
+    parent, tips_below = {}, {}
+    for n in root.preorder():
+        tips_below[id(n)] = frozenset(t.name for t in n.tips()) & set(colonies)
+        for c in n.children:
+            parent[id(c)] = n
+    leaf = {t.name: t for t in root.tips()}
+    out = []
+    for r in rows:
+        if (r.get("event") or "").strip().lower() not in CN_EVENTS:
+            continue
+        names = [x.strip() for x in r.get("clade", "").split(",") if x.strip()]
+        missing = [x for x in names if x not in leaf]
+        if not names or missing:
+            raise ValueError(f"copy-number {r['region']}: clade tips not in the tree: {missing or '(none given)'}")
+        node = leaf[names[0]]
+        while not {x for x in names} <= {t.name for t in node.tips()}:
+            node = parent[id(node)]
+        clade = tips_below[id(node)]
+        chrom, s, e = cn_region(r["region"], cen)
+        label = f"{r['event'].strip()} {r['region'].strip()} in {len(clade)} tips ({','.join(names)})"
+        if r.get("source"):
+            label += f" [{r['source'].strip()}]"
+        out.append((chrom, s, e, clade, label))
+    return out
+
+
+def cn_masked(loc, carriers, colonies, events, tol=CN_TOLERANCE):
+    """The carriers are what a GERMLINE insertion looks like once some clades lost its homolog:
+    every tip outside the losing clades carries it and no tip inside them does. Returns the
+    events that explain the pattern ('' if none). Clades whose tips all carry the insertion lost
+    the OTHER homolog and are compatible; a clade must be uniformly carrier or non-carrier, and
+    the remaining tips must all be carriers, each up to `tol` (dropout, missed carriers)."""
+    p = parse_locus(loc)
+    if p is None or not carriers:
+        return ""
+    chrom = p[0][3:] if p[0].lower().startswith("chr") else p[0]
+    hits = [ev for ev in events if ev[0] == chrom and ev[1] < p[2] and p[1] < ev[2]]
+    car, tips = set(carriers), set(colonies)
+    lost, used = set(), []
+    for ev in hits:
+        clade = ev[3]
+        if clade and len(clade - car) >= (1 - tol) * len(clade):
+            lost |= clade
+            used.append(ev[4])
+    if not used:
+        return ""
+    expect = tips - lost
+    if not expect or len(car ^ expect) > int(tol * len(expect)):   # exact below 1/tol tips
+        return ""
+    return "; ".join(used)
 
 
 def joint_class(r):
@@ -662,6 +757,10 @@ def main():
                          "often the deeper the locus. The default 0.005 restores the nominal rate (5.1%%) and only "
                          "releases loci at allele fraction >= 0.45, where real heterozygotes live; the MLE 0.01 "
                          "overshoots (4.2%%) and starts releasing PD45886's 0.18-0.27 artefact band")
+    ap.add_argument("--copy-number", help="patients/<organ>/<P>/copy_number.tsv: clade losses / LOH that mask germline insertions")
+    ap.add_argument("--tree", help="the patient SNV tree (Newick); resolves the copy_number.tsv clades")
+    ap.add_argument("--assembly", default=os.environ.get("PT_ASSEMBLY", "GRCh38"), choices=("GRCh38", "GRCh37"),
+                    help="coordinates of the loci, for arm-level copy-number events (default $PT_ASSEMBLY or GRCh38)")
     ap.add_argument("--out", required=True, help="output .xlsx")
     a = ap.parse_args()
 
@@ -676,6 +775,15 @@ def main():
     active = {r["id"]: r for r in read_tsv(os.path.join(a.rte_library, "active.tsv")) if r.get("id")}
     bias = refbias_b(read_tsv(a.refbias))
     td_sources = {r["id"]: r for r in read_tsv(os.path.join(a.rte_library, "transduction_sources.tsv")) if r.get("id")}
+    cn_events = []
+    if a.copy_number and read_tsv(a.copy_number):
+        if not a.tree:
+            sys.exit("--copy-number needs --tree (the clades are tips' most recent common ancestors)")
+        cen = read_centromeres(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "resources",
+                                            "centromeres.tsv"), a.assembly)
+        cn_events = read_copy_number(a.copy_number, a.tree, colonies, cen)
+        for ev in cn_events:
+            print(f"copy number: {ev[4]} -> {ev[0]}:{ev[1]}-{ev[2]}")
     genome = None
     if a.genome:
         sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
@@ -797,6 +905,11 @@ def main():
         pc = an.get("partner_conflict", "")
         if pc and pc != "." and ecls not in RTE_CLASSES and tcall not in TPRT_CALLS:
             violations.append("unrelated partners: " + pc)
+        if cn_events:
+            cn_car = carriers or [c for c in (fl.get("carriers") or f2.get("carriers") or "").split(",") if c]
+            cn = cn_masked(loc, cn_car, colonies, cn_events)
+            if cn:
+                violations.append("germline masked by copy-number loss: carriers = every tip outside " + cn)
         if violations and k:
             notes.append("KNOWN but fails: " + "; ".join(violations))
         p = parse_locus(loc) or ("", "", "")
@@ -840,7 +953,9 @@ def main():
                            f"agrees with the clip's insert over >= {AGREE_MIN_BP} bp at >= {int(AGREE_MIN_ID * 100)} % (poly-A / simple repeats never count); "
                            f"read+mate within {DUP_SHIFT} bp = one PCR molecule) on BOTH ends in one colony; "
                            f"not both clips <= {SHORT_CLIP_BP} bp without a mate off the local reference; "
-                           "the two clips not uniquely mapped to unrelated loci (annotate partner_conflict)"
+                           "the two clips not uniquely mapped to unrelated loci (annotate partner_conflict); "
+                           "carriers not exactly the tips OUTSIDE clades with a copy-number loss / LOH of the locus "
+                           f"(copy_number.tsv, +-{int(CN_TOLERANCE * 100)} % of tips: a germline insertion on the lost homolog)"
                            + ("" if a.insertions_dir else "  [fragment rule NOT checked: no --insertions-dir]")
                            + ("" if genome else "  [short-clip rule NOT checked: no --genome]")],
               ["", ""],
@@ -851,6 +966,8 @@ def main():
               ["tree_fit (legacy)", os.path.abspath(a.fit_legacy) if a.fit_legacy else "-"],
               ["annotation", os.path.abspath(a.annotation) if a.annotation else "-"],
               ["known insertions", os.path.abspath(a.known) if a.known else "-"],
+              ["copy number", os.path.abspath(a.copy_number) if cn_events else "-"]] + [
+              ["", f"{ev[4]} = {ev[0]}:{ev[1]}-{ev[2]} ({a.assembly})"] for ev in cn_events] + [
               ["", ""],
               ["columns", ""],
               ["tier_note", "why a call was capped at tier D: phylo_violating (tree_fit genotype2), alt reads in more than "

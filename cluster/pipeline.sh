@@ -929,6 +929,8 @@ cmd_report() {
     [ -s "$PATIENT_ID.annotated.csv.gz" ] && args+=(--annotation "$PATIENT_ID.annotated.csv.gz")
     [ -s "$PATIENT_ID.joint.refbias.tsv" ] && args+=(--refbias "$PATIENT_ID.joint.refbias.tsv")
     [ -s "$known" ] && args+=(--known "$known")
+    local cn; cn="$(dirname "$TREE")/copy_number.tsv"
+    [ -s "$cn" ] && args+=(--copy-number "$cn" --tree "$TREE" --assembly "$PT_ASSEMBLY")
     "$VENV/bin/python" "$PT_ROOT/cluster/somatic_table.py" "${args[@]}"
     mkdir -p "$RESULTS_DIR/$PATIENT_ID"
     cp -f "$PATIENT_ID.somatic.xlsx" "$RESULTS_DIR/$PATIENT_ID/"
