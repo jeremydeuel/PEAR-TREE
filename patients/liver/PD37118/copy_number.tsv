@@ -1,0 +1,5 @@
+region	clade	event	source
+# Ng 2021 Nature Supp Table 5: deletion in microdissection(s) PD37118b_lo027; clone Cl.30 is the unique clone whose microdissection set equals that set in Ng 2021 Supplementary Code x.structure.RData (clone->microdissection key); 1 tip(s) under Cl.30; GRCh37 2:97209709-97446131 lifted to GRCh38 (UCSC hg19ToHg38, frac_lifted=1.000)
+2:96543972-96780394	Cl.30	loss	Ng 2021 Nature Supp Table 5
+# Ng 2021 Nature Supp Table 5: deletion in microdissection(s) PD37118b_lo031; clone Cl.16 is the unique clone whose microdissection set equals that set in Ng 2021 Supplementary Code x.structure.RData (clone->microdissection key); 1 tip(s) under Cl.16; GRCh37 18:8147798-8400675 lifted to GRCh38 (UCSC hg19ToHg38, frac_lifted=1.000)
+18:8147800-8400677	Cl.16	loss	Ng 2021 Nature Supp Table 5

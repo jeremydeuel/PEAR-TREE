@@ -1,0 +1,7 @@
+region	clade	event	source
+# KX004 2p_CN_LOH, Mitchell 2022 only (colonies not in the 2025 200-colony subset); Fig 3b dashed INTERNAL branch at x=tip 73.75 = node of {bq,kd2,iz2} (2022 tree), len 473 muts
+2p	PD45534bq,PD45534kd2,PD45534iz2	cnLOH	Mitchell 2022 Nature 606:343 Fig 3b
+# KX004 12q_CN_LOH: Mitchell 2025 node 104 of tree_KX004_6 = tip PD45534oo2; also Mitchell 2022 Fig 3b dashed terminal branch at tip 357/451 = oo2 (agree)
+12q	PD45534oo2	cnLOH	Mitchell 2025 Nat Genet (github emily-mitchell/chemotherapy 4_mutation_burden_analysis/data/Chemo_CN_SV.csv; counts = ED Fig 2d); Mitchell 2022 Nature 606:343 Fig 3b
+# KX004 19q_CN_LOH: Mitchell 2025 node 159 of tree_KX004_6 = tip PD45534ju2; Mitchell 2022 Fig 3b dashed terminal branch at tip 259/451 = ju2 (agree)
+19q	PD45534ju2	cnLOH	Mitchell 2025 Nat Genet (github emily-mitchell/chemotherapy 4_mutation_burden_analysis/data/Chemo_CN_SV.csv; counts = ED Fig 2d); Mitchell 2022 Nature 606:343 Fig 3b

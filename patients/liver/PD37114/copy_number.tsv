@@ -1,0 +1,3 @@
+region	clade	event	source
+# Ng 2021 Nature Supp Table 5: deletion in microdissection(s) PD37114b_lo042; clone Cl.45 is the unique clone whose microdissection set equals that set in Ng 2021 Supplementary Code x.structure.RData (clone->microdissection key); 1 tip(s) under Cl.45; GRCh37 4:168400643-168501224 lifted to GRCh38 (UCSC hg19ToHg38, frac_lifted=1.000)
+4:167479492-167580073	Cl.45	loss	Ng 2021 Nature Supp Table 5

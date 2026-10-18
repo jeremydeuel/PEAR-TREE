@@ -1,0 +1,9 @@
+region	clade	event	source
+# paper label Chr11p_UPD in PD45813b_lo0230 (R)
+11p	PD45813b_lo0230	cnLOH	Spencer Chapman 2024 Nature Supp Fig 2a-b; github mspencerchapman/Clonal_dynamics_of_HSCT@ae382ae data/SV_and_CNA_data/Copy_number_changes.csv
+# BRASS DEL NA/EYA3_intron in PD45812b_lo0234
+1:27407277-28343883	PD45812b_lo0234	loss	Spencer Chapman 2024 Nature Supp Fig 2a-b; github Clonal_dynamics_of_HSCT@ae382ae data/SV_and_CNA_data/SVs_combined.csv
+# BRASS DEL NA/NA in PD45813b_lo0126
+4:172350285-185171479	PD45813b_lo0126	loss	Spencer Chapman 2024 Nature Supp Fig 2a-b; github Clonal_dynamics_of_HSCT@ae382ae data/SV_and_CNA_data/SVs_combined.csv
+# BRASS DEL NAP1L4_intron/NAP1L4_intron in PD45813b_lo0186
+11:2996002-3001482	PD45813b_lo0186	loss	Spencer Chapman 2024 Nature Supp Fig 2a-b; github Clonal_dynamics_of_HSCT@ae382ae data/SV_and_CNA_data/SVs_combined.csv

@@ -1,0 +1,13 @@
+region	clade	event	source
+# paper label Chr14q_UPD (BCL006) in PD53374b_lo0040
+14q	PD53374b_lo0040	cnLOH	Spencer Chapman 2023 Nat Med ED Fig 4c; github mspencerchapman/Clonal_selection_after_gene_therapy@bc59ee0 Data/Copy_number_changes.csv
+# GRIDSS DEL HDAC9_intron/HDAC9_intron in PD53374b_lo0042
+7:18570901-18573448	PD53374b_lo0042	loss	Spencer Chapman 2023 Nat Med ED Fig 4c-d; github Clonal_selection_after_gene_therapy@bc59ee0 Data/SV_analysis_sickle_updated050123.xlsx sheet VAF
+# GRIDSS DEL CPA6_intron/CPA6_intron in PD53374b_lo0193
+8:68507441-68508510	PD53374b_lo0193	loss	Spencer Chapman 2023 Nat Med ED Fig 4c-d; github Clonal_selection_after_gene_therapy@bc59ee0 Data/SV_analysis_sickle_updated050123.xlsx sheet VAF
+# GRIDSS DEL C16orf46_5UTRintron/NA in PD53374b_lo0294
+16:81107487-81763870	PD53374b_lo0294	loss	Spencer Chapman 2023 Nat Med ED Fig 4c-d; github Clonal_selection_after_gene_therapy@bc59ee0 Data/SV_analysis_sickle_updated050123.xlsx sheet VAF
+# GRIDSS DEL CTD-2147F2.1_UTRintron/CTD-2147F2.1_UTRintron in PD53374b_lo0382
+15:97922818-97925013	PD53374b_lo0382	loss	Spencer Chapman 2023 Nat Med ED Fig 4c-d; github Clonal_selection_after_gene_therapy@bc59ee0 Data/SV_analysis_sickle_updated050123.xlsx sheet VAF
+# GRIDSS DEL NDST3_intron/NDST3_intron in PD53374b_lo0365
+4:119114894-119118343	PD53374b_lo0365	loss	Spencer Chapman 2023 Nat Med ED Fig 4c-d; github Clonal_selection_after_gene_therapy@bc59ee0 Data/SV_analysis_sickle_updated050123.xlsx sheet VAF

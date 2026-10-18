@@ -1,0 +1,3 @@
+region	clade	event	source
+# SDS4 i(7q) '7p-,7q+' (PDD node 22, 7 colonies on tree; authors' list also names PD43293f,PD43293v which are not on the published or our tree). 7q gain not listed.
+7p	PD43293b,PD43293w,PD43293m,PD43293h,PD43293n,PD43293p,PD43293e	loss	Machado 2023 Nat Commun Fig 2 + github nangalialab/SchwachmanDiamond cache/PDD.RDS pdx$meta$LOH/CNA + machadoheather/somatic_evolution_SDS 00_data/cnv_mapped_to_trees_nodup.txt

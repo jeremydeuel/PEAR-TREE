@@ -1,0 +1,33 @@
+region	clade	event	source
+# paper label Chr4_UPD in PD45792b_lo0115 (D)
+4	PD45792b_lo0115	cnLOH	Spencer Chapman 2024 Nature Supp Fig 2a-b; github mspencerchapman/Clonal_dynamics_of_HSCT@ae382ae data/SV_and_CNA_data/Copy_number_changes.csv
+# paper label Chr16p_UPD in PD45792b_lo0115 (D)
+16p	PD45792b_lo0115	cnLOH	Spencer Chapman 2024 Nature Supp Fig 2a-b; github mspencerchapman/Clonal_dynamics_of_HSCT@ae382ae data/SV_and_CNA_data/Copy_number_changes.csv
+# paper label Chr19_UPD in PD45792b_lo0115 (D)
+19	PD45792b_lo0115	cnLOH	Spencer Chapman 2024 Nature Supp Fig 2a-b; github mspencerchapman/Clonal_dynamics_of_HSCT@ae382ae data/SV_and_CNA_data/Copy_number_changes.csv
+# paper label Ch21_UPD in PD45792b_lo0115 (D)
+21	PD45792b_lo0115	cnLOH	Spencer Chapman 2024 Nature Supp Fig 2a-b; github mspencerchapman/Clonal_dynamics_of_HSCT@ae382ae data/SV_and_CNA_data/Copy_number_changes.csv
+# paper label Chr20_UPD in PD45793b_lo0109 (R)
+20	PD45793b_lo0109	cnLOH	Spencer Chapman 2024 Nature Supp Fig 2a-b; github mspencerchapman/Clonal_dynamics_of_HSCT@ae382ae data/SV_and_CNA_data/Copy_number_changes.csv
+# BRASS DEL BPIFA1_intron/BPIFA1_intron in PD45793b_lo0287
+20:31826218-31827516	PD45793b_lo0287	loss	Spencer Chapman 2024 Nature Supp Fig 2a-b; github Clonal_dynamics_of_HSCT@ae382ae data/SV_and_CNA_data/SVs_combined.csv
+# LOY clade of 1 colonies (all called YES, maximal pure clade on our tree)
+Y	PD45792b_lo0113	loss	Spencer Chapman 2024 Nature Supp Fig 2d, Fig 4b; github Clonal_dynamics_of_HSCT@ae382ae data/SV_and_CNA_data/loss_of_Y_data.tsv
+# LOY clade of 1 colonies (all called YES, maximal pure clade on our tree)
+Y	PD45792b_lo0214	loss	Spencer Chapman 2024 Nature Supp Fig 2d, Fig 4b; github Clonal_dynamics_of_HSCT@ae382ae data/SV_and_CNA_data/loss_of_Y_data.tsv
+# LOY clade of 1 colonies (all called YES, maximal pure clade on our tree)
+Y	PD45792b_lo0051	loss	Spencer Chapman 2024 Nature Supp Fig 2d, Fig 4b; github Clonal_dynamics_of_HSCT@ae382ae data/SV_and_CNA_data/loss_of_Y_data.tsv
+# LOY clade of 1 colonies (all called YES, maximal pure clade on our tree)
+Y	PD45792b_lo0136	loss	Spencer Chapman 2024 Nature Supp Fig 2d, Fig 4b; github Clonal_dynamics_of_HSCT@ae382ae data/SV_and_CNA_data/loss_of_Y_data.tsv
+# LOY clade of 7 colonies (all called YES, maximal pure clade on our tree)
+Y	PD45792b_lo0150,PD45792b_lo0235,PD45792b_lo0121,PD45793b_lo0038,PD45792b_lo0098,PD45793b_lo0108,PD45793b_lo0083	loss	Spencer Chapman 2024 Nature Supp Fig 2d, Fig 4b; github Clonal_dynamics_of_HSCT@ae382ae data/SV_and_CNA_data/loss_of_Y_data.tsv
+# LOY clade of 3 colonies (all called YES, maximal pure clade on our tree)
+Y	PD45792b_lo0163,PD45792b_lo0269,PD45792b_lo0286	loss	Spencer Chapman 2024 Nature Supp Fig 2d, Fig 4b; github Clonal_dynamics_of_HSCT@ae382ae data/SV_and_CNA_data/loss_of_Y_data.tsv
+# LOY clade of 22 colonies (all called YES, maximal pure clade on our tree)
+Y	PD45792b_lo0009,PD45792b_lo0145,PD45793b_lo0071,PD45792b_lo0111,PD45792b_lo0255,PD45792b_lo0119,PD45792b_lo0143,PD45792b_lo0233,PD45792b_lo0157,PD45792b_lo0052,PD45793b_lo0018,PD45792b_lo0202,PD45792b_lo0047,PD45792b_lo0102,PD45792b_lo0256,PD45793b_lo0067,PD45793b_lo0132,PD45793b_lo0197,PD45793b_lo0139,PD45792b_lo0171,PD45792b_lo0099,PD45792b_lo0126	loss	Spencer Chapman 2024 Nature Supp Fig 2d, Fig 4b; github Clonal_dynamics_of_HSCT@ae382ae data/SV_and_CNA_data/loss_of_Y_data.tsv
+# LOY clade of 24 colonies (all called YES, maximal pure clade on our tree)
+Y	PD45792b_lo0158,PD45792b_lo0161,PD45793b_lo0066,PD45792b_lo0186,PD45792b_lo0100,PD45792b_lo0046,PD45792b_lo0020,PD45793b_lo0073,PD45793b_lo0076,PD45793b_lo0182,PD45793b_lo0161,PD45792b_lo0267,PD45792b_lo0273,PD45793b_lo0010,PD45793b_lo0016,PD45792b_lo0280,PD45793b_lo0057,PD45793b_lo0075,PD45792b_lo0191,PD45793b_lo0131,PD45793b_lo0166,PD45792b_lo0196,PD45792b_lo0258,PD45793b_lo0148	loss	Spencer Chapman 2024 Nature Supp Fig 2d, Fig 4b; github Clonal_dynamics_of_HSCT@ae382ae data/SV_and_CNA_data/loss_of_Y_data.tsv
+# LOY clade of 88 colonies (all called YES, maximal pure clade on our tree)
+Y	PD45793b_lo0001,PD45793b_lo0046,PD45793b_lo0174,PD45793b_lo0192,PD45793b_lo0138,PD45793b_lo0117,PD45793b_lo0002,PD45793b_lo0015,PD45793b_lo0195,PD45793b_lo0040,PD45793b_lo0078,PD45793b_lo0013,PD45793b_lo0032,PD45793b_lo0102,PD45793b_lo0233,PD45793b_lo0042,PD45793b_lo0110,PD45793b_lo0152,PD45793b_lo0064,PD45793b_lo0077,PD45793b_lo0190,PD45793b_lo0058,PD45793b_lo0082,PD45793b_lo0210,PD45793b_lo0116,PD45793b_lo0128,PD45793b_lo0242,PD45793b_lo0043,PD45793b_lo0003,PD45793b_lo0025,PD45793b_lo0184,PD45793b_lo0218,PD45793b_lo0007,PD45793b_lo0049,PD45793b_lo0112,PD45793b_lo0021,PD45793b_lo0030,PD45793b_lo0086,PD45793b_lo0091,PD45793b_lo0106,PD45793b_lo0155,PD45793b_lo0244,PD45793b_lo0052,PD45793b_lo0070,PD45793b_lo0111,PD45793b_lo0187,PD45793b_lo0134,PD45793b_lo0251,PD45793b_lo0141,PD45793b_lo0089,PD45793b_lo0202,PD45793b_lo0283,PD45793b_lo0004,PD45793b_lo0088,PD45793b_lo0028,PD45793b_lo0267,PD45793b_lo0115,PD45793b_lo0262,PD45793b_lo0068,PD45793b_lo0135,PD45793b_lo0097,PD45793b_lo0118,PD45793b_lo0286,PD45793b_lo0029,PD45793b_lo0035,PD45793b_lo0061,PD45793b_lo0170,PD45793b_lo0060,PD45793b_lo0006,PD45793b_lo0194,PD45793b_lo0017,PD45793b_lo0022,PD45793b_lo0023,PD45793b_lo0036,PD45793b_lo0024,PD45793b_lo0130,PD45793b_lo0062,PD45793b_lo0084,PD45793b_lo0186,PD45793b_lo0109,PD45793b_lo0235,PD45793b_lo0069,PD45793b_lo0125,PD45793b_lo0027,PD45793b_lo0034,PD45793b_lo0159,PD45793b_lo0099,PD45793b_lo0247	loss	Spencer Chapman 2024 Nature Supp Fig 2d, Fig 4b; github Clonal_dynamics_of_HSCT@ae382ae data/SV_and_CNA_data/loss_of_Y_data.tsv
+# LOY clade of 2 colonies (all called YES, maximal pure clade on our tree)
+Y	PD45792b_lo0025,PD45792b_lo0048	loss	Spencer Chapman 2024 Nature Supp Fig 2d, Fig 4b; github Clonal_dynamics_of_HSCT@ae382ae data/SV_and_CNA_data/loss_of_Y_data.tsv

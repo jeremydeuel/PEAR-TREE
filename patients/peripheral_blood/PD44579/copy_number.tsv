@@ -1,0 +1,3 @@
+region	clade	event	source
+# PX002 10q_CN_LOH at node 208 of tree_PX002_2 (174 tips) = 2-colony clade, branch 9 muts
+10q	PD44579b_lo0110_2,PD44579b_lo0174_2	cnLOH	Mitchell 2025 Nat Genet (github emily-mitchell/chemotherapy 4_mutation_burden_analysis/data/Chemo_CN_SV.csv; counts = ED Fig 2d)

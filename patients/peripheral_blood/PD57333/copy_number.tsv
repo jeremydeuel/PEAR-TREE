@@ -1,0 +1,7 @@
+region	clade	event	source
+# paper label loY_A, ploidy 0, colonies a13,a23 (2-colony clade)
+Y	PD57333a_lo0013,PD57333a_lo0023	loss	Kamizela 2025 Nature github nangalialab/CML@0991125 cache/PDD_B.RDS pdx$meta$CNA
+# paper label loY_B, colony a04
+Y	PD57333a_lo0004	loss	Kamizela 2025 Nature github nangalialab/CML@0991125 cache/PDD_B.RDS pdx$meta$CNA
+# paper label loY_C, colony a42
+Y	PD57333a_lo0042	loss	Kamizela 2025 Nature github nangalialab/CML@0991125 cache/PDD_B.RDS pdx$meta$CNA

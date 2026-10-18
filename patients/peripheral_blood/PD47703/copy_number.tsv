@@ -1,0 +1,7 @@
+region	clade	event	source
+# PX001 9q_CN_LOH at node 133 of tree_PX001_1 (200 tips, ape numbering) = single colony PD47703b_lo0166; two 9q events are independent
+9q	PD47703b_lo0166	cnLOH	Mitchell 2025 Nat Genet (github emily-mitchell/chemotherapy 4_mutation_burden_analysis/data/Chemo_CN_SV.csv; counts = ED Fig 2d)
+# PX001 9q_CN_LOH at node 125 of tree_PX001_1 (200 tips, ape numbering) = single colony PD47703b_lo0198; two 9q events are independent
+9q	PD47703b_lo0198	cnLOH	Mitchell 2025 Nat Genet (github emily-mitchell/chemotherapy 4_mutation_burden_analysis/data/Chemo_CN_SV.csv; counts = ED Fig 2d)
+# PX001 14q_CN_LOH at node 189 of tree_PX001_1 (200 tips, ape numbering) = single colony PD47703b_lo0226; two 9q events are independent
+14q	PD47703b_lo0226	cnLOH	Mitchell 2025 Nat Genet (github emily-mitchell/chemotherapy 4_mutation_burden_analysis/data/Chemo_CN_SV.csv; counts = ED Fig 2d)

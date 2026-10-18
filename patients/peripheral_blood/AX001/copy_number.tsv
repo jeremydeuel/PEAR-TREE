@@ -1,0 +1,43 @@
+region	clade	event	source
+# LOY clade of 1 colonies (maximal all-LOY clade on our tree from per-colony cnY calls, AX001_4_y_loss_cut.csv)
+Y	BMH1_TG001_P31_D01	loss	Mitchell 2022 Nature 606:343 Fig 1f/2/3/ED5 Loss-of-Y heat map; per-colony calls github normal_haematopoiesis 11_LOY_simulations/input/AX001_4_y_loss_cut.csv; paper: 19 independent LOY events
+# LOY clade of 1 colonies (maximal all-LOY clade on our tree from per-colony cnY calls, AX001_4_y_loss_cut.csv)
+Y	BMH1_TG001_P31_B12	loss	Mitchell 2022 Nature 606:343 Fig 1f/2/3/ED5 Loss-of-Y heat map; per-colony calls github normal_haematopoiesis 11_LOY_simulations/input/AX001_4_y_loss_cut.csv; paper: 19 independent LOY events
+# LOY clade of 3 colonies (maximal all-LOY clade on our tree from per-colony cnY calls, AX001_4_y_loss_cut.csv)
+Y	BMH1_TG001_3_P12_B05,BMH1_TG001_3_P11_G04,BMH1_TG001_3_P11_D03	loss	Mitchell 2022 Nature 606:343 Fig 1f/2/3/ED5 Loss-of-Y heat map; per-colony calls github normal_haematopoiesis 11_LOY_simulations/input/AX001_4_y_loss_cut.csv; paper: 19 independent LOY events
+# LOY clade of 1 colonies (maximal all-LOY clade on our tree from per-colony cnY calls, AX001_4_y_loss_cut.csv)
+Y	BMH1_TG001_P32_B07	loss	Mitchell 2022 Nature 606:343 Fig 1f/2/3/ED5 Loss-of-Y heat map; per-colony calls github normal_haematopoiesis 11_LOY_simulations/input/AX001_4_y_loss_cut.csv; paper: 19 independent LOY events
+# LOY clade of 1 colonies (maximal all-LOY clade on our tree from per-colony cnY calls, AX001_4_y_loss_cut.csv)
+Y	BMH1_TG001_3_P12_A01	loss	Mitchell 2022 Nature 606:343 Fig 1f/2/3/ED5 Loss-of-Y heat map; per-colony calls github normal_haematopoiesis 11_LOY_simulations/input/AX001_4_y_loss_cut.csv; paper: 19 independent LOY events
+# LOY clade of 1 colonies (maximal all-LOY clade on our tree from per-colony cnY calls, AX001_4_y_loss_cut.csv)
+Y	BMH1_TG001_3_P11_G01	loss	Mitchell 2022 Nature 606:343 Fig 1f/2/3/ED5 Loss-of-Y heat map; per-colony calls github normal_haematopoiesis 11_LOY_simulations/input/AX001_4_y_loss_cut.csv; paper: 19 independent LOY events
+# LOY clade of 1 colonies (maximal all-LOY clade on our tree from per-colony cnY calls, AX001_4_y_loss_cut.csv)
+Y	BMH1_TG001_3_P12_A04	loss	Mitchell 2022 Nature 606:343 Fig 1f/2/3/ED5 Loss-of-Y heat map; per-colony calls github normal_haematopoiesis 11_LOY_simulations/input/AX001_4_y_loss_cut.csv; paper: 19 independent LOY events
+# LOY clade of 1 colonies (maximal all-LOY clade on our tree from per-colony cnY calls, AX001_4_y_loss_cut.csv)
+Y	BMH1_TG001_P31_H09	loss	Mitchell 2022 Nature 606:343 Fig 1f/2/3/ED5 Loss-of-Y heat map; per-colony calls github normal_haematopoiesis 11_LOY_simulations/input/AX001_4_y_loss_cut.csv; paper: 19 independent LOY events
+# LOY clade of 2 colonies (maximal all-LOY clade on our tree from per-colony cnY calls, AX001_4_y_loss_cut.csv)
+Y	BMH1_TG001_P31_D07,BMH1_TG001_3_P12_C01	loss	Mitchell 2022 Nature 606:343 Fig 1f/2/3/ED5 Loss-of-Y heat map; per-colony calls github normal_haematopoiesis 11_LOY_simulations/input/AX001_4_y_loss_cut.csv; paper: 19 independent LOY events
+# LOY clade of 1 colonies (maximal all-LOY clade on our tree from per-colony cnY calls, AX001_4_y_loss_cut.csv)
+Y	BMH1_TG001_3_P11_D02	loss	Mitchell 2022 Nature 606:343 Fig 1f/2/3/ED5 Loss-of-Y heat map; per-colony calls github normal_haematopoiesis 11_LOY_simulations/input/AX001_4_y_loss_cut.csv; paper: 19 independent LOY events
+# LOY clade of 2 colonies (maximal all-LOY clade on our tree from per-colony cnY calls, AX001_4_y_loss_cut.csv)
+Y	BMH1_TG001_3_P11_F03,BMH1_TG001_3_P12_G12	loss	Mitchell 2022 Nature 606:343 Fig 1f/2/3/ED5 Loss-of-Y heat map; per-colony calls github normal_haematopoiesis 11_LOY_simulations/input/AX001_4_y_loss_cut.csv; paper: 19 independent LOY events
+# LOY clade of 1 colonies (maximal all-LOY clade on our tree from per-colony cnY calls, AX001_4_y_loss_cut.csv)
+Y	BMH1_TG001_P32_D01	loss	Mitchell 2022 Nature 606:343 Fig 1f/2/3/ED5 Loss-of-Y heat map; per-colony calls github normal_haematopoiesis 11_LOY_simulations/input/AX001_4_y_loss_cut.csv; paper: 19 independent LOY events
+# LOY clade of 6 colonies (maximal all-LOY clade on our tree from per-colony cnY calls, AX001_4_y_loss_cut.csv)
+Y	BMH1_TG001_3_P11_F08,BMH1_TG001_3_P12_C03,BMH1_TG001_3_P11_G12,BMH1_TG001_P31_F08,BMH1_TG001_3_P12_A03,BMH1_TG001_3_P12_F11	loss	Mitchell 2022 Nature 606:343 Fig 1f/2/3/ED5 Loss-of-Y heat map; per-colony calls github normal_haematopoiesis 11_LOY_simulations/input/AX001_4_y_loss_cut.csv; paper: 19 independent LOY events
+# LOY clade of 1 colonies (maximal all-LOY clade on our tree from per-colony cnY calls, AX001_4_y_loss_cut.csv)
+Y	BMH1_TG001_P31_A08	loss	Mitchell 2022 Nature 606:343 Fig 1f/2/3/ED5 Loss-of-Y heat map; per-colony calls github normal_haematopoiesis 11_LOY_simulations/input/AX001_4_y_loss_cut.csv; paper: 19 independent LOY events
+# LOY clade of 1 colonies (maximal all-LOY clade on our tree from per-colony cnY calls, AX001_4_y_loss_cut.csv)
+Y	BMH1_TG001_P32_C01	loss	Mitchell 2022 Nature 606:343 Fig 1f/2/3/ED5 Loss-of-Y heat map; per-colony calls github normal_haematopoiesis 11_LOY_simulations/input/AX001_4_y_loss_cut.csv; paper: 19 independent LOY events
+# LOY clade of 2 colonies (maximal all-LOY clade on our tree from per-colony cnY calls, AX001_4_y_loss_cut.csv)
+Y	BMH1_TG001_P31_A06,BMH1_TG001_P32_C07	loss	Mitchell 2022 Nature 606:343 Fig 1f/2/3/ED5 Loss-of-Y heat map; per-colony calls github normal_haematopoiesis 11_LOY_simulations/input/AX001_4_y_loss_cut.csv; paper: 19 independent LOY events
+# LOY clade of 2 colonies (maximal all-LOY clade on our tree from per-colony cnY calls, AX001_4_y_loss_cut.csv)
+Y	BMH1_TG001_3_P12_H07,BMH1_TG001_3_P12_B04	loss	Mitchell 2022 Nature 606:343 Fig 1f/2/3/ED5 Loss-of-Y heat map; per-colony calls github normal_haematopoiesis 11_LOY_simulations/input/AX001_4_y_loss_cut.csv; paper: 19 independent LOY events
+# LOY clade of 1 colonies (maximal all-LOY clade on our tree from per-colony cnY calls, AX001_4_y_loss_cut.csv)
+Y	BMH1_TG001_P32_D10	loss	Mitchell 2022 Nature 606:343 Fig 1f/2/3/ED5 Loss-of-Y heat map; per-colony calls github normal_haematopoiesis 11_LOY_simulations/input/AX001_4_y_loss_cut.csv; paper: 19 independent LOY events
+# LOY clade of 2 colonies (maximal all-LOY clade on our tree from per-colony cnY calls, AX001_4_y_loss_cut.csv)
+Y	BMH1_TG001_P32_D09,BMH1_TG001_P32_G10	loss	Mitchell 2022 Nature 606:343 Fig 1f/2/3/ED5 Loss-of-Y heat map; per-colony calls github normal_haematopoiesis 11_LOY_simulations/input/AX001_4_y_loss_cut.csv; paper: 19 independent LOY events
+# LOY clade of 1 colonies (maximal all-LOY clade on our tree from per-colony cnY calls, AX001_4_y_loss_cut.csv)
+Y	BMH1_TG001_3_P12_D03	loss	Mitchell 2022 Nature 606:343 Fig 1f/2/3/ED5 Loss-of-Y heat map; per-colony calls github normal_haematopoiesis 11_LOY_simulations/input/AX001_4_y_loss_cut.csv; paper: 19 independent LOY events
+# LOY clade of 1 colonies (maximal all-LOY clade on our tree from per-colony cnY calls, AX001_4_y_loss_cut.csv)
+Y	BMH1_TG001_3_P11_D09	loss	Mitchell 2022 Nature 606:343 Fig 1f/2/3/ED5 Loss-of-Y heat map; per-colony calls github normal_haematopoiesis 11_LOY_simulations/input/AX001_4_y_loss_cut.csv; paper: 19 independent LOY events

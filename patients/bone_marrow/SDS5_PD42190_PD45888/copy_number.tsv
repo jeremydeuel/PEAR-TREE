@@ -1,0 +1,5 @@
+region	clade	event	source
+# SDS5 '7LOH:WG' whole-chr7 cnLOH (ploidy 2), PDD node 28, 1 colony
+7	PD45888b_lo0012	cnLOH	Machado 2023 Nat Commun Fig 2 + github nangalialab/SchwachmanDiamond cache/PDD.RDS pdx$meta$LOH/CNA + machadoheather/somatic_evolution_SDS 00_data/cnv_mapped_to_trees_nodup.txt
+# SDS5 '7LOH:42mb+' cnLOH 7:41910838-end (ploidy 2), PDD node 69, 1 colony
+7:41910838-159138663	PD45888b_lo0026	cnLOH	Machado 2023 Nat Commun Fig 2 + github nangalialab/SchwachmanDiamond cache/PDD.RDS pdx$meta$LOH/CNA + machadoheather/somatic_evolution_SDS 00_data/cnv_mapped_to_trees_nodup.txt

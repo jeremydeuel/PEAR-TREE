@@ -1,0 +1,11 @@
+region	clade	event	source
+# SDS8 MDS clone: trunk of ALL 10 colonies (PDD node 13). 11+ gain not listed. 5q breakpoints from cnv_mapped_to_trees_nodup.txt ('5qLOH' 5:65718940-180790901)
+5:65718940-180790901	PD42191b,PD42191d,PD42191e,PD42191f,PD42191g,PD42191h,PD42191i,PD42191j,PD42191k,PD42191l	loss	Machado 2023 Nat Commun Fig 2 (SDS8 'del(5q,6p,18,20)' on trunk) + PDD.RDS SDS8 nodes (node 13: 5qDel,6pDel,18Del,20Del) + somatic_evolution_SDS cnv_mapped_to_trees_nodup.txt
+6p	PD42191b,PD42191d,PD42191e,PD42191f,PD42191g,PD42191h,PD42191i,PD42191j,PD42191k,PD42191l	loss	Machado 2023 Nat Commun Fig 2 (SDS8 'del(5q,6p,18,20)' on trunk) + PDD.RDS SDS8 nodes (node 13: 5qDel,6pDel,18Del,20Del)
+18	PD42191b,PD42191d,PD42191e,PD42191f,PD42191g,PD42191h,PD42191i,PD42191j,PD42191k,PD42191l	loss	Machado 2023 Nat Commun Fig 2 (SDS8 'del(5q,6p,18,20)' on trunk) + PDD.RDS SDS8 nodes (node 13: 5qDel,6pDel,18Del,20Del)
+20	PD42191b,PD42191d,PD42191e,PD42191f,PD42191g,PD42191h,PD42191i,PD42191j,PD42191k,PD42191l	loss	Machado 2023 Nat Commun Fig 2 (SDS8 'del(5q,6p,18,20)' on trunk) + PDD.RDS SDS8 nodes (node 13: 5qDel,6pDel,18Del,20Del)
+# SDS8 '6pDelAll' (PDD node 3, colony e only): further 6p loss in e; trunk row already covers 6p
+6p	PD42191e	loss	Machado 2023 PDD.RDS SDS8 nodes (node 3: 6pDelAll)
+# X- : paper text lists X- among SDS8 CNAs (female); Fig 4d copy-number plots show X single-copy in PD42191e and PD42191i only (the two plotted). Not annotated on tree; listed per plotted tip.
+X	PD42191e	loss	Machado 2023 Nat Commun Fig 4d + main text ('chr5-, 6p-, 11+, 18-, 20-, and X-')
+X	PD42191i	loss	Machado 2023 Nat Commun Fig 4d + main text ('chr5-, 6p-, 11+, 18-, 20-, and X-')

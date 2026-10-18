@@ -1,0 +1,9 @@
+region	clade	event	source
+# Deletion major=1 minor=0; paper samples PD41760b_lo0010; GRCh38 chr7:110989587-111077055 lifted to GRCh37 (UCSC hg38ToHg19, frac_lifted=1.000)
+7:110629643-110717111	PD41760b_lo0010	loss	Coorens 2025 Nature Supp Table 4 (CNVs)
+# SV deletion NA; paper samples PD41760b_lo0010; GRCh38 chr16:6394309-6711823 lifted to GRCh37 (UCSC hg38ToHg19, frac_lifted=1.000)
+16:6444310-6761824	PD41760b_lo0010	loss	Coorens 2025 Nature Supp Table 5 (SVs, deletion not in CNV table)
+# SV deletion NA; paper samples PD41760b_lo0020; GRCh38 chr19:52691778-52859108 lifted to GRCh37 (UCSC hg38ToHg19, frac_lifted=1.000)
+19:53195031-53362361	PD41760b_lo0020	loss	Coorens 2025 Nature Supp Table 5 (SVs, deletion not in CNV table)
+# SV deletion FHIT; paper samples PD41760b_lo0022; GRCh38 chr3:60437149-60556530 lifted to GRCh37 (UCSC hg38ToHg19, frac_lifted=1.000)
+3:60422882-60542263	PD41760b_lo0022	loss	Coorens 2025 Nature Supp Table 5 (SVs, deletion not in CNV table)

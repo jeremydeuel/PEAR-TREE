@@ -1,0 +1,5 @@
+region	clade	event	source
+# paper label Chr10p_del (BCL008) in PD49227b_lo0189
+10:60969-20257692	PD49227b_lo0189	loss	Spencer Chapman 2023 Nat Med ED Fig 4c; github mspencerchapman/Clonal_selection_after_gene_therapy@bc59ee0 Data/Copy_number_changes.csv
+# GRIDSS DEL NA/CARS_intron in PD49227b_lo0176
+11:2237428-3076870	PD49227b_lo0176	loss	Spencer Chapman 2023 Nat Med ED Fig 4c-d; github Clonal_selection_after_gene_therapy@bc59ee0 Data/SV_analysis_sickle_updated050123.xlsx sheet VAF

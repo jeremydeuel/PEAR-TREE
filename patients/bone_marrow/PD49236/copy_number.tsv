@@ -1,0 +1,3 @@
+region	clade	event	source
+# KX009 20_CN_LOH at node 133 of tree_KX009_2 (173 tips) = single colony
+20	PD49236kt	cnLOH	Mitchell 2025 Nat Genet (github emily-mitchell/chemotherapy 4_mutation_burden_analysis/data/Chemo_CN_SV.csv; counts = ED Fig 2d)

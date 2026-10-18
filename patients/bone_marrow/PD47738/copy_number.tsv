@@ -1,0 +1,5 @@
+region	clade	event	source
+# LOY clade of 1 colonies (maximal all-LOY clade on our tree from per-colony cnY calls, KX007_2_y_loss_cut.csv)
+Y	PD47738b_lo0088	loss	Mitchell 2022 Nature 606:343 Fig 1f/2/3/ED5 Loss-of-Y heat map; per-colony calls github normal_haematopoiesis 11_LOY_simulations/input/KX007_2_y_loss_cut.csv; paper: 2 independent LOY events
+# LOY clade of 1 colonies (maximal all-LOY clade on our tree from per-colony cnY calls, KX007_2_y_loss_cut.csv)
+Y	PD47738b_lo0265	loss	Mitchell 2022 Nature 606:343 Fig 1f/2/3/ED5 Loss-of-Y heat map; per-colony calls github normal_haematopoiesis 11_LOY_simulations/input/KX007_2_y_loss_cut.csv; paper: 2 independent LOY events

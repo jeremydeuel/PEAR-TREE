@@ -1,0 +1,3 @@
+region	clade	event	source
+# KX008 4_CN_LOH (whole chr4 as labelled), 1 colony; Fig 3a dashed terminal branch at tip position 362/367 (the other dashed branch at 350 is Tetrasomy_13, not listed); CN_summ.csv KX008 cnLOH=1
+4	PD48402b_lo0228	cnLOH	Mitchell 2022 Nature 606:343 Fig 3a + CN_summ.csv

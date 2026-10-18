@@ -1,0 +1,5 @@
+region	clade	event	source
+# 9pUPD_A (authors' coarse 9:0-5493982, pl2); paper colonies=4, on our tree=3; absent from our tree: PD6646d_lo032
+9:10469-5464376	PD6646d_lo008,PD6646d_lo014,PD6646m_lo0058	cnLOH	Williams 2022 Nature 602:162; authors' per-patient meta$LOH (PD_MPN_CUT.RDS) + Supp Note 5 per-patient report 'Summary of LOH timing inference' (github NickWilliamsSanger/mpn_phylogenies_and_evolution) [9pUPD_A]
+# 9pUPD_B (authors' coarse 9:0-34115400, pl2); paper colonies=1, on our tree=1
+9:10469-33800406	PD6646d_lo028	cnLOH	Williams 2022 Nature 602:162; authors' per-patient meta$LOH (PD_MPN_CUT.RDS) + Supp Note 5 per-patient report 'Summary of LOH timing inference' (github NickWilliamsSanger/mpn_phylogenies_and_evolution) [9pUPD_B]

@@ -1,0 +1,19 @@
+region	clade	event	source
+# LOY clade of 1 colonies (all called YES, maximal pure clade on our tree)
+Y	PD45802b_lo0096	loss	Spencer Chapman 2024 Nature Supp Fig 2d, Fig 4b; github Clonal_dynamics_of_HSCT@ae382ae data/SV_and_CNA_data/loss_of_Y_data.tsv
+# LOY clade of 1 colonies (all called YES, maximal pure clade on our tree)
+Y	PD45802b_lo0028	loss	Spencer Chapman 2024 Nature Supp Fig 2d, Fig 4b; github Clonal_dynamics_of_HSCT@ae382ae data/SV_and_CNA_data/loss_of_Y_data.tsv
+# LOY clade of 1 colonies (all called YES, maximal pure clade on our tree)
+Y	PD45802b_lo0155	loss	Spencer Chapman 2024 Nature Supp Fig 2d, Fig 4b; github Clonal_dynamics_of_HSCT@ae382ae data/SV_and_CNA_data/loss_of_Y_data.tsv
+# LOY clade of 1 colonies (all called YES, maximal pure clade on our tree)
+Y	PD45802b_lo0044	loss	Spencer Chapman 2024 Nature Supp Fig 2d, Fig 4b; github Clonal_dynamics_of_HSCT@ae382ae data/SV_and_CNA_data/loss_of_Y_data.tsv
+# LOY clade of 1 colonies (all called YES, maximal pure clade on our tree)
+Y	PD45802b_lo0024	loss	Spencer Chapman 2024 Nature Supp Fig 2d, Fig 4b; github Clonal_dynamics_of_HSCT@ae382ae data/SV_and_CNA_data/loss_of_Y_data.tsv
+# LOY clade of 1 colonies (all called YES, maximal pure clade on our tree)
+Y	PD45802b_lo0021	loss	Spencer Chapman 2024 Nature Supp Fig 2d, Fig 4b; github Clonal_dynamics_of_HSCT@ae382ae data/SV_and_CNA_data/loss_of_Y_data.tsv
+# LOY clade of 1 colonies (all called YES, maximal pure clade on our tree)
+Y	PD45803b_lo0244	loss	Spencer Chapman 2024 Nature Supp Fig 2d, Fig 4b; github Clonal_dynamics_of_HSCT@ae382ae data/SV_and_CNA_data/loss_of_Y_data.tsv
+# LOY clade of 1 colonies (all called YES, maximal pure clade on our tree)
+Y	PD45803b_lo0254	loss	Spencer Chapman 2024 Nature Supp Fig 2d, Fig 4b; github Clonal_dynamics_of_HSCT@ae382ae data/SV_and_CNA_data/loss_of_Y_data.tsv
+# LOY clade of 4 colonies (all called YES, maximal pure clade on our tree)
+Y	PD45802b_lo0092,PD45802b_lo0097,PD45803b_lo0197,PD45803b_lo0014	loss	Spencer Chapman 2024 Nature Supp Fig 2d, Fig 4b; github Clonal_dynamics_of_HSCT@ae382ae data/SV_and_CNA_data/loss_of_Y_data.tsv

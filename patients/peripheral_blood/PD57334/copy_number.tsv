@@ -1,0 +1,3 @@
+region	clade	event	source
+# 8-bp der(9) junction deletion, BCR::ABL1 clade (11 colonies in tree)
+9:130751363-130751370	PD57334a_lo0039,PD57334a_lo0056,PD57334a_lo0037,PD57334a_lo0061,PD57334a_lo0067,PD57334a_lo0071,PD57334a_lo0036,PD57334a_lo0070,PD57334a_lo0063,PD57334a_lo0031,PD57334a_lo0093	loss	Kamizela 2025 Nature Supp Table 2 (BCR::ABL1 breakpoint summary)

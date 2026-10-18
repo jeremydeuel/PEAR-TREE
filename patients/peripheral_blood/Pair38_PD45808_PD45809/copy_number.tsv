@@ -1,0 +1,5 @@
+region	clade	event	source
+# paper label Chr22_UPD in PD45809b_lo0076 (R)
+22	PD45809b_lo0076	cnLOH	Spencer Chapman 2024 Nature Supp Fig 2a-b; github mspencerchapman/Clonal_dynamics_of_HSCT@ae382ae data/SV_and_CNA_data/Copy_number_changes.csv
+# paper label ChrX_del in PD45809b_lo0129 (R)
+X	PD45809b_lo0129	loss	Spencer Chapman 2024 Nature Supp Fig 2a-b; github mspencerchapman/Clonal_dynamics_of_HSCT@ae382ae data/SV_and_CNA_data/Copy_number_changes.csv

@@ -1,0 +1,17 @@
+region	clade	event	source
+# paper label Chr6p_UPD (BCL004) in PD49228b_lo0327
+6:100116-26162679	PD49228b_lo0327	cnLOH	Spencer Chapman 2023 Nat Med ED Fig 4c; github mspencerchapman/Clonal_selection_after_gene_therapy@bc59ee0 Data/Copy_number_changes.csv
+# paper label Chr10_UPD (BCL004) in PD49228b_lo0406
+10:60969-135524334	PD49228b_lo0406	cnLOH	Spencer Chapman 2023 Nat Med ED Fig 4c; github mspencerchapman/Clonal_selection_after_gene_therapy@bc59ee0 Data/Copy_number_changes.csv
+# GRIDSS DEL PTPRM_intron/PTPRM_intron in PD49228b_lo0572
+18:7844873-7914273	PD49228b_lo0572	loss	Spencer Chapman 2023 Nat Med ED Fig 4c-d; github Clonal_selection_after_gene_therapy@bc59ee0 Data/SV_analysis_sickle_updated050123.xlsx sheet VAF
+# GRIDSS DEL NA/NA in PD49228b_lo0527
+12:19698909-24894341	PD49228b_lo0527	loss	Spencer Chapman 2023 Nat Med ED Fig 4c-d; github Clonal_selection_after_gene_therapy@bc59ee0 Data/SV_analysis_sickle_updated050123.xlsx sheet VAF
+# GRIDSS DEL ZNF816_intron/ZNF816_intron in PD49228b_lo0361
+19:53461414-53462455	PD49228b_lo0361	loss	Spencer Chapman 2023 Nat Med ED Fig 4c-d; github Clonal_selection_after_gene_therapy@bc59ee0 Data/SV_analysis_sickle_updated050123.xlsx sheet VAF
+# GRIDSS DEL TAFA1_intron/LOC105377146_intron in PD49228b_lo0446
+3:67875173-68485443	PD49228b_lo0446	loss	Spencer Chapman 2023 Nat Med ED Fig 4c-d; github Clonal_selection_after_gene_therapy@bc59ee0 Data/SV_analysis_sickle_updated050123.xlsx sheet VAF
+# GRIDSS DEL LRRCC1_intron/CA1_promoter-TSS in PD49228b_lo0026
+8:86049394-86291067	PD49228b_lo0026	loss	Spencer Chapman 2023 Nat Med ED Fig 4c-d; github Clonal_selection_after_gene_therapy@bc59ee0 Data/SV_analysis_sickle_updated050123.xlsx sheet VAF
+# GRIDSS DEL NA/ZNF75D_intron in PD49228b_lo0523,PD49228b_lo0531 [2-colony clade]
+X:133673055-134462458	PD49228b_lo0523,PD49228b_lo0531	loss	Spencer Chapman 2023 Nat Med ED Fig 4c-d; github Clonal_selection_after_gene_therapy@bc59ee0 Data/SV_analysis_sickle_updated050123.xlsx sheet VAF

@@ -1,0 +1,3 @@
+region	clade	event	source
+# Deletion major=1 minor=0; paper samples PD42789d_lo0004,PD42789d_lo0006,PD42789d_lo0008,PD42789d_lo0035; GRCh38 chr3:60325262-60551037 lifted to GRCh37 (UCSC hg38ToHg19, frac_lifted=1.000)
+3:60310992-60536770	PD42789d_lo0004,PD42789d_lo0006,PD42789d_lo0008,PD42789d_lo0035	loss	Coorens 2025 Nature Supp Table 4 (CNVs)

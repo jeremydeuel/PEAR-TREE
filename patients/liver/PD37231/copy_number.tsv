@@ -1,0 +1,3 @@
+region	clade	event	source
+# Ng 2021 Nature Supp Table 5: deletion in microdissection(s) PD37231b_lo029; clone Cl.19 is the unique clone whose microdissection set equals that set in Ng 2021 Supplementary Code x.structure.RData (clone->microdissection key); 1 tip(s) under Cl.19; GRCh37 5:93166168-93325217 lifted to GRCh38 (UCSC hg19ToHg38, frac_lifted=1.000)
+5:93830462-93989512	Cl.19	loss	Ng 2021 Nature Supp Table 5

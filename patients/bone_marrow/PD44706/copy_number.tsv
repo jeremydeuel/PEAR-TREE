@@ -1,0 +1,9 @@
+region	clade	event	source
+# SDS7 '7qLOH' 7:61887502-end, PDD node 4, colony ak (meta ploidy=1, paper text calls it 7q LOH adding a hypomorphic SBDS copy -> listed as LOH)
+7:61887502-159138663	PD44706ak	LOH	Machado 2023 Nat Commun Fig 2 + github nangalialab/SchwachmanDiamond cache/PDD.RDS pdx$meta$LOH/CNA + machadoheather/somatic_evolution_SDS 00_data/cnv_mapped_to_trees_nodup.txt
+# SDS7 EIF6_del:20:32.0Mb-47.9Mb, colonies au+az per authors; az is NOT on the published or our tree -> au only (PDD node 21)
+20:32030235-47868150	PD44706au	loss	Machado 2023 Nat Commun Fig 2 + github nangalialab/SchwachmanDiamond cache/PDD.RDS pdx$meta$LOH + machadoheather/somatic_evolution_SDS 00_data/candidateSVs_manual3.txt (SV breakpoints)
+# SDS7 EIF6_del:20:32.2Mb-54.2Mb, PDD node 15, colony x
+20:32180207-54207281	PD44706x	loss	Machado 2023 Nat Commun Fig 2 + github nangalialab/SchwachmanDiamond cache/PDD.RDS pdx$meta$LOH + machadoheather/somatic_evolution_SDS 00_data/candidateSVs_manual3.txt (SV breakpoints)
+# SDS7 EIF6_del:20:33.6Mb-33.9Mb, PDD node 16, colony s
+20:33552506-33890395	PD44706s	loss	Machado 2023 Nat Commun Fig 2 + github nangalialab/SchwachmanDiamond cache/PDD.RDS pdx$meta$LOH + machadoheather/somatic_evolution_SDS 00_data/candidateSVs_manual3.txt (SV breakpoints)

@@ -1,0 +1,3 @@
+region	clade	event	source
+# KX001 14q_CN_LOH, 1 colony; Fig 2a dashed terminal branch at tip position 299/407 (figure tip order = newick order, validated on DNMT3A R659H node 270 and LOY heat maps); CN_summ.csv KX001 cnLOH=1
+14q	PD40521iq	cnLOH	Mitchell 2022 Nature 606:343 Fig 2a + github normal_haematopoiesis CN_summ.csv

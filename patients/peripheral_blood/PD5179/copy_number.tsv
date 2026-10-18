@@ -1,0 +1,3 @@
+region	clade	event	source
+# 9q- (authors' coarse 9:70000000-150000000, pl2); paper colonies=2, on our tree=2
+9:70484945-141112375	PD5179bo,PD5179bs	LOH	Williams 2022 Nature 602:162; authors' per-patient meta$LOH (PD_MPN_CUT.RDS) + Supp Note 5 per-patient report 'Summary of LOH timing inference' (github NickWilliamsSanger/mpn_phylogenies_and_evolution) [9q-]

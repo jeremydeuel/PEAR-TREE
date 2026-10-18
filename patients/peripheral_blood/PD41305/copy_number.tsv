@@ -1,0 +1,6 @@
+region	clade	event	source
+# Fabre 2022 Nature Fig. 3c: DelY on a cherry stem ending ~33 y, plotted directly above Clone 2 (UD2); ours (k_145,k_176):622 is sister to an 18-colony clade.
+Y	PD41305k_145,PD41305k_176	loss	Fabre 2022 Nature Fig. 3c (DelY branch annotation)
+# Fabre 2022 Fig. 3c: DelY on a cherry stem ending ~25 y, plotted directly above Clone 3 (UD3); ours (k_114,k_187):458 is sister to the 17-colony clade.
+Y	PD41305k_114,PD41305k_187	loss	Fabre 2022 Nature Fig. 3c (DelY branch annotation)
+# A third DelY in Fig. 3c sits on a near-zero-length branch at the root among the un-expanded colonies; cannot be resolved to a unique clade on our tree (candidates: (k_155,k_186):5, (k_154,k_182):1) -> NOT listed.

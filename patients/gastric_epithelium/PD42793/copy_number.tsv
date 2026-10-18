@@ -1,0 +1,3 @@
+region	clade	event	source
+# chr11q_cnnLOH major=2 minor=0; paper samples PD42793c_lo0034; GRCh38 chr11:62464969-135076424 lifted to GRCh37 (UCSC hg38ToHg19, frac_lifted=0.998); terminal segment extended to qter
+11:62232441-135006516	PD42793c_lo0034	cnLOH	Coorens 2025 Nature Supp Table 4 (CNVs)

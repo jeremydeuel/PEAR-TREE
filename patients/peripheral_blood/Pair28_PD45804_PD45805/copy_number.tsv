@@ -1,0 +1,5 @@
+region	clade	event	source
+# BRASS DEL TMEM223_prox_upNXF1_intronTMEM179B_prox_down/NXF1_prox_upSTX5_prox_down in PD45804b_lo0012
+11:62561419-62573357	PD45804b_lo0012	loss	Spencer Chapman 2024 Nature Supp Fig 2a-b; github Clonal_dynamics_of_HSCT@ae382ae data/SV_and_CNA_data/SVs_combined.csv
+# BRASS DEL NA/NA in PD45805b_lo0073
+6:29932707-29933864	PD45805b_lo0073	loss	Spencer Chapman 2024 Nature Supp Fig 2a-b; github Clonal_dynamics_of_HSCT@ae382ae data/SV_and_CNA_data/SVs_combined.csv

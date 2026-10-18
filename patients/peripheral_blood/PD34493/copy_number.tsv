@@ -1,0 +1,3 @@
+region	clade	event	source
+# Fabre 2022 Nature Fig. 3b: DelY on the stem (conception -> ~33 y) of a 3-colony clade (tip + TET2 S1898P cherry); our tree ((k_84:710,(k_27:345,k_29:327):462):606) matches stem 606 + TET2 branch 462.
+Y	PD34493k_84,PD34493k_27,PD34493k_29	loss	Fabre 2022 Nature Fig. 3b (DelY branch annotation)

@@ -1,0 +1,5 @@
+region	clade	event	source
+# Brunner 2019 Nature Supp Table 4 (two deletion SVs, union): deletion in microdissection(s) PD37116b_lo027; clone Cl.7 is the unique clone whose microdissection set equals that set in Ng 2021 Supplementary Code x.structure.RData (clone->microdissection key); 1 tip(s) under Cl.7; GRCh37 4:122219107-152689024 lifted to GRCh38 (UCSC hg19ToHg38, frac_lifted=1.000)
+4:121297952-151767872	Cl.7	loss	Brunner 2019 Nature Supp Table 4 (two deletion SVs, union)
+# Brunner 2019 Nature Supp Table 4: deletion in microdissection(s) PD37116b_lo031;PD37116b_lo038; clone Cl.5 is the unique clone whose microdissection set equals that set in Ng 2021 Supplementary Code x.structure.RData (clone->microdissection key); 1 tip(s) under Cl.5; GRCh37 10:50440130-52037844 lifted to GRCh38 (UCSC hg19ToHg38, frac_lifted=0.691)
+10:49232085-50278084	Cl.5	loss	Brunner 2019 Nature Supp Table 4

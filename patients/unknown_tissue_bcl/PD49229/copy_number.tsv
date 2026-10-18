@@ -1,0 +1,23 @@
+region	clade	event	source
+# paper label Chr16q_UPD (BCL002) in PD49229b_lo0364
+16:46387351-90292766	PD49229b_lo0364	cnLOH	Spencer Chapman 2023 Nat Med ED Fig 4c; github mspencerchapman/Clonal_selection_after_gene_therapy@bc59ee0 Data/Copy_number_changes.csv
+# paper label Chr16q_UPD (BCL002) in PD49229b_lo0565
+16:46387351-90292766	PD49229b_lo0565	cnLOH	Spencer Chapman 2023 Nat Med ED Fig 4c; github mspencerchapman/Clonal_selection_after_gene_therapy@bc59ee0 Data/Copy_number_changes.csv
+# paper label Chr16p_UPD (BCL002) in PD49229b_lo0989
+16:60291-9813072	PD49229b_lo0989	cnLOH	Spencer Chapman 2023 Nat Med ED Fig 4c; github mspencerchapman/Clonal_selection_after_gene_therapy@bc59ee0 Data/Copy_number_changes.csv
+# paper label ChrY_del (BCL002) in PD49229b_lo0112
+Y:2657176-28769098	PD49229b_lo0112	loss	Spencer Chapman 2023 Nat Med ED Fig 4c; github mspencerchapman/Clonal_selection_after_gene_therapy@bc59ee0 Data/Copy_number_changes.csv
+# GRIDSS DEL NA/NA in PD49229b_lo0744
+14:22476415-22998582	PD49229b_lo0744	loss	Spencer Chapman 2023 Nat Med ED Fig 4c-d; github Clonal_selection_after_gene_therapy@bc59ee0 Data/SV_analysis_sickle_updated050123.xlsx sheet VAF
+# GRIDSS DEL NA/CX3CR1_intron in PD49229b_lo0553
+3:39240442-39311316	PD49229b_lo0553	loss	Spencer Chapman 2023 Nat Med ED Fig 4c-d; github Clonal_selection_after_gene_therapy@bc59ee0 Data/SV_analysis_sickle_updated050123.xlsx sheet VAF
+# GRIDSS DEL NA/NA in PD49229b_lo0251
+20:43762780-43763900	PD49229b_lo0251	loss	Spencer Chapman 2023 Nat Med ED Fig 4c-d; github Clonal_selection_after_gene_therapy@bc59ee0 Data/SV_analysis_sickle_updated050123.xlsx sheet VAF
+# GRIDSS DEL NA/NA in PD49229b_lo0703
+13:83722109-83793817	PD49229b_lo0703	loss	Spencer Chapman 2023 Nat Med ED Fig 4c-d; github Clonal_selection_after_gene_therapy@bc59ee0 Data/SV_analysis_sickle_updated050123.xlsx sheet VAF
+# GRIDSS DEL CDK6_intron/CDK6_intron in PD49229b_lo0066
+7:92480024-92481319	PD49229b_lo0066	loss	Spencer Chapman 2023 Nat Med ED Fig 4c-d; github Clonal_selection_after_gene_therapy@bc59ee0 Data/SV_analysis_sickle_updated050123.xlsx sheet VAF
+# GRIDSS DEL NA/MIR3936_intron in PD49229b_lo0933
+5:131616285-131677322	PD49229b_lo0933	loss	Spencer Chapman 2023 Nat Med ED Fig 4c-d; github Clonal_selection_after_gene_therapy@bc59ee0 Data/SV_analysis_sickle_updated050123.xlsx sheet VAF
+# GRIDSS DEL MIR4677_intron/MIR4677_intron in PD49229b_lo0543
+1:243503901-243505045	PD49229b_lo0543	loss	Spencer Chapman 2023 Nat Med ED Fig 4c-d; github Clonal_selection_after_gene_therapy@bc59ee0 Data/SV_analysis_sickle_updated050123.xlsx sheet VAF
