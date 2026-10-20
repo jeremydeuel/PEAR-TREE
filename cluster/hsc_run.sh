@@ -25,6 +25,9 @@
 #        among a colony's several releases
 #   bash <checkout>/cluster/hsc_run.sh submit <P>         # samples.tsv + the whole pipeline
 #   bash <checkout>/cluster/hsc_run.sh status <P>
+#   bash <checkout>/cluster/hsc_run.sh normal <P> <sample> <proj>   # after a finished run: genotype a
+#        matched NON-tree sample (buccal WGS, ...) and rebuild <P>.somatic.xlsx with it (germline =
+#        carried by the normal; ROOT loci it lacks -> trunk candidates); one bsub job, this checkout's code
 #
 # Layout:  $HSC_ROOT/<P>/<P>/      pipeline run dir (discovery/ insertions/ genotypes/ fit/ logs/ ...)
 #          $HSC_ROOT/tmp/<P>/      annotate scratch
@@ -238,6 +241,20 @@ import arm_config; print(arm_config.describe('B'))") >&2
     note "results will land in $RESULTS_ROOT/$P (final: $P.somatic.xlsx)"
 }
 
+cmd_normal() {
+    local P="${1:?usage: hsc_run.sh normal <PATIENT_ID> <SAMPLE> <PROJECT>}" S="${2:?usage: hsc_run.sh normal <PATIENT_ID> <SAMPLE> <PROJECT>}"
+    local PROJ="${3:?usage: hsc_run.sh normal <PATIENT_ID> <SAMPLE> <PROJECT>}" W="$HSC_ROOT/$P/$P"
+    [ -s "$W/run.env" ] || die "no finished run at $W (run.env missing; set HSC_ROOT to the run's root)"
+    grep -qx "$S" <(cut -f1 "$W/samples.tsv") && die "$S is a tree colony of $P, not a matched normal"
+    local mem="${NORMAL_MEM:-16000}" out
+    out=$(bsub -J "${P}_hsc_normal_$S" -q "${NORMAL_QUEUE:-long}" -n 1 -M "$mem" -R "select[mem>$mem] rusage[mem=$mem]" \
+        -o "$W/logs/normal.$S.%J.log" -e "$W/logs/normal.$S.%J.err" \
+        "PT_RUNDIR='$W' PT_CODE_ROOT='$PT_ROOT' KEEP_BAMS='${KEEP_BAMS:-0}' bash '$PT_ROOT/cluster/pipeline.sh' normal '$S' '$PROJ'") \
+        || die "bsub failed: $out"
+    note "$out"
+    note "log: $W/logs/normal.$S.<jobid>.log; result: $W/$P.somatic.xlsx (+ copy in the run's RESULTS_DIR)"
+}
+
 cmd_status() {
     local P="${1:?usage: hsc_run.sh status <PATIENT_ID>}"
     PT_JOB_PREFIX="${P}_hsc" WORKROOT="$HSC_ROOT/$P" bash "$PT_ROOT/cluster/pipeline.sh" status "$P"
@@ -250,5 +267,6 @@ case "${1:-}" in
     populate) shift; cmd_populate "$@" ;;
     submit)   shift; cmd_submit "$@" ;;
     status)   shift; cmd_status "$@" ;;
+    normal)   shift; cmd_normal "$@" ;;
     *) sed -n '2,30p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 1 ;;
 esac

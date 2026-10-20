@@ -61,9 +61,21 @@ Hard rules (Jeremy, 2026-10-08) EXCLUDE a candidate (moved to the `excluded` she
                       heterozygous insertion on the lost homolog looks the same, so it cannot be called somatic
                       (Jeremy, 2026-10-18). copy_number.tsv: region (7 / 7p / 7q / 7:start-end), clade (tips
                       whose MRCA carries the event), event (loss / LOH / cnLOH; gains are ignored), source
+  * matched normal    (--normal, repeatable) a genotype2 per-sample file of a NON-tree sample of the same
+                      person (PD42191m = buccal WGS, Machado 2023): a candidate the normal carries (p_het + p_hom
+                      >= genotype2_io.P_CARRIER) is germline (Jeremy, 2026-10-20). Buccal DNA carries blood
+                      leukocytes, so a clone that dominates the blood can be "found" there too: the normal's
+                      alt/ref/VAF is in the reason and in the normal_reads column to tell the two apart
   Known insertions (tier A) are kept and only flagged in tier_note.
 Sheets: README, somatic (the table, sorted by tier), excluded (the rule failures), known (the known
 insertions' rows), refbias (the b estimates, when --refbias is given).
+
+Matched normal, the converse (--normal): a joint ROOT locus (in every colony, so read as germline) that
+every normal is confidently WITHOUT (p_absent >= genotype2_io.P_ABSENT_ROW) becomes a candidate with
+joint_class `trunk` and source `normal_absent`: a clone-wide somatic insertion, as in PD42191 where every
+colony sits below the TP53 trunk. Its carriers are the colonies the joint step gives P >= --min-p, and it
+is tiered and filtered like any clade call. This is probabilistic: germline_status gives the normal's
+p_absent as P(non-germline), and a shallow normal can miss a germline het (P(no alt read | het) ~ 0.5^depth).
 """
 import argparse
 import collections
@@ -859,6 +871,64 @@ def read_reads(path, wanted):
     return out
 
 
+# ------------------------------------------------------------------ matched normal
+P_CARRIER, P_ABSENT_ROW = 0.9, 0.8   # = tools/genotype2_io.py (stdlib-only here)
+
+
+def read_normals(paths):
+    """{sample: {locus: genotype2 row}} of the matched normals' per-sample files."""
+    out = {}
+    for p in paths:
+        s = os.path.basename(p)
+        s = re.sub(r"\.(txt|tsv)(\.gz)?$", "", s)
+        rows = read_tsv(p)
+        if rows and "p_het" not in rows[0]:
+            sys.exit(f"--normal {p}: not a genotype2 per-sample file (no p_het column)")
+        out[s] = {r["locus"]: r for r in rows}
+    return out
+
+
+def normal_bucket(g):
+    """present / absent / ambiguous / no_data of one genotype2 row (genotype2_io.v2_row_bucket)."""
+    if not g or g.get("status") != "ok":
+        return "no_data"
+    if fnum(g.get("p_het"), 0) + fnum(g.get("p_hom"), 0) >= P_CARRIER:
+        return "present"
+    if fnum(g.get("p_absent"), 0) >= P_ABSENT_ROW:
+        return "absent"
+    return "ambiguous"
+
+
+def normal_summary(loc, normals):
+    """(per-normal 'sample:alt/ref P=..' text, the same for the normals that carry the locus)."""
+    txt, car = [], []
+    for s, rows in normals.items():
+        g = rows.get(loc)
+        if not g or g.get("status") != "ok":
+            txt.append(f"{s}:{(g or {}).get('status') or 'no row'}")
+            continue
+        alt, ref = int(fnum(g.get("n_alt"), 0)), int(fnum(g.get("n_ref"), 0))
+        p = fnum(g.get("p_het"), 0) + fnum(g.get("p_hom"), 0)
+        vaf = f", VAF {alt / (alt + ref):.2f}" if alt + ref else ""
+        t = f"{s}:{alt}/{ref} P={p:.3f}{vaf}"
+        txt.append(t)
+        if normal_bucket(g) == "present":
+            car.append(t)
+    return "; ".join(txt), "; ".join(car)
+
+
+def germline_status(loc, normals):
+    """germline / non-germline P=<min p_absent over the normals> / unknown."""
+    if not normals:
+        return ""
+    b = [normal_bucket(nr.get(loc)) for nr in normals.values()]
+    if "present" in b:
+        return "germline"
+    if all(x == "absent" for x in b):
+        return f"non-germline P={min(fnum(nr[loc].get('p_absent'), 0) for nr in normals.values()):.3f}"
+    return "unknown"
+
+
 # ------------------------------------------------------------------ main
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -895,6 +965,9 @@ def main():
     ap.add_argument("--tree", help="the patient SNV tree (Newick); resolves the copy_number.tsv clades")
     ap.add_argument("--assembly", default=os.environ.get("PT_ASSEMBLY", "GRCh38"), choices=("GRCh38", "GRCh37"),
                     help="coordinates of the loci, for arm-level copy-number events (default $PT_ASSEMBLY or GRCh38)")
+    ap.add_argument("--normal", action="append", default=[],
+                    help="genotype2 per-sample file (<sample>.txt.gz) of a matched NON-tree sample (buccal, ...): "
+                         "candidates it carries are excluded as germline; repeatable")
     ap.add_argument("--out", required=True, help="output .xlsx")
     a = ap.parse_args()
 
@@ -924,6 +997,10 @@ def main():
         from tools.rte.genome import open_genome
         genome = open_genome(a.genome)
     rte_lib = rte_index(a.rte_library) if genome is not None else []
+    normals = read_normals(a.normal)
+    for n, rows_n in normals.items():
+        print(f"matched normal {n}: {len(rows_n)} loci, "
+              f"{sum(normal_bucket(g) == 'present' for g in rows_n.values())} carried")
 
     # candidate set
     cand = collections.OrderedDict()
@@ -934,6 +1011,13 @@ def main():
         cls, lab = r.get("class", ""), r.get("label", "")
         if cls == "private" or (cls == "informative_shared" and lab == "phylo_consistent"):
             cand[loc] = cand.get(loc, "") and "both" or "legacy"
+    trunk = set()
+    if normals:
+        for loc, r in joint.items():
+            if joint_class(r) == "ROOT" and all(normal_bucket(nr.get(loc)) == "absent" for nr in normals.values()):
+                trunk.add(loc)
+                cand.setdefault(loc, "normal_absent")
+        print(f"trunk: {len(trunk)} ROOT loci every matched normal is confidently without -> candidates")
     known_hit = {}
     for loc in joint:
         k = match_known(loc, known)
@@ -960,6 +1044,7 @@ def main():
     header = ["tier", "tier_note", "locus", "chrom", "start", "end", "kind", "source", "known", "known_carriers",
               "joint_class", "joint_best", "n_carriers", "carriers", "min_P_carrier", "post_best", "log10_bf_tree",
               "carrier_reads (alt/ref/uninf)", "carrier_vaf_mean", "alt_reads_in_noncarriers", "n_noncarriers_with_alt",
+              "normal_reads (alt/ref, P carrier)", "germline_status",
               "treefit_v2_class", "treefit_v2_label", "treefit_v2_carriers",
               "treefit_legacy_class", "treefit_legacy_label", "treefit_legacy_carriers",
               "element_class", "element", "tprt_call", "tprt_score", "tsd_len", "tsd_seq", "polya_len",
@@ -978,7 +1063,11 @@ def main():
         f2, fl, an = fit2.get(loc, {}), fitl.get(loc, {}), ann.get(loc, {})
         k = known_hit.get(loc)
         jc = joint_class(j) if j else "NA"
+        if loc in trunk:
+            jc = "trunk"
         carriers = [c for c in (j.get("carriers") or "").split(",") if c] if jc in ("clade", "private") else []
+        if jc == "trunk":
+            carriers = [c for c in colonies if fnum(j.get("p_" + c), 0) >= a.min_p]
         ps = [fnum(j.get("p_" + c)) for c in carriers]
         min_p = min(ps) if ps else float("nan")
         reads, vafs = [], []
@@ -1006,9 +1095,9 @@ def main():
         good_p = ps and min_p >= a.min_p
         if k:
             tier = "A"
-        elif jc in ("clade", "private") and good_p and (ecls in RTE_CLASSES or tcall in TPRT_CALLS):
+        elif jc in ("clade", "private", "trunk") and good_p and (ecls in RTE_CLASSES or tcall in TPRT_CALLS):
             tier = "B"
-        elif jc in ("clade", "private") and good_p:
+        elif jc in ("clade", "private", "trunk") and good_p:
             tier = "C"
         else:
             tier = "D"
@@ -1052,6 +1141,10 @@ def main():
             cn = cn_masked(loc, cn_car, colonies, cn_events)
             if cn:
                 violations.append("germline masked by copy-number loss: carriers = every tip outside " + cn)
+        nreads, ncar = normal_summary(loc, normals)
+        gstat = germline_status(loc, normals)
+        if ncar:
+            violations.append("germline: carried by the matched normal " + ncar)
         if violations and k:
             notes.append("KNOWN but fails: " + "; ".join(violations))
         p = parse_locus(loc) or ("", "", "")
@@ -1061,7 +1154,7 @@ def main():
                      bool(k), k.get("carriers", "") if k else "",
                      jc, j.get("best", ""), len(carriers) if carriers else "", ",".join(carriers),
                      round(min_p, 4) if min_p == min_p else "", num(j.get("post_best")), num(j.get("log10_bf_tree")),
-                     "; ".join(reads), round(sum(vafs) / len(vafs), 3) if vafs else "", nc_alt, nc_n,
+                     "; ".join(reads), round(sum(vafs) / len(vafs), 3) if vafs else "", nc_alt, nc_n, nreads, gstat,
                      f2.get("class", ""), f2.get("label", ""), f2.get("carriers", ""),
                      fl.get("class", ""), fl.get("label", ""), fl.get("carriers", ""),
                      clean(ecls) or ("(not annotated)" if not an else ""), clean(an.get("element", "")),
@@ -1082,7 +1175,7 @@ def main():
     H = {h: i for i, h in enumerate(header)}
     rows.sort(key=lambda r: (rank[r[0]], bool(r[1]), -(r[H["n_carriers"]] or 0), -(fnum(r[H["tprt_score"]], 0)), r[H["locus"]]))
     excluded.sort(key=lambda r: (rank[r[1]], r[1 + H["locus"]]))
-    widths = [5, 40, 28, 7, 11, 11, 18, 10, 7, 30, 10, 16, 6, 40, 9, 9, 9, 50, 9, 9, 9,
+    widths = [5, 40, 28, 7, 11, 11, 18, 10, 7, 30, 10, 16, 6, 40, 9, 9, 9, 50, 9, 9, 9, 30, 24,
               18, 16, 30, 18, 16, 30, 18, 18, 12, 8, 7, 14, 8, 6, 6, 9, 14, 9, 14, 9, 7, 16, 12, 8, 30, 20, 18, 18, 10, 8, 30, 9, 8, 8, 20, 60, 14, 14, 6, 60,
               7, 7, 7, 7, 7, 9, 7, 7, 7, 7, 7, 9, 30, 60, 60, 50, 50, 22]
 
@@ -1108,6 +1201,7 @@ def main():
               ["tree_fit (legacy)", os.path.abspath(a.fit_legacy) if a.fit_legacy else "-"],
               ["annotation", os.path.abspath(a.annotation) if a.annotation else "-"],
               ["known insertions", os.path.abspath(a.known) if a.known else "-"],
+              ["matched normal", ", ".join(os.path.abspath(x) for x in a.normal) or "-"],
               ["copy number", os.path.abspath(a.copy_number) if cn_events else "-"]] + [
               ["", f"{ev[4]} = {ev[0]}:{ev[1]}-{ev[2]} ({a.assembly})"] for ev in cn_events] + [
               ["", ""],
@@ -1124,11 +1218,18 @@ def main():
                             + ("" if genome else " (local-origin check OFF: no --genome)")],
               ["source", "genotype2 = joint step places it on a branch below the root; legacy = legacy tree_fit "
                          "calls it private / phylo-consistent shared; both; known = only via the known list"],
-              ["joint_class", "clade (>= 2 carriers below one branch), private (one tip), ROOT, INDEP, NOISE"],
+              ["joint_class", "clade (>= 2 carriers below one branch), private (one tip), ROOT, INDEP, NOISE; "
+                              "trunk = ROOT but absent from the matched normal (--normal): clone-wide somatic candidate"],
               ["min_P_carrier", "lowest per-colony P(carrier) among the joint carriers; annotate_v2 counts a carrier at >= 0.9. "
                                 "Judge private calls on this, not on log10_bf_tree (a private event's BF saturates near 2)"],
               ["carrier_reads", "per carrier colony: alt / ref / uninformative reads from the genotype2 realignment"],
               ["alt_reads_in_noncarriers", "alt reads summed over all other colonies (background / missed carriers)"],
+              ["germline_status", "matched normal verdict: germline (it carries the locus), non-germline P=<its p_absent> "
+                                  "(confidently without it; a joint ROOT locus becomes joint_class trunk), or unknown "
+                                  "(ambiguous / no reads / no --normal)"],
+              ["normal_reads", "per matched normal (--normal): alt / ref reads and P(carrier) = p_het + p_hom; a normal "
+                               "carrying the locus (P >= 0.9) excludes it as germline. A low VAF there can be blood "
+                               "leukocytes in the swab, not the germline"],
               ["treefit_*", "tools/phylo/tree_fit.py read-vote model on each genotyper: class (germline, informative_shared, "
                             "private, noise, uninformative_depth) and label (phylo_consistent / ambiguous / phylo_violating)"],
               ["element_class ... conclusion", "annotate_v2 on the legacy run (only loci with a legacy het/hom call are annotated; "

@@ -169,6 +169,8 @@ load_env() {
     : "${PT_RUNDIR:?internal subcommands need PT_RUNDIR}"
     # shellcheck disable=SC1091
     source "$PT_RUNDIR/run.env"
+    # PT_CODE_ROOT: run THIS checkout's code on an older run dir (run.env froze the checkout it ran with)
+    [ -n "${PT_CODE_ROOT:-}" ] && PT_ROOT="$PT_CODE_ROOT"
     export PT_ASSEMBLY="${PT_ASSEMBLY:-GRCh38}"   # read by src/config.py in the python steps
     JOB_PREFIX="${JOB_PREFIX:-$PATIENT_ID}"   # run.env written before the hook existed has none
 }
@@ -938,11 +940,60 @@ cmd_report() {
     [ -s "$known" ] && args+=(--known "$known")
     local cn; cn="$(dirname "$TREE")/copy_number.tsv"
     [ -s "$cn" ] && args+=(--copy-number "$cn" --tree "$TREE" --assembly "$PT_ASSEMBLY")
+    local nf
+    for nf in "$RUNDIR"/normal/*.txt.gz; do [ -s "$nf" ] && args+=(--normal "$nf"); done
     "$VENV/bin/python" "$PT_ROOT/cluster/somatic_table.py" "${args[@]}"
     mkdir -p "$RESULTS_DIR/$PATIENT_ID"
     cp -f "$PATIENT_ID.somatic.xlsx" "$RESULTS_DIR/$PATIENT_ID/"
     [ -s "$FIT/summary.md" ] && cp -f "$FIT/summary.md" "$RESULTS_DIR/$PATIENT_ID/$PATIENT_ID.tree_fit_summary.md" || true
     log "report -> $RESULTS_DIR/$PATIENT_ID/$PATIENT_ID.somatic.xlsx"
+}
+
+# =============================================================================
+# matched normal — genotype a NON-tree sample of the same person (buccal, ...) against the
+# contract, then rebuild the report: candidates it carries -> germline (excluded); ROOT loci it is
+# confidently without -> `trunk` candidates (cluster/somatic_table.py --normal). Output in normal/,
+# NOT genotypes/: the joint step and tree_fit glob genotypes/ and must never see a non-tree sample.
+# =============================================================================
+cmd_normal() {
+    load_env
+    local SAMPLE="${1:?normal <sample> <proj>}" PROJ="${2:?normal <sample> <proj>}"
+    cd "$RUNDIR"
+    mkdir -p normal
+    local OUT="$RUNDIR/normal/$SAMPLE.txt.gz"
+    if [ -s "$OUT" ]; then
+        log "$SAMPLE: normal genotype exists ($OUT)"
+    else
+        [ "$GENOTYPE_IMPL" = v2 ] || { echo "matched normal needs GENOTYPE_IMPL=v2 (run used $GENOTYPE_IMPL)" >&2; exit 1; }
+        local BAM; BAM="$(bam_path "$PROJ" "$SAMPLE")"
+        if [ ! -s "$BAM" ]; then
+            local src=0; stage_bam || src=$?
+            { [ "$src" -eq 0 ] && [ -s "$BAM" ]; } || { log "$SAMPLE: STAGING FAILED -- no BAM at $BAM"; exit 1; }
+        fi
+        if [ -n "${PT_HEADER_GATE:-}" ]; then
+            bash "$PT_ROOT/cluster/install.sh" check-config --bam "$BAM" --pt-root "$PT_ROOT" \
+                || { log "$SAMPLE: assembly check FAILED against the run's config"; exit 1; }
+        fi
+        if [ ! -s "$BAM.bai" ] && [ ! -s "${BAM%.bam}.bai" ]; then
+            module load "$SAMTOOLS_MODULE" >/dev/null 2>&1 || true
+            samtools index "$BAM" || { log "$SAMPLE: samtools index failed"; exit 1; }
+        fi
+        local CONTRACT COMBINED="$RUNDIR/insertions/$PATIENT_ID.combined.txt.gz"
+        CONTRACT="$(geno_contract)"
+        [ -s "$CONTRACT" ] && [ -s "$COMBINED" ] || { log "contract / combined missing in $RUNDIR/insertions"; exit 1; }
+        local TMP="$OUT.tmp.$$"
+        log "$SAMPLE: genotyping the matched normal against $CONTRACT"
+        "$GENOTYPE2_BIN" --step genotype --bam "$BAM" --insertions "$CONTRACT" --combined "$COMBINED" \
+            --reference "$GENOME_2BIT" --out "$TMP" --threads 1 --config "$GENO2_CFG" \
+            || { rm -f "$TMP" "$TMP.extra_reads.fa.gz"; log "$SAMPLE: GENOTYPING FAILED"; exit 1; }
+        rm -f "$TMP.extra_reads.fa.gz"
+        mv -f "$TMP" "$OUT"
+        log "$SAMPLE: -> $OUT"
+        [ "${KEEP_BAMS:-0}" = 1 ] || { rm -rf "${STAGING_ROOT:?}/$PROJ/$SAMPLE"; rmdir "$STAGING_ROOT/$PROJ" 2>/dev/null || true; }
+    fi
+    mkdir -p "$RESULTS_DIR/$PATIENT_ID"
+    cp -f "$OUT" "$RESULTS_DIR/$PATIENT_ID/$PATIENT_ID.normal.$SAMPLE.txt.gz"
+    cmd_report
 }
 
 # =============================================================================
@@ -985,5 +1036,6 @@ case "${1:-}" in
     cleanup)           shift; cmd_cleanup "$@" ;;
     annotate)          shift; cmd_annotate "$@" ;;
     report)            shift; cmd_report "$@" ;;
+    normal)            shift; cmd_normal "$@" ;;
     *) sed -n '2,35p' "$SELF"; exit 1 ;;
 esac
