@@ -33,6 +33,14 @@ Artefact checks cap a call at tier D and say why in tier_note:
                       Note the measured expectation there was 0.616 vs the 0.648 the germline-het
                       refbias gives; that gap is NOT transferable -- a ~5 kb provirus is not an Alu --
                       so the fix is the dispersion term, not a new b
+  * hemizygous a.f.   (--copy-number + --tree) every carrier sits inside a clade that LOST the locus' region
+                      (copy_number.tsv event `loss`), so a real insertion is in every remaining copy -- whether
+                      it arose before the loss (on the kept homolog) or after it -- and the pooled allele fraction
+                      must be near 1: the low-allele-fraction test then runs against 0.95 (odds x b, same rho /
+                      --het-alpha) INSTEAD of the heterozygote. PD42191 (all 10 colonies below a trunk with
+                      5q / 6p / 18 / 20 losses): the matched-normal trunk calls at 0.5-0.7 on 6p (HLA) and 18
+                      are capped, the 5q ones at ~1 kept. LOH / cnLOH are not used: an insertion after a
+                      copy-neutral LOH sits in one of two copies (0.5)
 
   python cluster/somatic_table.py --patient PD37590 --joint bias3.joint.tsv \
       --genotype-dir V2_refbias/genotypes --fit-v2 V2_refbias/fit/phylo_fit.tsv \
@@ -290,6 +298,8 @@ def hard_rules(loc, reads_by, check_fragments, cons=None):
 # ------------------------------------------------------------------ copy-number losses
 CN_EVENTS = {"loss", "loh", "cnloh"}   # events that remove one homolog from a clade (gains never mask)
 CN_TOLERANCE = 0.05                    # share of tips allowed to disagree with the masking pattern
+CN_HEMI_EVENTS = {"loss"}              # one copy left: a real insertion there is in every remaining copy
+CN_HEMI_AF = 0.95                      # expected carrier allele fraction there before reference bias
 
 
 def read_centromeres(path, assembly):
@@ -315,7 +325,7 @@ def cn_region(region, cen):
 
 
 def read_copy_number(path, tree_path, colonies, cen):
-    """patients/<organ>/<P>/copy_number.tsv -> [(chrom, start, end, frozenset(clade tips), label)].
+    """patients/<organ>/<P>/copy_number.tsv -> [(chrom, start, end, frozenset(clade tips), label, event)].
 
     `clade` lists tips whose most recent common ancestor in the patient tree carries the event
     (one tip = that tip alone); only events that remove a homolog (loss, LOH, cnLOH) are kept."""
@@ -347,7 +357,7 @@ def read_copy_number(path, tree_path, colonies, cen):
         label = f"{r['event'].strip()} {r['region'].strip()} in {len(clade)} tips ({','.join(names)})"
         if r.get("source"):
             label += f" [{r['source'].strip()}]"
-        out.append((chrom, s, e, clade, label))
+        out.append((chrom, s, e, clade, label, r["event"].strip().lower()))
     return out
 
 
@@ -375,6 +385,21 @@ def cn_masked(loc, carriers, colonies, events, tol=CN_TOLERANCE):
     if not expect or len(car ^ expect) > int(tol * len(expect)):   # exact below 1/tol tips
         return ""
     return "; ".join(used)
+
+
+def cn_hemizygous(loc, carriers, events):
+    """The carriers all sit inside a clade that LOST the locus' region (one copy left), so a real
+    insertion there is hemizygous -- in every remaining copy, whether it arose before the loss (on
+    the kept homolog) or after it -- and their pooled allele fraction must be near 1. Returns the
+    events ('' if none). LOH / cnLOH do not count: after a copy-neutral LOH two copies remain, and
+    an insertion arising after it sits in one of them (allele fraction 0.5)."""
+    p = parse_locus(loc)
+    if p is None or not carriers:
+        return ""
+    chrom = p[0][3:] if p[0].lower().startswith("chr") else p[0]
+    car = set(carriers)
+    return "; ".join(ev[4].split(" (")[0] for ev in events if ev[0] == chrom and ev[1] < p[2] and p[1] < ev[2]
+                     and ev[5] in CN_HEMI_EVENTS and car <= ev[3])
 
 
 def joint_class(r):
@@ -1116,7 +1141,16 @@ def main():
             notes.append(tt_note)
         elif tt == "flag":
             flags.append(tt_note)
-        if a.het_alpha > 0 and not k and pool_alt + pool_ref > 0:
+        hemi = cn_hemizygous(loc, carriers, cn_events) if cn_events and jc in ("clade", "private", "trunk") else ""
+        if a.het_alpha > 0 and not k and pool_alt + pool_ref > 0 and hemi:
+            kind = j.get("locus_kind") or f2.get("locus_kind", "")
+            b = bias.get(kind, bias.get("global", 1.0))
+            e = CN_HEMI_AF / (1 - CN_HEMI_AF) * b
+            ph = betabinom_cdf(pool_alt, pool_alt + pool_ref, e / (1 + e), a.het_rho)
+            if ph < a.het_alpha:
+                notes.append(f"allele fraction {pool_alt}/{pool_alt + pool_ref} below hemizygous: every carrier "
+                             f"inside {hemi} (expected {e / (1 + e):.2f}, rho = {a.het_rho:g}, p = {ph:.2g})")
+        elif a.het_alpha > 0 and not k and pool_alt + pool_ref > 0:
             kind = j.get("locus_kind") or f2.get("locus_kind", "")
             b = bias.get(kind, bias.get("global", 1.0))
             ph = betabinom_cdf(pool_alt, pool_alt + pool_ref, b / (1 + b), a.het_rho)
@@ -1211,7 +1245,9 @@ def main():
                             f"reference within {a.local_window} bp and the mates lie in the flanks, so nothing was inserted -- "
                             f"or an allele fraction below heterozygous (pooled carrier alt reads, one-sided "
                             f"beta-binomial p < {a.het_alpha} against b/(1+b) with overdispersion rho = {a.het_rho:g}, "
-                            f"b = the joint reference bias; a colony is clonal), "
+                            f"b = the joint reference bias; a colony is clonal"
+                            + (f"; below hemizygous instead when every carrier is inside a clade with a copy-number "
+                               f"LOSS of the locus: {CN_HEMI_AF} at odds x b" if cn_events else "") + "), "
                             f"or a poly-A tract read-through -- the TSD is a reference single-base run >= {TRACT_MIN} bp "
                             f"with both breakpoints on its ends and no clip is RTE sequence (one breakpoint only: "
                             f"'flag:', not capped)"
