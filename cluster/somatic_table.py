@@ -13,6 +13,10 @@ Artefact checks cap a call at tier D and say why in tier_note:
   * local origin      (--genome) every clip is reference sequence within --local-window bp and the
                       mates lie in the flanks: nothing was inserted (template switch between nearby
                       repeat copies, small del/dup) -- PD37580 lo0077's six L1 "insertions"
+  * poly-A tract      (--genome) the "TSD" is a reference single-base run >= 10 bp (both breakpoints within
+                      2 bp of its ends) and no clip is RTE sequence: read-through of a reference Alu's
+                      poly-A, clipped into extra A's / post-homopolymer junk (the somatic "Alu-in-Alu"
+                      FPs, 2026-10-20). Only ONE breakpoint on a tract end is noted as a flag, not capped
   * low allele frac.  the carriers' pooled alt/(alt+ref) rejects a heterozygote (one-sided
                       beta-binomial p < --het-alpha, expected b/(1+b) with the joint reference bias
                       b, overdispersion --het-rho): a colony is clonal, so a real event sits near
@@ -88,6 +92,10 @@ LOCAL_MATE_VOTES = 0.5       # fraction of a mate's 15-mers on one diagonal = it
 LOCAL_MATE_FRAC = 0.7        # share of the locus' mates that must map inside the window
 SHORT_CLIP_BP = 20           # short-clip rule: both clip consensuses at most this long ...
 SHORT_MATE_MIN = 30          # ... and no mate with >= this many non-homopolymer bp off the local reference
+TRACT_MIN = 10               # tract rule: reference single-base run of at least this many bp ...
+TRACT_TOL = 2                # ... with a breakpoint within this many bp of its end
+RTE_K = 11                   # tract-rule exemption: seed k-mer for the clip vs the RTE consensus library
+RTE_CLIP_MIN, RTE_CLIP_COV, RTE_CLIP_ID = 25, 0.6, 0.85   # clip is RTE sequence: >= 25 bp, >= 60 % aligned at >= 85 %
 
 
 # ------------------------------------------------------------------ input
@@ -500,6 +508,132 @@ def local_origin(loc, evid, cons, reads_by, genome, window):
     return "local origin: " + "; ".join(where) + f"; {ok}/{len(mates)} mates within {window} bp"
 
 
+def read_fasta(path):
+    out, name = {}, None
+    if not os.path.exists(path):
+        return out
+    with open(path) as fh:
+        for line in fh:
+            line = line.strip()
+            if line.startswith(">"):
+                name = line[1:].split()[0]
+                out[name] = []
+            elif name:
+                out[name].append(line.upper())
+    return {k: "".join(v) for k, v in out.items()}
+
+
+def rte_index(lib_dir):
+    """the RTE consensus library (consensus.fa, each + a 30-bp poly-A) with an RTE_K-mer index per element"""
+    lib = []
+    for name, seq in read_fasta(os.path.join(lib_dir, "consensus.fa")).items():
+        seq += "A" * 30
+        lib.append((name, seq, kmer_index(seq, RTE_K)))
+    return lib
+
+
+def sw_local(q, r, ma=2, mm=-3, gap=-5):
+    """Smith-Waterman, linear gaps: (score, query bp spanned, identity over the alignment columns)"""
+    n = len(r)
+    H = [[0] * (n + 1) for _ in range(len(q) + 1)]
+    best, bi, bj = 0, 0, 0
+    for i in range(1, len(q) + 1):
+        qi, Hi, Hp = q[i - 1], H[i], H[i - 1]
+        for j in range(1, n + 1):
+            h = max(0, Hp[j - 1] + (ma if qi == r[j - 1] else mm), Hp[j] + gap, Hi[j - 1] + gap)
+            Hi[j] = h
+            if h > best:
+                best, bi, bj = h, i, j
+    if not best:
+        return 0, 0, 0.0
+    i, j, match, cols = bi, bj, 0, 0
+    while i > 0 and j > 0 and H[i][j] > 0:
+        h = H[i][j]
+        cols += 1
+        if h == H[i - 1][j - 1] + (ma if q[i - 1] == r[j - 1] else mm):
+            match += q[i - 1] == r[j - 1]
+            i, j = i - 1, j - 1
+        elif h == H[i - 1][j] + gap:
+            i -= 1
+        else:
+            j -= 1
+    return best, bi - i, match / cols
+
+
+def rte_clip(clip, lib):
+    """'' unless >= RTE_CLIP_COV of the clip (first 200 bp) aligns at >= RTE_CLIP_ID to one RTE consensus
+    over >= RTE_CLIP_MIN bp; else '<element> <bp>bp@<identity>'. The best RTE_K-mer diagonal (either
+    strand, any element) picks the consensus window, so the aligner only sees a clip-sized piece."""
+    q = clip[:200]
+    if len(q) < RTE_CLIP_MIN:
+        return ""
+    best = None
+    for s in (q, revcomp(q)):
+        for name, seq, idx in lib:
+            diag = collections.Counter()
+            for i in range(len(s) - RTE_K + 1):
+                for p in idx.get(s[i:i + RTE_K], ()):
+                    diag[p - i] += 1
+            if diag:
+                d, v = diag.most_common(1)[0]
+                if best is None or v > best[0]:
+                    best = (v, s, name, seq, d)
+    if best is None:
+        return ""
+    _, s, name, seq, d = best
+    _, span, ident = sw_local(s, seq[max(0, d - 30):d + len(s) + 30])
+    if span >= RTE_CLIP_MIN and span >= RTE_CLIP_COV * len(q) and ident >= RTE_CLIP_ID:
+        return f"{name} {span}bp@{ident:.2f}"
+    return ""
+
+
+def tract_tsd(loc, cons, evid, genome, lib):
+    """poly-A tract read-through (2026-10-20, the somatic Alu-in-Alu FPs) -> ('cap' | 'flag' | '', note).
+    'cap': the longest single-base run of the reference touching the site is >= TRACT_MIN bp and BOTH
+    breakpoints lie within TRACT_TOL bp of its ends, i.e. the 'TSD' IS the tract (typically a reference
+    Alu's poly-A): reads that ran through it from either side were clipped at its far end into extra
+    tract bases or post-homopolymer junk (G/C runs, error-laden reference -- the resident Alu, which is
+    why the clip 'looks like an Alu of the same class'). Reviewed somatic calls of 24 runs: caps 128/468
+    FPs, 0/220 PD49229 vector integrations, and 4 other TPs -- all PD42191 calls on A-tracts with junk
+    clips whose carriers are every colony but the two lowest-depth ones. 'flag': only one breakpoint on
+    a tract end (37 FPs, 1 TP) -- noted, never capped. Neither fires when a clip, the tract bases next
+    to its junction removed, is RTE sequence (rte_clip): 0/94 germline loci with a genuine Alu clip."""
+    p = parse_locus(loc)
+    if not p or genome is None:
+        return "", ""
+    c, a, b = p
+    lo, hi = min(a, b), max(a, b)          # the TSD / site is reference [lo, hi), 0-based
+    w = 60
+    ref = genome.fetch(c, lo - w, hi + w)
+    if not ref:
+        return "", ""
+    s = e = 0
+    base = ""
+    for m in re.finditer(r"A+|C+|G+|T+", ref):
+        ms, me = m.start() + lo - w, m.end() + lo - w
+        if me >= lo - TRACT_TOL and ms <= hi + TRACT_TOL and me - ms > e - s:
+            s, e, base = ms, me, m.group()[0]
+    if e - s < TRACT_MIN:
+        return "", ""
+    on_lo, on_hi = abs(lo - s) <= TRACT_TOL, abs(hi - e) <= TRACT_TOL
+    if not (on_lo or on_hi):
+        return "", ""
+    for side in ("L", "R"):
+        cl = ""
+        for src in (cons.get((loc, side), ""), evid.get((loc, side), {}).get("clip_consensus", "")):
+            cl = "".join(re.findall("[a-z]+", src)).upper()
+            if cl:
+                break
+        # the L clip sits left of the site (its junction is its right end), the R clip right of it
+        cl = cl.rstrip(base) if side == "L" else cl.lstrip(base)
+        if rte_clip(cl, lib):
+            return "", ""
+    tract = f"reference {base}{e - s} tract {c}:{s + 1}-{e}"
+    if on_lo and on_hi:
+        return "cap", f"poly-A tract read-through: TSD = {tract} (both breakpoints on its ends), no clip is RTE sequence"
+    return "flag", f"flag: one breakpoint on a {tract} end, no clip is RTE sequence (not capped)"
+
+
 def clip_len(cons, evid, loc, side):
     """bp of inserted (lower-case) sequence in combine's consensus for one end, else the evidence
     table's clip_consensus"""
@@ -789,6 +923,7 @@ def main():
         sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
         from tools.rte.genome import open_genome
         genome = open_genome(a.genome)
+    rte_lib = rte_index(a.rte_library) if genome is not None else []
 
     # candidate set
     cand = collections.OrderedDict()
@@ -886,6 +1021,12 @@ def main():
         lo_note = local_origin(loc, evid, cons, reads_by, genome, a.local_window) if not (k or tprt_like) else ""
         if lo_note:
             notes.append(lo_note)
+        flags = []
+        tt, tt_note = tract_tsd(loc, cons, evid, genome, rte_lib) if not k else ("", "")
+        if tt == "cap":
+            notes.append(tt_note)
+        elif tt == "flag":
+            flags.append(tt_note)
         if a.het_alpha > 0 and not k and pool_alt + pool_ref > 0:
             kind = j.get("locus_kind") or f2.get("locus_kind", "")
             b = bias.get(kind, bias.get("global", 1.0))
@@ -896,6 +1037,7 @@ def main():
         if notes and tier in ("B", "C"):
             notes.insert(0, f"tier {tier} -> D")
             tier = "D"
+        notes += flags
         violations, support = hard_rules(loc, reads_by, bool(a.insertions_dir), cons)
         if a.insertions_dir and genome is not None:
             ln, rn = clip_len(cons, evid, loc, "L"), clip_len(cons, evid, loc, "R")
@@ -975,7 +1117,10 @@ def main():
                             f"reference within {a.local_window} bp and the mates lie in the flanks, so nothing was inserted -- "
                             f"or an allele fraction below heterozygous (pooled carrier alt reads, one-sided "
                             f"beta-binomial p < {a.het_alpha} against b/(1+b) with overdispersion rho = {a.het_rho:g}, "
-                            f"b = the joint reference bias; a colony is clonal)"
+                            f"b = the joint reference bias; a colony is clonal), "
+                            f"or a poly-A tract read-through -- the TSD is a reference single-base run >= {TRACT_MIN} bp "
+                            f"with both breakpoints on its ends and no clip is RTE sequence (one breakpoint only: "
+                            f"'flag:', not capped)"
                             + ("" if genome else " (local-origin check OFF: no --genome)")],
               ["source", "genotype2 = joint step places it on a branch below the root; legacy = legacy tree_fit "
                          "calls it private / phylo-consistent shared; both; known = only via the known list"],
