@@ -539,7 +539,14 @@ cmd_retry() {
 
     local fails; fails="$(classify)"
     if [ -n "$fails" ]; then
-        local retry_idx; retry_idx="$(awk -F'\t' '$3=="oom"||$3=="timeout"{print $1}' <<<"$fails" | paste -sd, -)"
+        # indices collapsed into ranges (1-140,142,144-192): LSF rejects a long comma list in -J
+        # with "Bad job name" (Pair31, 188 indices, 2026-10-19), which silently stalled the chain.
+        local retry_idx; retry_idx="$(awk -F'\t' '$3=="oom"||$3=="timeout"{print $1}' <<<"$fails" | sort -n | awk '
+            function flush() { out = out (out == "" ? "" : ",") (lo == hi ? lo : lo "-" hi) }
+            NR == 1 { lo = hi = $1; next }
+            $1 == hi + 1 { hi = $1; next }
+            { flush(); lo = hi = $1 }
+            END { if (NR) { flush(); print out } }')"
         if [ -n "$retry_idx" ]; then
             log "$PHASE: tier2 escalation (${MEM_T2}MB / $RETRY_QUEUE) for indices [$retry_idx]"
             local R="span[hosts=1]" jid
