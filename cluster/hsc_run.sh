@@ -252,7 +252,8 @@ cmd_normal() {
         "PT_RUNDIR='$W' PT_CODE_ROOT='$PT_ROOT' KEEP_BAMS='${KEEP_BAMS:-0}' bash '$PT_ROOT/cluster/pipeline.sh' normal '$S' '$PROJ'") \
         || die "bsub failed: $out"
     note "$out"
-    note "log: $W/logs/normal.$S.<jobid>.log; result: $W/$P.somatic.xlsx (+ copy in the run's RESULTS_DIR)"
+    local jid; jid="$(sed -n 's/^Job <\([0-9]*\)>.*/\1/p' <<<"$out")"
+    note "log: $W/logs/normal.$S.$jid.log; result: $W/$P.somatic.xlsx (+ copy in the run's RESULTS_DIR)"
 }
 
 cmd_status() {
