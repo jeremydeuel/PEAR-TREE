@@ -115,7 +115,7 @@ GT_THROTTLE="${GT_THROTTLE:-30}"
 #   discovery          12.2 GB peak  -> 16 GB
 #   combine_insertions 15.5 GB peak  -> 24 GB
 #   genotype (Rust)    140 MB peak   ->  2 GB
-#   combine_genotypes   1.3 GB peak  ->  8 GB
+#   combine_genotypes   1.3 GB peak  ->  8 GB   (genotype2 joint: ~37 MB/colony, Pair28 240 col = 8.9 GB -> hsc_run.sh passes 48 GB)
 SD_MEM_T1="${SD_MEM_T1:-16000}"; SD_MEM_T2="${SD_MEM_T2:-32000}"   # discovery: tier1 / tier2
 GT_MEM_T1="${GT_MEM_T1:-2000}";  GT_MEM_T2="${GT_MEM_T2:-8000}"    # genotype:  tier1 / tier2
 CI_MEM="${CI_MEM:-24000}"; CI_CORES="${CI_CORES:-8}"
