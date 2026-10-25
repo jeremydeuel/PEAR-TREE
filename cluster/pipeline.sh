@@ -152,8 +152,19 @@ patient_tree() {
 
 # Submit and echo the job id (stderr carries LSF's own message).
 submit_job() {
-    local out
-    out="$(bsub "$@" 2>&1)" || { echo "bsub FAILED: $out" >&2; exit 1; }
+    local out grp=()
+    # Controllers (sdr/gtr) bsub from inside a job whose environment was frozen at submit time:
+    # after farm22 retired team273-grp (2026-10-22) the stale LSB_DEFAULT_USERGROUP made esub
+    # refuse the tier-2 array, the controller exited, and done(sdr) stalled the whole chain.
+    # Inside a job, submit with that job's CURRENT group (follows `bmod -G`); PT_LSF_GROUP overrides.
+    local g="${PT_LSF_GROUP:-}"
+    if [ -z "$g" ] && [ -n "${LSB_JOBID:-}" ]; then
+        g="$(bjobs -noheader -o ugroup "$LSB_JOBID" 2>/dev/null | head -1 | tr -d ' ')" || g=""
+        [ "$g" = "-" ] && g=""
+    fi
+    [ -n "$g" ] && grp=(-G "$g")
+    out="$(LSB_DEFAULT_USERGROUP="${g:-${LSB_DEFAULT_USERGROUP:-}}" bsub ${grp[@]+"${grp[@]}"} "$@" 2>&1)" \
+        || { echo "bsub FAILED: $out" >&2; exit 1; }
     echo "$out" >&2
     echo "$out" | sed -n 's/^Job <\([0-9]*\)>.*/\1/p'
 }
