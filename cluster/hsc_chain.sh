@@ -107,7 +107,8 @@ if [ "${1:-}" = --rearm ]; then
         if [ "$cs" != PEND ]; then note "$U: cleanup ${cs:-gone} -- not part of the live chain"; prev=""; continue; fi
         sd="$(jid_of "$J" sd)"
         if [ -n "$prev" ]; then
-            if [ "$(stat_of "$sd")" = PEND ]; then
+            case "$(stat_of "$sd")" in PEND|PSUSP) sdok=1 ;; *) sdok=0 ;; esac
+            if [ "$sdok" = 1 ]; then
                 bmod -w "$(next_wait "$prev")" "$sd" >&2 || die "$U: bmod -w on stage array $sd failed"
                 note "$U: stage array $sd now waits on $(next_wait "$prev")"
             else
