@@ -146,8 +146,16 @@ CTRL_QUEUE="${CTRL_QUEUE:-week}"          # controller waits out the tier2 array
 #   PT_NO_CLEANUP=1 do not submit phase 5 (staged-BAM cleanup); the wrapper owns cleanup
 #                   because another run still reads the same staged BAMs.
 #   PT_JOBIDS_FILE  append "<phase><TAB><jobid>" for every submitted job (for dependencies).
+#   SD_MEM_BUDGET_FRAC  OPTIONAL discovery memory budget (analysis/discovery_mem/BUDGET.md):
+#                   when set (e.g. 0.6) each discovery job runs with
+#                   PEARTREE_MEM_BUDGET_MB = floor(job memlimit MB x frac), the memlimit being
+#                   the job's -M read back from LSF inside the job; the pending-junction pool
+#                   is then kept compact beyond that many MB and rebuilt from the BAM after the
+#                   mate pass (output byte-identical). Unset (default) = no change at all; if
+#                   the memlimit cannot be determined the job runs without a budget.
 PT_SD_WAIT="${PT_SD_WAIT:-}"
 PT_NO_CLEANUP="${PT_NO_CLEANUP:-0}"
+SD_MEM_BUDGET_FRAC="${SD_MEM_BUDGET_FRAC:-}"
 PT_JOBIDS_FILE="${PT_JOBIDS_FILE:-}"
 
 log() { echo "[$(date +%H:%M:%S)] $*"; }
@@ -232,6 +240,7 @@ STAGE_THROTTLE='$STAGE_THROTTLE'
 PT_RESTAGE='$PT_RESTAGE'
 SD_MEM_T2='$SD_MEM_T2'
 GT_MEM_T2='$GT_MEM_T2'
+SD_MEM_BUDGET_FRAC='$SD_MEM_BUDGET_FRAC'
 RETRY_QUEUE='$RETRY_QUEUE'
 CI_CORES='$CI_CORES'
 CG_CORES='$CG_CORES'
@@ -451,6 +460,26 @@ drop_bam() {   # drop_bam <proj> <sample>  (no-op unless PT_RESTAGE=1)
     rmdir "$STAGING_ROOT/$1" 2>/dev/null || true
 }
 
+# The running job's memory limit (bsub -M) in MB, read back from LSF; empty when not inside
+# an LSF job or when bjobs cannot tell. `bjobs -o memlimit` prints a value with a unit
+# ("62.5 G", "64000 M", "8 T"; a bare number is in LSF_UNIT_FOR_LIMITS = MB on farm22).
+# An array element is queried as JOBID[INDEX].
+job_memlimit_mb() {
+    [ -n "${LSB_JOBID:-}" ] || return 0
+    local id="$LSB_JOBID" raw
+    [ "${LSB_JOBINDEX:-0}" -gt 0 ] 2>/dev/null && id="$LSB_JOBID[$LSB_JOBINDEX]"
+    raw="$(bjobs -noheader -o memlimit "$id" 2>/dev/null | head -1 | tr -d ' ' || true)"
+    [ -n "$raw" ] && [ "$raw" != "-" ] || return 0
+    awk -v r="$raw" 'BEGIN {
+        if (!match(r, /^[0-9]+(\.[0-9]+)?/)) exit
+        n = substr(r, RSTART, RLENGTH) + 0
+        u = toupper(substr(r, RSTART + RLENGTH, 1))
+        if (u == "K") n /= 1024; else if (u == "G") n *= 1024; else if (u == "T") n *= 1048576
+        else if (u != "M" && u != "") exit
+        printf "%d\n", n
+    }'
+}
+
 cmd_stage_discover() {
     load_env
     local IDX="${1:?stage-discover <index>}"
@@ -500,6 +529,18 @@ cmd_stage_discover() {
         log "$SAMPLE: header gate ok ($PT_HEADER_GATE, DS ${ds}, read length $rl)"
     fi
 
+    # optional pending-junction memory budget (SD_MEM_BUDGET_FRAC; unset = exactly as before)
+    if [ -n "${SD_MEM_BUDGET_FRAC:-}" ]; then
+        local lim mb
+        lim="$(job_memlimit_mb)"
+        if [ -n "$lim" ]; then
+            mb="$(awk -v l="$lim" -v f="$SD_MEM_BUDGET_FRAC" 'BEGIN { printf "%d", l * f }')"
+            export PEARTREE_MEM_BUDGET_MB="$mb"
+            log "$SAMPLE: discovery memory budget ${mb} MB (${SD_MEM_BUDGET_FRAC} x job memlimit ${lim} MB)"
+        else
+            log "$SAMPLE: SD_MEM_BUDGET_FRAC=$SD_MEM_BUDGET_FRAC but the job memlimit is unknown -> discovery runs without a budget"
+        fi
+    fi
     log "$SAMPLE: discovering"
     local TMP="$OUT.tmp.$$"
     if ! "$DISCOVER_BIN" --step discover --bam "$BAM" --out "$TMP" --threads 1 --config "$DISC_CFG"; then
