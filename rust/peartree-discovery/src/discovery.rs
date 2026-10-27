@@ -795,6 +795,7 @@ impl Discovery {
             .iter()
             .map(|o| std::mem::size_of::<DiscordantObs>() + o.contig.capacity())
             .sum();
+        let (sk, sb, sbytes) = self.sc_short.as_ref().map_or((0, 0, 0), |c| c.mem_stats());
         crate::mem::report(
             tag,
             tmp,
@@ -803,10 +804,18 @@ impl Discovery {
             &self.polya,
             self.discordant_obs.len(),
             disc_bytes,
+            (sk, sb, sbytes, self.sc_disc_tmp.len()),
         );
     }
 
     fn cleanup(&mut self) {
+        // temporary_breakpoints holds the just-finished contig's full clipped-read set
+        // here, right before it is drained, and the per-contig collectors (short-overhang,
+        // discordant anchors) are still full — the true per-contig peak.
+        if crate::mem::enabled() && self.reference_name.is_some() && !self.temporary_breakpoints.is_empty() {
+            let tag = format!("cleanup {}", self.reference_name.as_deref().unwrap_or("?"));
+            self.mem_report(&tag, &self.temporary_breakpoints);
+        }
         // short-overhang candidates of the just-finished contig (empty when off)
         let shorts: Vec<ShortLite> = self.sc_short.as_mut().map(|c| c.finish()).unwrap_or_default();
         if self.reference_name.is_none() {
@@ -818,12 +827,13 @@ impl Discovery {
             return;
         }
         let (l0, r0) = (self.final_left_breakpoints.len(), self.final_right_breakpoints.len());
-        // temporary_breakpoints holds the just-finished contig's full clipped-read
-        // set here, right before it is drained — its true per-contig peak.
-        if crate::mem::enabled() {
-            let tag = format!("cleanup {}", self.reference_name.as_deref().unwrap_or("?"));
-            self.mem_report(&tag, &self.temporary_breakpoints);
-        }
+        // This contig's new final breakpoints are staged here and appended with
+        // `reserve_exact`, so the final vectors grow by exactly what each contig adds.
+        // Pushing them one by one let `Vec` double its capacity (up to 1x len of unused
+        // 304-byte slots: ~4 GB on a 19.5M-breakpoint run); the realloc copy per contig is
+        // trivial by comparison. Order and indices are unchanged.
+        let mut new_l: Vec<Breakpoint> = Vec::new();
+        let mut new_r: Vec<Breakpoint> = Vec::new();
         let mut left_bps: Vec<Breakpoint> = Vec::new();
         let mut right_bps: Vec<Breakpoint> = Vec::new();
         for bp in self.temporary_breakpoints.drain(..) {
@@ -885,9 +895,9 @@ impl Discovery {
                             }
                         }
                         if out {
-                            self.final_left_breakpoints.push(joined);
+                            new_l.push(joined);
                         } else {
-                            self.final_right_breakpoints.push(joined);
+                            new_r.push(joined);
                         }
                     }
                     // below the normal floor but a valid clip cluster >= partner floor:
@@ -904,6 +914,10 @@ impl Discovery {
                 }
             }
         }
+        self.final_left_breakpoints.reserve_exact(new_l.len());
+        self.final_left_breakpoints.append(&mut new_l);
+        self.final_right_breakpoints.reserve_exact(new_r.len());
+        self.final_right_breakpoints.append(&mut new_r);
         // TPRT sidecar: attach this contig's discordant anchors to its new breakpoints.
         let disc = std::mem::take(&mut self.sc_disc_tmp);
         // disc_agree: give this contig's pending junctions their candidate anchors; drop the
@@ -1717,10 +1731,10 @@ impl Discovery {
                     };
                     if let Some(ev) = bp.ev.as_mut() {
                         match role {
-                            Role::Mate => ev.mates.push(r),
-                            Role::Disc => ev.disc.push(r),
-                            Role::Short => ev.short.push(r),
-                            _ => ev.clip.push(r),
+                            Role::Mate => ev.recs_mut().mates.push(r),
+                            Role::Disc => ev.recs_mut().disc.push(r),
+                            Role::Short => ev.recs_mut().short.push(r),
+                            _ => ev.recs_mut().clip.push(r),
                         }
                     }
                 }
@@ -1767,12 +1781,14 @@ impl Discovery {
             match e {
                 Emit::Bp(b) => {
                     if let Some(ev) = b.ev.as_deref() {
-                        for r in ev.clip.iter().chain(&ev.disc).chain(&ev.short).chain(&ev.mates) {
+                        let empty = crate::evidence::EvRecs::default();
+                        let rc = ev.recs.as_deref().unwrap_or(&empty);
+                        for r in rc.clip.iter().chain(&rc.disc).chain(&rc.short).chain(&rc.mates) {
                             sc.row(&locus, side, r)?;
                         }
-                        sc.stats.mates_per_bp.push(ev.mates.len() as u32);
+                        sc.stats.mates_per_bp.push(rc.mates.len() as u32);
                         if self.config.short_overhang_evidence {
-                            sc.stats.short_per_bp.push(ev.short.len() as u32);
+                            sc.stats.short_per_bp.push(rc.short.len() as u32);
                         }
                     }
                 }
@@ -1877,15 +1893,20 @@ impl Discovery {
 
     /// disc_agree: anchor qname hash -> pending junctions whose candidate anchor it is.
     /// Empty (no allocation in the scan) unless the key is on and something is pending.
-    fn agree_mate_map(&self) -> FxHashMap<u64, Vec<AgreeWait>> {
+    ///
+    /// The anchors move into the map: after it is built nothing reads
+    /// `AgreePending::anchors` (promotion is decided per anchor qname here, and
+    /// `resolve_disc_agree` only looks at `promoted`), so the per-junction anchor
+    /// vectors (48 B each, up to 16) are freed instead of being held through the scan.
+    fn agree_mate_map(&mut self) -> FxHashMap<u64, Vec<AgreeWait>> {
         let mut m: FxHashMap<u64, Vec<AgreeWait>> = FxHashMap::default();
         if !self.config.disc_agree_active() {
             return m;
         }
-        for (v, left) in [(&self.final_left_breakpoints, true), (&self.final_right_breakpoints, false)] {
-            for (idx, bp) in v.iter().enumerate() {
-                let Some(ag) = bp.agree.as_ref() else { continue };
-                for d in &ag.anchors {
+        for (v, left) in [(&mut self.final_left_breakpoints, true), (&mut self.final_right_breakpoints, false)] {
+            for (idx, bp) in v.iter_mut().enumerate() {
+                let Some(ag) = bp.agree.as_mut() else { continue };
+                for d in std::mem::take(&mut ag.anchors) {
                     m.entry(d.frag).or_default().push(AgreeWait {
                         left,
                         idx,
@@ -2720,6 +2741,10 @@ fn select_agree_anchors(bps: &mut [Breakpoint], disc: &[DiscLite], left: bool, s
             }
         }
         ag.anchors = select_lowest(sel, cap, |d| (d.frag, d.flag));
+        // the clip-read identities served only the duplicate check above; nothing reads
+        // them after this contig's anchors are chosen (memory: ~1 ClipMol + a Vec per
+        // pending junction, held until the mate pass otherwise)
+        ag.clips = Vec::new();
     }
 }
 

@@ -191,10 +191,27 @@ pub struct EvExtra {
     pub disc_lite: Vec<DiscLite>,
     /// short-overhang reads selected for this breakpoint (`short_overhang_evidence`)
     pub short_lite: Vec<ShortLite>,
+    /// the full records captured in the sidecar pass. Allocated on first capture only:
+    /// every final breakpoint carries an `EvExtra` from join() to the end of the run, but
+    /// only emitted loci (~0.5 % on a deep colony) ever get records, so the four empty
+    /// `Vec<EvRec>` headers (96 B) are not paid per breakpoint.
+    pub recs: Option<Box<EvRecs>>,
+}
+
+/// Full sidecar records of one breakpoint side (see `EvExtra::recs`).
+#[derive(Clone, Debug, Default)]
+pub struct EvRecs {
     pub clip: Vec<EvRec>,
     pub disc: Vec<EvRec>,
     pub short: Vec<EvRec>,
     pub mates: Vec<EvRec>,
+}
+
+impl EvExtra {
+    /// The captured records, allocating the holder on first use.
+    pub fn recs_mut(&mut self) -> &mut EvRecs {
+        self.recs.get_or_insert_with(Default::default)
+    }
 }
 
 /// Compact identity of a primary high-MAPQ read that may cross a junction by only a few
@@ -266,6 +283,17 @@ pub struct ShortCollector {
 impl ShortCollector {
     pub fn new(window: i64, max: i64) -> Self {
         ShortCollector { window, max, horizon: 1500, ..Default::default() }
+    }
+
+    /// (kept, buffered) candidate counts and the approximate heap bytes of the collector
+    /// (`PEARTREE_MEM_DEBUG` accounting only).
+    pub fn mem_stats(&self) -> (usize, usize, usize) {
+        let sz = std::mem::size_of::<ShortLite>();
+        let bytes = self.kept.capacity() * sz
+            + self.buf.capacity() * sz
+            // BTreeSet<i64>: ~11 keys per leaf node of ~ (11*8 + overhead) bytes -> ~16 B/key
+            + (self.hot_l.len() + self.hot_r.len()) * 16;
+        (self.kept.len(), self.buf.len(), bytes)
     }
 
     fn is_hot(&self, r: &ShortLite) -> bool {

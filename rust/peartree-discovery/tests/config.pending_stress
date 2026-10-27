@@ -1,0 +1,61 @@
+# Local (no external tracks) copy of cluster/config.discovery.grch37.tprt2frag for the
+# disc_agree PENDING memory stress test (tests/gen_pending_stress.py; see
+# analysis/discovery_mem/REPORT.md). Differences from the farm config, all because this
+# runs on a reference-free synthetic BAM: contig_allowlist = 1,2; foldback_filter and
+# splice_hallmark OFF (they need hg19.2bit / the exon track and do not touch the retained-
+# breakpoint mechanism being measured). Every evidence / TPRT / disc_agree key is identical.
+min_mapq = 60
+contig_allowlist = 1,2
+
+evidence_sidecar = true
+fetch_all_mates = true
+ignore_dup_flag = false
+drop_dup_in_polya_path = true
+min_evidence_fragments_per_sample = 2
+dedup_coord_tolerance = 5
+disc_agree_second_fragment = true
+disc_agree_span = 500
+disc_agree_max_anchors = 16
+max_mates_per_breakpoint = 50
+max_evidence_reads_per_breakpoint = 200
+
+max_target_site_deletion = 30
+allow_blunt_pairs = true
+max_l1_mediated_span = 0
+l1_mediated_min_polya = 10
+one_sided_loci = true
+one_sided_min_fragments = 2
+one_sided_require_polya = true
+one_sided_min_polya = 10
+one_sided_min_spanning_fragments = 2
+one_sided_span_beyond = 10
+polya_rescue_min_fragments = 2
+clip_slippage_junction_spare = 20
+short_polya_clip = true
+short_overhang_evidence = true
+short_overhang_window = 3
+short_overhang_max = 20
+max_short_per_breakpoint = 100
+
+foldback_filter = false
+splice_hallmark = false
+
+slippage_filter = true
+slippage_min_ref_run = 8
+slippage_min_clip_frac = 0.6
+slippage_max_period = 6
+clip_slippage_filter = true
+clip_slippage_min_run = 11
+clip_slippage_max_entropy = 1.95
+clip_slippage_any_base = true
+
+coverage_mask = true
+coverage_mask_multiplier = 5.0
+mate_anchor_rescue = true
+discordant_anchor = false
+discordant_min_reads = 3
+discordant_window = 50
+discordant_max_tlen = 1000
+discordant_rescue_span = 300
+discordant_coverage_max_mult = 3.0
+discordant_mate_min_kmer_div = 0.5
