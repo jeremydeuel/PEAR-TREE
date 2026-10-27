@@ -55,6 +55,28 @@ pub struct Breakpoint {
     /// mate pass decides whether a discordant pair agrees on its insert (see `AgreePending`).
     /// Always None after `Discovery::resolve_disc_agree` and when the key is off.
     pub agree: Option<Box<AgreePending>>,
+    /// BGZF virtual position (`u64::from(bgzf::VirtualPosition)`) of the source record in
+    /// the input BAM; 0 for a synthesised consensus breakpoint / CRAM input. Lets a pending
+    /// junction be rebuilt from the BAM (`mem_budget_mb`, crate::compact).
+    pub vp: u64,
+    /// header index of `reference_name` (-1 unknown). With `ord`, the key that places a
+    /// rebuilt compact junction back at its slot: final breakpoints are in (ref_id, ord)
+    /// order per side (contigs in scan order, junctions in cleanup order within a contig).
+    pub ref_id: i32,
+    /// per-contig creation sequence number assigned by `Discovery::cleanup` (0 until then)
+    pub ord: u64,
+    /// `mem_budget_mb` only: the BGZF addresses a PENDING junction needs to be converted to
+    /// the compact form (every clip record of its cluster, in scan order, then its selected
+    /// DISC / SHORT sidecar reads in list order). None when unlimited or not pending.
+    pub src: Option<Box<SrcOffsets>>,
+}
+
+/// Record addresses behind a pending junction (see `Breakpoint::src`).
+#[derive(Clone, Debug, Default)]
+pub struct SrcOffsets {
+    pub clip: Vec<u64>,
+    pub disc: Vec<u64>,
+    pub short: Vec<u64>,
 }
 
 impl Breakpoint {
@@ -96,6 +118,10 @@ impl Breakpoint {
             own: (-1, -1),
             n_frags_span_polya: 0,
             agree: None,
+            vp: 0,
+            ref_id: -1,
+            ord: 0,
+            src: None,
         }
     }
 }
@@ -773,9 +799,15 @@ pub fn join(mut breakpoints: Vec<Breakpoint>, cfg: &DiscoveryConfig, evidence_fl
     // legacy n_reads double-counts LEFT reads at delta 0; it only feeds the Feature A
     // rescue (off by default), so the legacy value is kept unless in fragment mode.
     b.n_reads = if frag_mode { n_used } else { clipped.len() };
+    b.ref_id = breakpoints[0].ref_id;
     b.ev = merge_ev(&breakpoints, cfg);
     if pending {
         // held until the mate pass; `passed` is counted on promotion
+        if cfg.mem_budget_mb.is_some() {
+            // the cluster's record addresses, scan order, duplicates included (the compact
+            // form rebuilds the junction by re-reading exactly these)
+            b.src = Some(Box::new(SrcOffsets { clip: breakpoints.iter().map(|x| x.vp).collect(), ..Default::default() }));
+        }
         let mut inserts: Vec<Vec<u8>> = Vec::new();
         for (&x, &bi) in bps.iter().zip(&bps_idx) {
             let ins = &agree_raw[bi].0;

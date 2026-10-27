@@ -400,6 +400,17 @@ pub struct DiscoveryConfig {
     pub foldback_window: i64,
     /// Probes below this Shannon entropy (bits) are not judged (a homopolymer >= 8 never is).
     pub foldback_min_entropy: f64,
+    /// Memory budget (MiB) for the pool of `disc_agree_second_fragment` PENDING junctions
+    /// held between extract and the mate pass (analysis/discovery_mem/BUDGET.md). `None` =
+    /// unlimited = every pending junction is kept FULL (legacy behaviour). `Some(n)`: pending
+    /// junctions are kept FULL while their ACCOUNTED bytes (crate::mem, not RSS, so the switch
+    /// point is deterministic) stay <= n MiB; at the first overflow every pending junction is
+    /// converted in place to the COMPACT form (crate::compact: BGZF record addresses + what the
+    /// mate pass needs) and all later ones are stored compact; promoted compact junctions are
+    /// rebuilt from the BAM after the mate pass. 0 = everything compact. Output is identical
+    /// for every value (the representation is never observable). Env `PEARTREE_MEM_BUDGET_MB`
+    /// wins over the file. BAM input only (CRAM has no record addresses: ignored with a note).
+    pub mem_budget_mb: Option<u64>,
 }
 
 impl Default for DiscoveryConfig {
@@ -497,6 +508,7 @@ impl Default for DiscoveryConfig {
             foldback_min_short: MIN_CLIP_LEN,
             foldback_window: 50,
             foldback_min_entropy: 1.5,
+            mem_budget_mb: None,
         }
     }
 }
@@ -676,6 +688,13 @@ impl DiscoveryConfig {
             "foldback_min_short" => self.foldback_min_short = parse_num(val)?,
             "foldback_window" => self.foldback_window = parse_num(val)?,
             "foldback_min_entropy" => self.foldback_min_entropy = parse_num(val)?,
+            "mem_budget_mb" => {
+                self.mem_budget_mb = if val.eq_ignore_ascii_case("none") || val.eq_ignore_ascii_case("unlimited") {
+                    None
+                } else {
+                    Some(parse_num(val)?)
+                }
+            }
             other => eprintln!("warning: ignoring unknown config key '{other}'"),
         }
         Ok(())
@@ -693,6 +712,16 @@ impl DiscoveryConfig {
         // PEARTREE_KEEP_FULLMAP=1 keeps full-mapping reads (env wins over the file).
         if matches!(std::env::var("PEARTREE_KEEP_FULLMAP").as_deref(), Ok("1") | Ok("true") | Ok("True")) {
             self.reject_fully_mapping_reads = false;
+        }
+        // PEARTREE_MEM_BUDGET_MB caps the pending-junction pool (env wins over the file;
+        // empty / "none" / "unlimited" = unset).
+        if let Ok(v) = std::env::var("PEARTREE_MEM_BUDGET_MB") {
+            let t = v.trim();
+            self.mem_budget_mb = if t.is_empty() || t.eq_ignore_ascii_case("none") || t.eq_ignore_ascii_case("unlimited") {
+                None
+            } else {
+                Some(t.parse().map_err(|_| format!("PEARTREE_MEM_BUDGET_MB: not a valid integer (MiB): '{v}'"))?)
+            };
         }
         // PEARTREE_MATE_RESCUE toggles mate-anchored rescue (env wins over the file).
         match std::env::var("PEARTREE_MATE_RESCUE").as_deref() {

@@ -1,18 +1,19 @@
 //! Port of src/discovery.py (Discovery).
 
 use std::fs::File;
-use std::io::{self, Read, Write};
+use std::io::{self, Write};
 use std::num::NonZeroUsize;
 
 use noodles_bam as bam;
 use noodles_bgzf as bgzf;
-use noodles_core::Region;
+
 use noodles_cram as cram;
 use noodles_fasta as fasta;
 use noodles_sam::alignment::Record as AlignmentRecord;
 use noodles_sam::Header;
 use rustc_hash::{FxHashMap, FxHashSet};
 
+use crate::compact::CompactPool;
 use crate::config::*;
 use crate::coverage::Coverage;
 use crate::evidence::{
@@ -195,10 +196,17 @@ fn one_sided_ok(c: &DiscoveryConfig, b: &Breakpoint) -> bool {
 /// disc_agree: a pending junction waiting for the inside mate of one of its anchors.
 #[derive(Clone, Copy)]
 struct AgreeWait {
-    left: bool,
-    idx: usize,
+    at: WaitAt,
     anchor_read1: bool,
     anchor_reverse: bool,
+}
+
+/// Where a pending junction lives: a FULL slot of a final vector, or the compact pool.
+#[derive(Clone, Copy)]
+enum WaitAt {
+    Left(usize),
+    Right(usize),
+    Compact(u32),
 }
 
 #[derive(Clone, Copy)]
@@ -206,6 +214,8 @@ enum BpRef {
     Left(usize),
     Right(usize),
     PolyA(usize),
+    /// a compact pending junction (index into `Discovery::compact`)
+    Compact(u32),
 }
 
 #[derive(Clone, Copy)]
@@ -257,19 +267,64 @@ struct DiscordantCluster {
     rte_origin: f64,
 }
 
-/// Open the BAM as a record reader. With `bam_threads > 1` the BGZF blocks are
-/// decoded on a worker pool (SPD-2); otherwise the single-threaded decoder is used,
-/// preserving the documented single-core footprint. Both yield identical records in
-/// identical order, so output stays byte-identical.
-fn open_bam(path: &str, bam_threads: usize) -> io::Result<bam::io::Reader<Box<dyn Read>>> {
-    let file = File::open(path)?;
-    let inner: Box<dyn Read> = if bam_threads > 1 {
-        let wc = NonZeroUsize::new(bam_threads).unwrap_or(NonZeroUsize::MIN);
-        Box::new(bgzf::io::MultithreadedReader::with_worker_count(wc, file))
-    } else {
-        Box::new(bgzf::io::Reader::new(file))
-    };
-    Ok(bam::io::Reader::from(inner))
+/// Linear BAM record reader that also exposes the BGZF virtual position of the NEXT
+/// record (`vp()`), which the former `Box<dyn Read>` erasure hid. With `bam_threads > 1`
+/// the BGZF blocks are decoded on a worker pool (SPD-2); otherwise the single-threaded
+/// decoder is used, preserving the documented single-core footprint. Both yield identical
+/// records in identical order, so output stays byte-identical. The record addresses let a
+/// budgeted pending junction be rebuilt from the BAM (`mem_budget_mb`, crate::compact).
+enum BamIn {
+    One(bam::io::Reader<bgzf::io::Reader<File>>),
+    Multi(bam::io::Reader<bgzf::io::MultithreadedReader<File>>),
+}
+
+impl BamIn {
+    fn open(path: &str, bam_threads: usize) -> io::Result<BamIn> {
+        let file = File::open(path)?;
+        Ok(if bam_threads > 1 {
+            let wc = NonZeroUsize::new(bam_threads).unwrap_or(NonZeroUsize::MIN);
+            BamIn::Multi(bam::io::Reader::from(bgzf::io::MultithreadedReader::with_worker_count(wc, file)))
+        } else {
+            BamIn::One(bam::io::Reader::from(bgzf::io::Reader::new(file)))
+        })
+    }
+
+    fn read_header(&mut self) -> io::Result<Header> {
+        match self {
+            BamIn::One(r) => r.read_header(),
+            BamIn::Multi(r) => r.read_header(),
+        }
+    }
+
+    fn read_record(&mut self, record: &mut bam::Record) -> io::Result<usize> {
+        match self {
+            BamIn::One(r) => r.read_record(record),
+            BamIn::Multi(r) => r.read_record(record),
+        }
+    }
+
+    /// Virtual position of the next record (call BEFORE `read_record`).
+    fn vp(&self) -> u64 {
+        match self {
+            BamIn::One(r) => u64::from(r.get_ref().virtual_position()),
+            BamIn::Multi(r) => u64::from(r.get_ref().virtual_position()),
+        }
+    }
+}
+
+/// Exactly the record filter of `bam::io::Reader::query` for a whole-contig region
+/// (`Region::new(name, ..)`): the record is placed on `cid` and has an alignment start and
+/// end (an unbounded interval intersects every such span). Used by the SPD-3 worker path,
+/// which walks the index chunks itself so it can record each record's virtual position.
+fn query_intersects(record: &bam::Record, cid: usize) -> io::Result<bool> {
+    Ok(matches!(
+        (
+            record.reference_sequence_id().transpose()?,
+            record.alignment_start().transpose()?,
+            record.alignment_end().transpose()?
+        ),
+        (Some(id), Some(_), Some(_)) if id == cid
+    ))
 }
 
 /// True when the input is a CRAM file (by extension).
@@ -416,7 +471,7 @@ pub struct Discovery {
     /// TPRT sidecar: the current contig's discordant-anchor observations (compact, no
     /// sequence), attached to nearby final breakpoints in `cleanup`. Empty unless
     /// `evidence_sidecar` is on.
-    sc_disc_tmp: Vec<DiscLite>,
+    sc_disc_tmp: Vec<(DiscLite, u64)>,
     /// TPRT sidecar: short-overhang candidate collector for the current contig (None
     /// unless `evidence_sidecar` && `short_overhang_evidence`).
     sc_short: Option<ShortCollector>,
@@ -427,6 +482,22 @@ pub struct Discovery {
     /// breakpoints it dropped (output + discordant rescue).
     foldback: Option<TwoBit>,
     foldback_rejected: std::cell::Cell<u64>,
+    /// `mem_budget_mb` in bytes (None = unlimited): the pool of PENDING disc_agree junctions
+    /// is kept FULL while `pending_full_bytes` <= this; see `admit` / `trip_budget`. A SPD-3
+    /// worker gets `budget / contig_threads`; the parent applies the full budget at the merge.
+    budget_bytes: Option<usize>,
+    /// accounted bytes (crate::mem) of the FULL pending junctions currently held
+    pending_full_bytes: usize,
+    /// set at the first overflow: every pending junction from then on is stored compact
+    compact_mode: bool,
+    /// the compact pending junctions (empty unless the budget tripped)
+    compact: CompactPool,
+    /// (contig, position, LEFT) of the junction whose admission tripped the budget
+    trip_at: Option<(String, i64, bool)>,
+    /// junctions converted FULL -> COMPACT in place (as opposed to stored compact at once)
+    n_converted: u64,
+    /// per-contig creation counter for `Breakpoint::ord`
+    next_ord: u64,
 }
 
 impl Discovery {
@@ -438,6 +509,7 @@ impl Discovery {
         rm_mask: Option<IntervalIndex>,
     ) -> Self {
         let coverage = Coverage::new(config.coverage_bin_size);
+        let config_budget = config.mem_budget_mb;
         Discovery {
             temporary_breakpoints: Vec::new(),
             final_left_breakpoints: Vec::new(),
@@ -464,6 +536,13 @@ impl Discovery {
             pa_pair_floor_rejected: std::cell::Cell::new(0),
             foldback: None,
             foldback_rejected: std::cell::Cell::new(0),
+            budget_bytes: budget_bytes(&config_budget),
+            pending_full_bytes: 0,
+            compact_mode: false,
+            compact: CompactPool::default(),
+            trip_at: None,
+            n_converted: 0,
+            next_ord: 0,
         }
     }
 
@@ -519,7 +598,7 @@ impl Discovery {
                 cov_accumulate(&mut self.coverage, &mut cur_id, &mut cur_name, &mut bins, &read, bin_size);
             }
         } else {
-            let mut reader = open_bam(&self.filepath, self.bam_threads)?;
+            let mut reader = BamIn::open(&self.filepath, self.bam_threads)?;
             let header = reader.read_header()?;
             let mut record = bam::Record::default();
             while reader.read_record(&mut record)? != 0 {
@@ -752,44 +831,11 @@ impl Discovery {
         self.exclude.as_ref().is_some_and(|ix| ix.contains(name, pos))
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn add_breakpoint(
-        &mut self,
-        side: i32,
-        breakpoint: i64,
-        qname: &str,
-        clipped: QualitySeq,
-        unclipped: QualitySeq,
-        is_read1: bool,
-        is_forward: bool,
-        exclude: bool,
-        mapq: u8,
-        flag: u16,
-        mate: (i32, i64),
-        own: (i32, i64),
-    ) {
-        let mut bp = Breakpoint::new(
-            side,
-            self.reference_name.clone().unwrap_or_default(),
-            breakpoint,
-            Some(qname.to_string()),
-            clipped.upper(),
-            unclipped.upper(),
-            Some(is_read1),
-            Some(is_forward),
-            exclude,
-            mapq,
-        );
-        bp.flag = flag;
-        (bp.mref, bp.mpos) = mate;
-        bp.own = own;
-        self.temporary_breakpoints.push(bp);
-    }
-
     /// Debug-gated (`PEARTREE_MEM_DEBUG`) phase-boundary line attributing resident
     /// bytes to each accumulator. `tmp` is the peak `temporary_breakpoints` slice
     /// for this tag (empty when it has already been drained).
     fn mem_report(&self, tag: &str, tmp: &[Breakpoint]) {
+        let pool = (self.compact.len(), self.compact.bytes());
         let disc_bytes: usize = self
             .discordant_obs
             .iter()
@@ -805,6 +851,7 @@ impl Discovery {
             self.discordant_obs.len(),
             disc_bytes,
             (sk, sb, sbytes, self.sc_disc_tmp.len()),
+            pool,
         );
     }
 
@@ -817,7 +864,7 @@ impl Discovery {
             self.mem_report(&tag, &self.temporary_breakpoints);
         }
         // short-overhang candidates of the just-finished contig (empty when off)
-        let shorts: Vec<ShortLite> = self.sc_short.as_mut().map(|c| c.finish()).unwrap_or_default();
+        let shorts: Vec<(ShortLite, u64)> = self.sc_short.as_mut().map(|c| c.finish()).unwrap_or_default();
         if self.reference_name.is_none() {
             self.sc_disc_tmp.clear();
             return;
@@ -826,7 +873,8 @@ impl Discovery {
             self.sc_disc_tmp.clear();
             return;
         }
-        let (l0, r0) = (self.final_left_breakpoints.len(), self.final_right_breakpoints.len());
+        // this contig's discordant anchors: sidecar DISC lists and disc_agree candidates
+        let disc = std::mem::take(&mut self.sc_disc_tmp);
         // This contig's new final breakpoints are staged here and appended with
         // `reserve_exact`, so the final vectors grow by exactly what each contig adds.
         // Pushing them one by one let `Vec` double its capacity (up to 1x len of unused
@@ -847,6 +895,10 @@ impl Discovery {
         left_bps.sort_by_key(|b| b.breakpoint);
         right_bps.sort_by_key(|b| b.breakpoint);
 
+        let c = &self.config;
+        let (agree_on, a_span, a_cap, tol) = (c.disc_agree_active(), c.disc_agree_span, c.disc_agree_max_anchors, c.dedup_coord_tolerance);
+        let (sidecar, d_span, d_cap) = (c.evidence_sidecar, c.sidecar_disc_span, c.max_evidence_reads_per_breakpoint);
+        let (s_w, s_m, s_cap) = (c.short_overhang_window, c.short_overhang_max, c.max_short_per_breakpoint);
         for (side_bps, out) in [
             (left_bps, true),  // true -> final_left
             (right_bps, false),
@@ -882,7 +934,7 @@ impl Discovery {
                     None
                 };
                 match join(g, &self.config, floor, &mut self.stats) {
-                    Some(joined) => {
+                    Some(mut joined) => {
                         // a pending single-molecule junction is below the normal floor: it
                         // stays a Feature A missing-junction candidate as in the legacy path
                         if joined.agree.is_some() {
@@ -894,11 +946,28 @@ impl Discovery {
                                 }
                             }
                         }
-                        if out {
-                            new_l.push(joined);
-                        } else {
-                            new_r.push(joined);
+                        // Per-junction finish (each step depends only on this junction and
+                        // the contig's complete collectors, so doing it here instead of over
+                        // the contig's slice afterwards is the same computation): disc_agree
+                        // gives a pending junction its candidate anchors and drops it when it
+                        // has none (it can never reach 2 fragments); the sidecar attaches the
+                        // DISC and SHORT lite lists.
+                        if agree_on && joined.agree.is_some() {
+                            select_agree_anchors_one(&mut joined, &disc, out, a_span, a_cap, tol);
+                            if joined.agree.as_ref().is_some_and(|a| a.anchors.is_empty()) {
+                                self.stats.disc_agree_no_anchor += 1;
+                                continue;
+                            }
                         }
+                        if sidecar && !disc.is_empty() {
+                            attach_disc_one(&mut joined, &disc, out, d_span, d_cap);
+                        }
+                        if !shorts.is_empty() {
+                            attach_short_one(&mut joined, &shorts, out, s_w, s_m, s_cap);
+                        }
+                        joined.ord = self.next_ord;
+                        self.next_ord += 1;
+                        self.admit(joined, out, &mut new_l, &mut new_r);
                     }
                     // below the normal floor but a valid clip cluster >= partner floor:
                     // keep only as a discordant missing-junction candidate.
@@ -918,35 +987,73 @@ impl Discovery {
         self.final_left_breakpoints.append(&mut new_l);
         self.final_right_breakpoints.reserve_exact(new_r.len());
         self.final_right_breakpoints.append(&mut new_r);
-        // TPRT sidecar: attach this contig's discordant anchors to its new breakpoints.
-        let disc = std::mem::take(&mut self.sc_disc_tmp);
-        // disc_agree: give this contig's pending junctions their candidate anchors; drop the
-        // ones without any (they can never reach 2 fragments)
-        if self.config.disc_agree_active() {
-            let (span, cap, tol) = (self.config.disc_agree_span, self.config.disc_agree_max_anchors, self.config.dedup_coord_tolerance);
-            for (v, start, left) in [(&mut self.final_left_breakpoints, l0, true), (&mut self.final_right_breakpoints, r0, false)] {
-                if v[start..].iter().any(|b| b.agree.is_some()) {
-                    let mut tail = v.split_off(start);
-                    let before = tail.len();
-                    select_agree_anchors(&mut tail, &disc, left, span, cap, tol);
-                    tail.retain(|b| b.agree.as_ref().map_or(true, |a| !a.anchors.is_empty()));
-                    self.stats.disc_agree_no_anchor += (before - tail.len()) as u64;
-                    v.append(&mut tail);
+    }
+
+    /// Place one finished junction: an ordinary final, or a pending disc_agree junction
+    /// under the memory budget. Without a budget (or for a non-pending junction) it is
+    /// simply pushed to the side's staging vector, as before. With a budget, a pending
+    /// junction is pushed FULL and its accounted bytes added to the pool total; the first
+    /// time the total exceeds the budget, `trip_budget` converts every FULL pending junction
+    /// in place and switches to compact storage for all later ones. Deterministic: the trip
+    /// point depends only on the junction sequence and the accounted sizes, never on RSS.
+    fn admit(&mut self, bp: Breakpoint, left: bool, new_l: &mut Vec<Breakpoint>, new_r: &mut Vec<Breakpoint>) {
+        if bp.agree.is_some() {
+            if let Some(budget) = self.budget_bytes {
+                if self.compact_mode {
+                    self.compact.push_from(&bp, left, 2);
+                    return;
                 }
+                self.pending_full_bytes += crate::mem::breakpoint_breakdown(&bp).total();
+                let trip = self.pending_full_bytes > budget;
+                let at = (bp.reference_name.clone(), bp.breakpoint, left);
+                if left {
+                    new_l.push(bp);
+                } else {
+                    new_r.push(bp);
+                }
+                if trip {
+                    self.trip_budget(at, new_l, new_r);
+                }
+                return;
             }
         }
-        if self.config.evidence_sidecar && !disc.is_empty() {
-            let span = self.config.sidecar_disc_span;
-            let cap = self.config.max_evidence_reads_per_breakpoint;
-            attach_disc(&mut self.final_left_breakpoints[l0..], &disc, true, span, cap);
-            attach_disc(&mut self.final_right_breakpoints[r0..], &disc, false, span, cap);
+        if left {
+            new_l.push(bp);
+        } else {
+            new_r.push(bp);
         }
-        if !shorts.is_empty() {
-            let c = &self.config;
-            let (w, m, cap) = (c.short_overhang_window, c.short_overhang_max, c.max_short_per_breakpoint);
-            attach_short(&mut self.final_left_breakpoints[l0..], &shorts, true, w, m, cap);
-            attach_short(&mut self.final_right_breakpoints[r0..], &shorts, false, w, m, cap);
-        }
+    }
+
+    /// The pending pool just exceeded `mem_budget_mb`: convert every FULL pending junction
+    /// to the compact form, in slot order (LEFT finals, LEFT staging, RIGHT finals, RIGHT
+    /// staging — i.e. the order of `final_left_breakpoints` ++ `final_right_breakpoints` as
+    /// they would have been), and store all later pending junctions compact. The compact
+    /// junctions leave the final vectors; they are merged back by (ref_id, ord) after the
+    /// mate pass, so every index-based structure built later sees the usual order.
+    fn trip_budget(&mut self, at: (String, i64, bool), new_l: &mut Vec<Breakpoint>, new_r: &mut Vec<Breakpoint>) {
+        self.compact_mode = true;
+        self.trip_at = Some(at);
+        let pool = &mut self.compact;
+        let before = pool.len();
+        let mut convert = |v: &mut Vec<Breakpoint>, left: bool| {
+            v.retain(|b| {
+                if b.agree.is_some() {
+                    pool.push_from(b, left, 2);
+                    false
+                } else {
+                    true
+                }
+            });
+        };
+        convert(&mut self.final_left_breakpoints, true);
+        convert(new_l, true);
+        convert(&mut self.final_right_breakpoints, false);
+        convert(new_r, false);
+        self.n_converted += (pool.len() - before) as u64;
+        self.pending_full_bytes = 0;
+        // the vectors shrank: hand the slack back (the reserve_exact discipline of cleanup)
+        self.final_left_breakpoints.shrink_to_fit();
+        self.final_right_breakpoints.shrink_to_fit();
     }
 
     pub fn extract_chimeric(&mut self) -> io::Result<()> {
@@ -955,21 +1062,29 @@ impl Discovery {
         self.reference_name = None;
         let mut current_ref_id: Option<usize> = None;
         if let Some(cid) = self.only_contig {
-            // SPD-3 worker path: fetch just this contig via the index.
+            // SPD-3 worker path: fetch just this contig via the index. The chunk walk is
+            // `bam::io::Reader::query`'s (seek to each chunk start, read while before its end,
+            // keep the records `query_intersects`), done by hand so that every record's
+            // virtual position is known before it is decoded.
             let mut reader = bam::io::indexed_reader::Builder::default().build_from_path(&self.filepath)?;
             let header = reader.read_header()?;
-            let name: Vec<u8> = header
-                .reference_sequences()
-                .get_index(cid)
-                .map(|(k, _)| {
-                    let b: &[u8] = k.as_ref();
-                    b.to_vec()
-                })
-                .unwrap_or_default();
-            let region = Region::new(name, ..);
-            for rec in reader.query(&header, &region)? {
-                let rec = rec?;
-                self.handle_record(&rec, &header, min_mapq, reject_fullmap, &mut current_ref_id)?;
+            let chunks = reader.index().query(cid, (..).into())?;
+            let mut record = bam::Record::default();
+            for chunk in chunks {
+                reader.get_mut().seek(chunk.start())?;
+                loop {
+                    let vpos = reader.get_ref().virtual_position();
+                    if vpos >= chunk.end() {
+                        break;
+                    }
+                    if reader.read_record(&mut record)? == 0 {
+                        break;
+                    }
+                    if !query_intersects(&record, cid)? {
+                        continue;
+                    }
+                    self.handle_record(&record, &header, min_mapq, reject_fullmap, &mut current_ref_id, u64::from(vpos))?;
+                }
             }
         } else if is_cram(&self.filepath) {
             // native CRAM full scan (reference required to decode read sequences).
@@ -978,14 +1093,18 @@ impl Discovery {
             let header = reader.read_header()?;
             for result in reader.records(&header) {
                 let rec = result?;
-                self.handle_record(&rec, &header, min_mapq, reject_fullmap, &mut current_ref_id)?;
+                self.handle_record(&rec, &header, min_mapq, reject_fullmap, &mut current_ref_id, 0)?;
             }
         } else {
-            let mut reader = open_bam(&self.filepath, self.bam_threads)?;
+            let mut reader = BamIn::open(&self.filepath, self.bam_threads)?;
             let header = reader.read_header()?;
             let mut record = bam::Record::default();
-            while reader.read_record(&mut record)? != 0 {
-                self.handle_record(&record, &header, min_mapq, reject_fullmap, &mut current_ref_id)?;
+            loop {
+                let vp = reader.vp();
+                if reader.read_record(&mut record)? == 0 {
+                    break;
+                }
+                self.handle_record(&record, &header, min_mapq, reject_fullmap, &mut current_ref_id, vp)?;
             }
         }
         self.cleanup();
@@ -994,6 +1113,7 @@ impl Discovery {
 
     /// Per-read body shared by the full-scan and the SPD-3 per-contig indexed paths.
     /// A read-level `continue` in the original single loop is a `return Ok(())` here.
+    /// `vp` is the record's BGZF virtual position (0 when unknown: CRAM).
     fn handle_record(
         &mut self,
         record: &dyn AlignmentRecord,
@@ -1001,6 +1121,7 @@ impl Discovery {
         min_mapq: u8,
         reject_fullmap: bool,
         current_ref_id: &mut Option<usize>,
+        vp: u64,
     ) -> io::Result<()> {
         let read = BamRead::from_record(record, header)?;
 
@@ -1119,15 +1240,7 @@ impl Discovery {
                 || (read.mate_pos - read.reference_start).abs() > self.config.discordant_max_tlen
                 || read.mate_is_reverse == read.is_reverse;
             if discordant {
-                self.sc_disc_tmp.push(DiscLite {
-                    frag: frag_hash(read.name_bytes()),
-                    flag: read.flag,
-                    ref_id: ref_id as i32,
-                    start: read.reference_start,
-                    end: read.reference_end,
-                    mref: mate_loc(&read).0,
-                    mpos: mate_loc(&read).1,
-                });
+                self.sc_disc_tmp.push((disc_lite_of(&read, ref_id as i32), vp));
             }
         }
 
@@ -1140,108 +1253,15 @@ impl Discovery {
         if self.config.evidence_sidecar && self.config.short_overhang_evidence {
             if read.mapped && !read.is_supplementary && read.mapq >= min_mapq && read.reference_start >= 0 {
                 let (w, m) = (self.config.short_overhang_window, self.config.short_overhang_max);
-                self.sc_short.get_or_insert_with(|| ShortCollector::new(w, m)).push(ShortLite {
-                    frag: frag_hash(read.name_bytes()),
-                    flag: read.flag,
-                    ref_id: ref_id as i32,
-                    start: read.reference_start,
-                    end: read.reference_end,
-                    lead_soft: read.lead_soft as u32,
-                    trail_soft: read.trail_soft as u32,
-                    mref: mate_loc(&read).0,
-                    mpos: mate_loc(&read).1,
-                });
+                self.sc_short.get_or_insert_with(|| ShortCollector::new(w, m)).push(short_lite_of(&read, ref_id as i32), vp);
             }
         }
 
-        let left_soft = read.left_is_soft;
-        let right_soft = read.right_is_soft;
-        let left_len = read.left_len;
-        let right_len = read.right_len;
-
-        let clip: Option<i32> = if left_soft && !right_soft {
-            Some(CLIP_LEFT)
-        } else if right_soft && !left_soft {
-            Some(CLIP_RIGHT)
-        } else if right_soft && left_soft {
-            if left_len > right_len {
-                Some(CLIP_LEFT)
-            } else if right_len > left_len {
-                Some(CLIP_RIGHT)
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-
-        let Some(clip) = clip else { return Ok(()) };
-
-        // drop reads that map contiguously elsewhere in the reference
-        // (XA/SA full-length alt): not real chimeric junctions.
-        if reject_fullmap && maps_fully_elsewhere(&read) {
-            return Ok(());
-        }
-
-        // cruciform / short-indel exclusion via SA tag
-        let mut exclude_flag = false;
-        if read.is_supplementary {
-            if let Some(sa) = read.sa() {
-                for part in sa.split(';') {
-                    if part.is_empty() {
-                        continue; // inner loop over SA parts
-                    }
-                    let fields: Vec<&str> = part.split(',').collect();
-                    if fields.len() >= 2 && fields[0] == ref_name {
-                        if let Ok(start) = fields[1].parse::<i64>() {
-                            if (read.reference_start - start).abs() < self.config.exclude_same_contig_supplementary {
-                                exclude_flag = true;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // surviving clip candidate: now decode the heavy fields (SPD-1).
-        let seq = read.seq();
-        let qname = read.query_name();
-        let full = QualitySeq::new(seq.clone(), read.qual());
-        let n = seq.len();
-
-        if clip == CLIP_LEFT {
-            // adapter check on the last MIN_CLIP_LEN of the clipped part, revcomped
-            let clip_part = &seq[..left_len];
-            let sub = &clip_part[clip_part.len().saturating_sub(MIN_CLIP_LEN)..];
-            if is_adapter(&revcomp_bytes(sub)) {
-                return Ok(());
-            }
-            let clipped = full.pyslice(None, Some(left_len as isize));
-            let unclipped = if right_soft {
-                full.pyslice(Some(left_len as isize), Some(-(right_len as isize)))
-            } else {
-                full.pyslice(Some(left_len as isize), None)
-            };
-            self.add_breakpoint(clip, read.reference_start, &qname, clipped, unclipped, read.is_read1, read.is_forward(), exclude_flag, read.mapq, read.flag, mate_loc(&read), own_loc(&read));
+        if let Some(bp) = clip_breakpoint(&read, ref_name, &self.config, reject_fullmap, ref_id as i32, vp) {
+            let (pos, left) = (bp.breakpoint, bp.side == CLIP_LEFT);
+            self.temporary_breakpoints.push(bp);
             if let Some(c) = self.sc_short.as_mut() {
-                c.hot(read.reference_start, true);
-            }
-        } else {
-            // CLIP_RIGHT: adapter check on the first MIN_CLIP_LEN of the clipped part
-            let clip_part = &seq[n - right_len..];
-            let sub = &clip_part[..clip_part.len().min(MIN_CLIP_LEN)];
-            if is_adapter(sub) {
-                return Ok(());
-            }
-            let clipped = full.pyslice(Some(-(right_len as isize)), None);
-            let unclipped = if left_soft {
-                full.pyslice(Some(left_len as isize), Some(-(right_len as isize)))
-            } else {
-                full.pyslice(None, Some(-(right_len as isize)))
-            };
-            self.add_breakpoint(clip, read.reference_end, &qname, clipped, unclipped, read.is_read1, read.is_forward(), exclude_flag, read.mapq, read.flag, mate_loc(&read), own_loc(&read));
-            if let Some(c) = self.sc_short.as_mut() {
-                c.hot(read.reference_end, false);
+                c.hot(pos, left);
             }
         }
         Ok(())
@@ -1252,24 +1272,40 @@ impl Discovery {
         let mut read2_bp: FxHashSet<String> = FxHashSet::default();
         let mut qmap: FxHashMap<String, BpRef> = FxHashMap::default();
 
-        for (idx, bp) in self.final_left_breakpoints.iter().enumerate() {
-            for (read_1, qname) in &bp.mates {
-                if *read_1 {
-                    read1_bp.insert(qname.clone());
-                } else {
-                    read2_bp.insert(qname.clone());
-                }
-                qmap.insert(qname.clone(), BpRef::Left(idx));
+        let mut add = |read_1: bool, qname: &str, r: BpRef| {
+            if read_1 {
+                read1_bp.insert(qname.to_string());
+            } else {
+                read2_bp.insert(qname.to_string());
             }
-        }
-        for (idx, bp) in self.final_right_breakpoints.iter().enumerate() {
-            for (read_1, qname) in &bp.mates {
-                if *read_1 {
-                    read1_bp.insert(qname.clone());
+            qmap.insert(qname.to_string(), r);
+        };
+        // Slot order per side. A compact pending junction's `has_mate` qnames enter the maps
+        // exactly where its FULL slot would have (later inserts overwrite earlier ones), so
+        // the two pending representations feed the mate pass identically.
+        for (left, bps) in [(true, &self.final_left_breakpoints), (false, &self.final_right_breakpoints)] {
+            let order = self.compact.side_order(left);
+            let (mut i, mut j) = (0usize, 0usize);
+            loop {
+                let take_full = match (bps.get(i), order.get(j)) {
+                    (None, None) => break,
+                    (Some(_), None) => true,
+                    (None, Some(_)) => false,
+                    (Some(b), Some(&c)) => (b.ref_id, b.ord) < self.compact.key(c),
+                };
+                if take_full {
+                    let r = if left { BpRef::Left(i) } else { BpRef::Right(i) };
+                    for (read_1, qname) in &bps[i].mates {
+                        add(*read_1, qname, r);
+                    }
+                    i += 1;
                 } else {
-                    read2_bp.insert(qname.clone());
+                    let c = order[j];
+                    for (read_1, q) in self.compact.mates(c) {
+                        add(read_1, &String::from_utf8_lossy(q), BpRef::Compact(c));
+                    }
+                    j += 1;
                 }
-                qmap.insert(qname.clone(), BpRef::Right(idx));
             }
         }
         for (idx, pa) in self.polya.iter().enumerate() {
@@ -1337,15 +1373,19 @@ impl Discovery {
             for result in reader.records(&header) {
                 let rec = result?;
                 let read = BamRead::from_record(&rec, &header)?;
-                self.apply_mate_record(&read, &read1_mates, &read2_mates, &qmap, &agree_map, capture_dests, min_mapq);
+                self.apply_mate_record(&read, &read1_mates, &read2_mates, &qmap, &agree_map, capture_dests, min_mapq, 0);
             }
         } else {
-            let mut reader = open_bam(&self.filepath, self.bam_threads)?;
+            let mut reader = BamIn::open(&self.filepath, self.bam_threads)?;
             let header = reader.read_header()?;
             let mut record = bam::Record::default();
-            while reader.read_record(&mut record)? != 0 {
+            loop {
+                let vp = reader.vp();
+                if reader.read_record(&mut record)? == 0 {
+                    break;
+                }
                 let read = BamRead::from_record(&record, &header)?;
-                self.apply_mate_record(&read, &read1_mates, &read2_mates, &qmap, &agree_map, capture_dests, min_mapq);
+                self.apply_mate_record(&read, &read1_mates, &read2_mates, &qmap, &agree_map, capture_dests, min_mapq, vp);
             }
         }
         Ok(())
@@ -1599,7 +1639,7 @@ impl Discovery {
                 self.sidecar_capture(&read, &reqs);
             }
         } else {
-            let mut reader = open_bam(&self.filepath, self.bam_threads)?;
+            let mut reader = BamIn::open(&self.filepath, self.bam_threads)?;
             let header = reader.read_header()?;
             let mut record = bam::Record::default();
             while reader.read_record(&mut record)? != 0 {
@@ -1829,6 +1869,7 @@ impl Discovery {
         agree_map: &FxHashMap<u64, Vec<AgreeWait>>,
         capture_dests: bool,
         min_mapq: u8,
+        vp: u64,
     ) {
         if drop_read(read, self.config.ignore_dup_flag) {
             return;
@@ -1838,18 +1879,32 @@ impl Discovery {
         if !agree_map.is_empty() && !read.is_supplementary {
             if let Some(waits) = agree_map.get(&frag_hash(read.name_bytes())) {
                 let stored = read.seq();
+                let mut scratch: Vec<Vec<u8>> = Vec::new();
                 for w in waits {
                     if read.is_read1 == w.anchor_read1 {
                         continue; // the anchor record itself
                     }
-                    let bp = if w.left { &mut self.final_left_breakpoints[w.idx] } else { &mut self.final_right_breakpoints[w.idx] };
-                    let Some(ag) = bp.agree.as_mut() else { continue };
-                    if ag.promoted {
-                        continue;
-                    }
                     let mate = mate_site_forward(&stored, read.is_reverse, w.anchor_reverse);
-                    if ag.inserts.iter().any(|ins| agrees(&mate, ins)) {
-                        ag.promoted = true;
+                    match w.at {
+                        WaitAt::Compact(c) => {
+                            if self.compact.promoted(c) {
+                                continue;
+                            }
+                            self.compact.inserts_into(c, &mut scratch);
+                            if scratch.iter().any(|ins| agrees(&mate, ins)) {
+                                self.compact.set_promoted(c);
+                            }
+                        }
+                        WaitAt::Left(idx) | WaitAt::Right(idx) => {
+                            let bp = if matches!(w.at, WaitAt::Left(_)) { &mut self.final_left_breakpoints[idx] } else { &mut self.final_right_breakpoints[idx] };
+                            let Some(ag) = bp.agree.as_mut() else { continue };
+                            if ag.promoted {
+                                continue;
+                            }
+                            if ag.inserts.iter().any(|ins| agrees(&mate, ins)) {
+                                ag.promoted = true;
+                            }
+                        }
                     }
                 }
             }
@@ -1873,9 +1928,11 @@ impl Discovery {
                     self.polya[i].sc_mate_routed = true;
                 }
             }
+            // a compact pending junction: remember the record's address; the sequence and
+            // landing site are derived from the re-read record if the junction is promoted
+            BpRef::Compact(c) => self.compact.captured_mates.push((c, vp)),
             BpRef::Left(i) | BpRef::Right(i) => {
-                let seq = clean_clipped_seq(&QualitySeq::new(read.seq(), read.qual()));
-                let seq = if read.is_forward() { seq } else { seq.revcomp() };
+                let seq = mate_seq_of(read);
                 // Feature B: capture the mate's landing site for the splice check.
                 let dest = (read.reference_sequence_id, read.reference_start);
                 let bp = match bpref {
@@ -1908,12 +1965,17 @@ impl Discovery {
                 let Some(ag) = bp.agree.as_mut() else { continue };
                 for d in std::mem::take(&mut ag.anchors) {
                     m.entry(d.frag).or_default().push(AgreeWait {
-                        left,
-                        idx,
+                        at: if left { WaitAt::Left(idx) } else { WaitAt::Right(idx) },
                         anchor_read1: d.flag & 0x40 != 0,
                         anchor_reverse: d.is_reverse(),
                     });
                 }
+            }
+        }
+        // compact pending junctions: the same (qname hash, read1, strand) per anchor
+        for c in 0..self.compact.len() as u32 {
+            for a in self.compact.anchors(c) {
+                m.entry(a.frag).or_default().push(AgreeWait { at: WaitAt::Compact(c), anchor_read1: a.read1, anchor_reverse: a.reverse });
             }
         }
         m
@@ -1945,12 +2007,204 @@ impl Discovery {
             promoted += passed;
             rejected += dropped;
         }
+        // compact pending junctions: counted here, materialised (promoted) or dropped
+        // (rejected) by `rebuild_compact`
+        for c in 0..self.compact.len() as u32 {
+            if self.compact.promoted(c) {
+                let side = if self.compact.hdr(c).left { CLIP_LEFT } else { CLIP_RIGHT };
+                self.stats.side_mut(side).passed += 1;
+                promoted += 1;
+            } else {
+                rejected += 1;
+            }
+        }
         self.stats.disc_agree_promoted += promoted;
         self.stats.disc_agree_rejected += rejected;
         eprintln!(
             "disc-agree second fragment: {} single-molecule junction(s) pending, {} without a candidate anchor, {} promoted (anchor mate agrees), {} rejected",
             self.stats.disc_agree_pending, self.stats.disc_agree_no_anchor, promoted, rejected
         );
+    }
+
+    /// `mem_budget_mb`: after the mate pass, rebuild every PROMOTED compact junction from
+    /// the BAM and merge it back into its slot; drop the rejected ones unread. One forward
+    /// pass over the sorted record addresses (seek only when the next wanted record is not
+    /// the next record): each clip record goes through `clip_breakpoint` -> the cluster
+    /// through `join()`, each DISC / SHORT read through its lite constructor, each captured
+    /// mate through `mate_seq_of` — the same functions the FULL path ran, on the same
+    /// records in the same order, so the rebuilt `Breakpoint` equals the one the FULL path
+    /// would have held. Prints the `[mem-budget]` summary line (always, when a budget is set).
+    fn rebuild_compact(&mut self) -> io::Result<()> {
+        let Some(budget) = self.budget_bytes else { return Ok(()) };
+        let t0 = std::time::Instant::now();
+        let pool = std::mem::take(&mut self.compact);
+        let n_compact = pool.len();
+        let arena_bytes = pool.used_bytes();
+        let promoted: Vec<u32> = (0..n_compact as u32).filter(|&c| pool.promoted(c)).collect();
+        // slot (index into `promoted`) of each compact junction, u32::MAX = rejected
+        let mut slot = vec![u32::MAX; n_compact];
+        for (p, &c) in promoted.iter().enumerate() {
+            slot[c as usize] = p as u32;
+        }
+        #[derive(Clone, Copy, PartialEq, Eq)]
+        enum Kind {
+            Clip,
+            Disc,
+            Short,
+            Mate,
+        }
+        #[derive(Clone, Copy)]
+        struct Req {
+            vp: u64,
+            kind: Kind,
+            p: u32,
+            k: u32,
+        }
+        #[derive(Default)]
+        struct Parts {
+            clip: Vec<Option<Breakpoint>>,
+            disc: Vec<Option<DiscLite>>,
+            short: Vec<Option<ShortLite>>,
+            mates: Vec<Option<(QualitySeq, (Option<usize>, i64))>>,
+        }
+        let mut reqs: Vec<Req> = Vec::new();
+        let mut parts: Vec<Parts> = Vec::with_capacity(promoted.len());
+        for (p, &c) in promoted.iter().enumerate() {
+            let (clip, disc, short) = pool.vps(c);
+            let mut pt = Parts::default();
+            for (list, kind) in [(&clip, Kind::Clip), (&disc, Kind::Disc), (&short, Kind::Short)] {
+                for (k, &vp) in list.iter().enumerate() {
+                    reqs.push(Req { vp, kind, p: p as u32, k: k as u32 });
+                }
+            }
+            pt.clip.resize_with(clip.len(), || None);
+            pt.disc.resize_with(disc.len(), || None);
+            pt.short.resize_with(short.len(), || None);
+            parts.push(pt);
+        }
+        // the mate records captured in the mate pass, in scan order per junction
+        for &(c, vp) in &pool.captured_mates {
+            let p = slot[c as usize];
+            if p != u32::MAX {
+                let k = parts[p as usize].mates.len() as u32;
+                parts[p as usize].mates.push(None);
+                reqs.push(Req { vp, kind: Kind::Mate, p, k });
+            }
+        }
+        let n_req = reqs.len();
+        reqs.sort_by_key(|r| r.vp);
+        let (mut n_seek, mut n_read) = (0u64, 0u64);
+        if !reqs.is_empty() {
+            let mut reader = bam::io::Reader::new(File::open(&self.filepath)?);
+            let header = reader.read_header()?;
+            let names: Vec<String> = header
+                .reference_sequences()
+                .keys()
+                .map(|k| {
+                    let b: &[u8] = k.as_ref();
+                    String::from_utf8_lossy(b).into_owned()
+                })
+                .collect();
+            let reject_fullmap = self.config.reject_fully_mapping_reads;
+            let mut record = bam::Record::default();
+            let mut next: Option<u64> = None; // address of the record the reader will yield next
+            let mut i = 0usize;
+            while i < reqs.len() {
+                let vp = reqs[i].vp;
+                if next != Some(vp) {
+                    reader.get_mut().seek(bgzf::VirtualPosition::from(vp))?;
+                    n_seek += 1;
+                }
+                if reader.read_record(&mut record)? == 0 {
+                    return Err(io::Error::new(io::ErrorKind::UnexpectedEof, format!("mem_budget: no record at virtual position {vp:#x}")));
+                }
+                n_read += 1;
+                next = Some(u64::from(reader.get_ref().virtual_position()));
+                let read = BamRead::from_record(&record, &header)?;
+                let ref_id = read.reference_sequence_id.map_or(-1, |x| x as i32);
+                while i < reqs.len() && reqs[i].vp == vp {
+                    let r = reqs[i];
+                    i += 1;
+                    let pt = &mut parts[r.p as usize];
+                    match r.kind {
+                        Kind::Clip => {
+                            let rn = names.get(ref_id.max(0) as usize).map(String::as_str).unwrap_or_default();
+                            let bp = clip_breakpoint(&read, rn, &self.config, reject_fullmap, ref_id, vp).ok_or_else(|| {
+                                io::Error::new(io::ErrorKind::InvalidData, format!("mem_budget: record at {vp:#x} is no longer a junction clip"))
+                            })?;
+                            pt.clip[r.k as usize] = Some(bp);
+                        }
+                        Kind::Disc => pt.disc[r.k as usize] = Some(disc_lite_of(&read, ref_id)),
+                        Kind::Short => pt.short[r.k as usize] = Some(short_lite_of(&read, ref_id)),
+                        Kind::Mate => pt.mates[r.k as usize] = Some((mate_seq_of(&read), (read.reference_sequence_id, read.reference_start))),
+                    }
+                }
+            }
+        }
+        // assemble, exactly as cleanup + the mate pass + resolve would have left them
+        let capture_dests = self.config.splice_hallmark || self.config.discordant_anchor;
+        let (mut rebuilt_l, mut rebuilt_r): (Vec<Breakpoint>, Vec<Breakpoint>) = (Vec::new(), Vec::new());
+        for (p, &c) in promoted.iter().enumerate() {
+            let h = *pool.hdr(c);
+            let pt = std::mem::take(&mut parts[p]);
+            let missing = || io::Error::new(io::ErrorKind::InvalidData, format!("mem_budget: junction {}:{} not fully re-read", h.ref_id, h.pos));
+            let mut group: Vec<Breakpoint> = pt.clip.into_iter().collect::<Option<Vec<_>>>().ok_or_else(missing)?;
+            // the cluster as cleanup's stable position sort left it (records are in scan order)
+            group.sort_by_key(|b| b.breakpoint);
+            let mut sink = Stats::default();
+            let mut bp = join(group, &self.config, h.floor as usize, &mut sink).ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidData, format!("mem_budget: junction {}:{} did not rebuild", h.ref_id, h.pos))
+            })?;
+            debug_assert!(bp.agree.is_some() && bp.breakpoint == h.pos);
+            // `resolve_disc_agree` on a promoted FULL junction
+            bp.agree = None;
+            bp.src = None;
+            bp.n_frags = bp.n_frags.max(2);
+            bp.ord = h.ord;
+            if let Some(ev) = bp.ev.as_mut() {
+                ev.disc_lite = pt.disc.into_iter().collect::<Option<Vec<_>>>().ok_or_else(missing)?;
+                ev.short_lite = pt.short.into_iter().collect::<Option<Vec<_>>>().ok_or_else(missing)?;
+            }
+            for m in pt.mates {
+                let (seq, dest) = m.ok_or_else(missing)?;
+                bp.mate_seqs.push(seq);
+                if capture_dests {
+                    bp.mate_dests.push(dest);
+                }
+            }
+            if h.left {
+                rebuilt_l.push(bp);
+            } else {
+                rebuilt_r.push(bp);
+            }
+        }
+        let n_rebuilt = rebuilt_l.len() + rebuilt_r.len();
+        rebuilt_l.sort_by_key(|b| (b.ref_id, b.ord));
+        rebuilt_r.sort_by_key(|b| (b.ref_id, b.ord));
+        self.final_left_breakpoints = merge_by_slot(std::mem::take(&mut self.final_left_breakpoints), rebuilt_l);
+        self.final_right_breakpoints = merge_by_slot(std::mem::take(&mut self.final_right_breakpoints), rebuilt_r);
+        // nothing needs the record addresses any more
+        for b in self.final_left_breakpoints.iter_mut().chain(self.final_right_breakpoints.iter_mut()) {
+            b.src = None;
+        }
+        eprintln!(
+            "[mem-budget] pending-junction budget {} MiB: {}; {} junction(s) compact ({} converted in place, {:.1} MiB arena, {} B/junction), {} rebuilt from the BAM ({} record requests, {} seeks, {} records read, {:.1} s)",
+            budget / (1024 * 1024),
+            match &self.trip_at {
+                Some((rn, pos, left)) => format!("overflowed at {rn}:{pos} {}", if *left { "LEFT" } else { "RIGHT" }),
+                None => "never overflowed".to_string(),
+            },
+            n_compact,
+            self.n_converted,
+            arena_bytes as f64 / (1024.0 * 1024.0),
+            if n_compact == 0 { 0 } else { arena_bytes / n_compact },
+            n_rebuilt,
+            n_req,
+            n_seek,
+            n_read,
+            t0.elapsed().as_secs_f64()
+        );
+        Ok(())
     }
 
     pub fn discovery(&mut self) -> io::Result<()> {
@@ -1969,6 +2223,7 @@ impl Discovery {
         }
         self.find_mates()?;
         self.resolve_disc_agree();
+        self.rebuild_compact()?;
         // extend_mates() is a no-op in the Python (operates on the already-emptied
         // temporary_breakpoints); intentionally omitted.
         self.cluster_discordant();
@@ -2051,7 +2306,7 @@ impl Discovery {
         let header = if is_cram(&self.filepath) {
             open_cram(&self.filepath, self.reference_path.as_deref())?.read_header()?
         } else {
-            open_bam(&self.filepath, 1)?.read_header()?
+            BamIn::open(&self.filepath, 1)?.read_header()?
         };
         Ok(header
             .reference_sequences()
@@ -2068,7 +2323,7 @@ impl Discovery {
         let header = if is_cram(&self.filepath) {
             open_cram(&self.filepath, self.reference_path.as_deref())?.read_header()?
         } else {
-            open_bam(&self.filepath, 1)?.read_header()?
+            BamIn::open(&self.filepath, 1)?.read_header()?
         };
         Ok(header
             .reference_sequences()
@@ -2112,6 +2367,9 @@ impl Discovery {
         let config = self.config.clone();
         let coverage = self.coverage.clone();
         let nthreads = self.config.contig_threads.min(n_contigs.max(1)).max(1);
+        // each in-flight worker may hold its share of the budget FULL; the parent applies
+        // the whole budget, in contig order, as the workers' results are merged below
+        let share = self.budget_bytes.map(|b| b / nthreads);
         let next = std::sync::atomic::AtomicUsize::new(0);
         let results: std::sync::Mutex<Vec<(usize, Discovery)>> = std::sync::Mutex::new(Vec::new());
         let first_err: std::sync::Mutex<Option<io::Error>> = std::sync::Mutex::new(None);
@@ -2122,7 +2380,7 @@ impl Discovery {
                     if cid >= n_contigs || first_err.lock().unwrap().is_some() {
                         break;
                     }
-                    match Discovery::process_contig(&filepath, cid, &config, &coverage) {
+                    match Discovery::process_contig(&filepath, cid, &config, &coverage, share) {
                         Ok(w) => results.lock().unwrap().push((cid, w)),
                         Err(e) => {
                             *first_err.lock().unwrap() = Some(e);
@@ -2138,8 +2396,30 @@ impl Discovery {
         let mut results = results.into_inner().unwrap();
         results.sort_by_key(|(cid, _)| *cid);
         for (_, mut w) in results {
-            self.final_left_breakpoints.append(&mut w.final_left_breakpoints);
-            self.final_right_breakpoints.append(&mut w.final_right_breakpoints);
+            if self.budget_bytes.is_some() {
+                // admit the worker's junctions one by one (slot order: LEFT then RIGHT),
+                // accounting the FULL pending ones against the budget exactly as the
+                // single-threaded cleanup does; its compact ones are already compact
+                let (mut new_l, mut new_r) = (Vec::new(), Vec::new());
+                for bp in w.final_left_breakpoints.drain(..) {
+                    self.admit(bp, true, &mut new_l, &mut new_r);
+                }
+                for bp in w.final_right_breakpoints.drain(..) {
+                    self.admit(bp, false, &mut new_l, &mut new_r);
+                }
+                self.final_left_breakpoints.reserve_exact(new_l.len());
+                self.final_left_breakpoints.append(&mut new_l);
+                self.final_right_breakpoints.reserve_exact(new_r.len());
+                self.final_right_breakpoints.append(&mut new_r);
+                self.n_converted += w.n_converted;
+                if self.trip_at.is_none() {
+                    self.trip_at = w.trip_at.take();
+                }
+                self.compact.append(std::mem::take(&mut w.compact));
+            } else {
+                self.final_left_breakpoints.append(&mut w.final_left_breakpoints);
+                self.final_right_breakpoints.append(&mut w.final_right_breakpoints);
+            }
             self.subfloor_left_breakpoints.append(&mut w.subfloor_left_breakpoints);
             self.subfloor_right_breakpoints.append(&mut w.subfloor_right_breakpoints);
             self.polya.append(&mut w.polya);
@@ -2151,6 +2431,7 @@ impl Discovery {
         }
         self.find_mates()?;
         self.resolve_disc_agree();
+        self.rebuild_compact()?;
         if crate::mem::enabled() {
             self.mem_report("parent after find_mates", &[]);
         }
@@ -2159,10 +2440,12 @@ impl Discovery {
     }
 
     /// One SPD-3 worker: run extract_chimeric over a single contig and return the
-    /// worker (owning that contig's breakpoints / polyA / stats).
-    fn process_contig(filepath: &str, cid: usize, config: &DiscoveryConfig, coverage: &Coverage) -> io::Result<Discovery> {
+    /// worker (owning that contig's breakpoints / polyA / stats). `budget` is the
+    /// worker's share of `mem_budget_mb` (None = unlimited).
+    fn process_contig(filepath: &str, cid: usize, config: &DiscoveryConfig, coverage: &Coverage, budget: Option<usize>) -> io::Result<Discovery> {
         let mut w = Discovery::new(filepath.to_string(), 1, config.clone(), None, None);
         w.only_contig = Some(cid);
+        w.budget_bytes = budget;
         w.coverage = coverage.clone();
         w.extract_chimeric()?;
         if crate::mem::enabled() {
@@ -2684,93 +2967,287 @@ fn drop_read(read: &BamRead, ignore_dup_flag: bool) -> bool {
     read.is_secondary || read.is_qcfail || (read.is_duplicate && !ignore_dup_flag)
 }
 
+/// `mem_budget_mb` (MiB) -> bytes.
+fn budget_bytes(mb: &Option<u64>) -> Option<usize> {
+    mb.map(|m| (m as usize).saturating_mul(1024 * 1024))
+}
+
+/// The clip-path tail of `handle_record`, from "which end is soft-clipped" to the per-read
+/// `Breakpoint` that enters `temporary_breakpoints` (None where the read is not a usable
+/// junction clip: no clip, equal clips, maps fully elsewhere, adapter). The compact rebuild
+/// re-runs it on the very same record (by BGZF address), so a rebuilt cluster is identical
+/// to the one `cleanup` joined. `ref_name` is the contig name, `ref_id` its header index.
+fn clip_breakpoint(read: &BamRead, ref_name: &str, cfg: &DiscoveryConfig, reject_fullmap: bool, ref_id: i32, vp: u64) -> Option<Breakpoint> {
+    let left_soft = read.left_is_soft;
+    let right_soft = read.right_is_soft;
+    let left_len = read.left_len;
+    let right_len = read.right_len;
+
+    let clip: Option<i32> = if left_soft && !right_soft {
+        Some(CLIP_LEFT)
+    } else if right_soft && !left_soft {
+        Some(CLIP_RIGHT)
+    } else if right_soft && left_soft {
+        if left_len > right_len {
+            Some(CLIP_LEFT)
+        } else if right_len > left_len {
+            Some(CLIP_RIGHT)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    let clip = clip?;
+
+    // drop reads that map contiguously elsewhere in the reference
+    // (XA/SA full-length alt): not real chimeric junctions.
+    if reject_fullmap && maps_fully_elsewhere(read) {
+        return None;
+    }
+
+    // cruciform / short-indel exclusion via SA tag
+    let mut exclude_flag = false;
+    if read.is_supplementary {
+        if let Some(sa) = read.sa() {
+            for part in sa.split(';') {
+                if part.is_empty() {
+                    continue; // inner loop over SA parts
+                }
+                let fields: Vec<&str> = part.split(',').collect();
+                if fields.len() >= 2 && fields[0] == ref_name {
+                    if let Ok(start) = fields[1].parse::<i64>() {
+                        if (read.reference_start - start).abs() < cfg.exclude_same_contig_supplementary {
+                            exclude_flag = true;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // surviving clip candidate: now decode the heavy fields (SPD-1).
+    let seq = read.seq();
+    let qname = read.query_name();
+    let full = QualitySeq::new(seq.clone(), read.qual());
+    let n = seq.len();
+
+    let (breakpoint, clipped, unclipped) = if clip == CLIP_LEFT {
+        // adapter check on the last MIN_CLIP_LEN of the clipped part, revcomped
+        let clip_part = &seq[..left_len];
+        let sub = &clip_part[clip_part.len().saturating_sub(MIN_CLIP_LEN)..];
+        if is_adapter(&revcomp_bytes(sub)) {
+            return None;
+        }
+        let clipped = full.pyslice(None, Some(left_len as isize));
+        let unclipped = if right_soft {
+            full.pyslice(Some(left_len as isize), Some(-(right_len as isize)))
+        } else {
+            full.pyslice(Some(left_len as isize), None)
+        };
+        (read.reference_start, clipped, unclipped)
+    } else {
+        // CLIP_RIGHT: adapter check on the first MIN_CLIP_LEN of the clipped part
+        let clip_part = &seq[n - right_len..];
+        let sub = &clip_part[..clip_part.len().min(MIN_CLIP_LEN)];
+        if is_adapter(sub) {
+            return None;
+        }
+        let clipped = full.pyslice(Some(-(right_len as isize)), None);
+        let unclipped = if left_soft {
+            full.pyslice(Some(left_len as isize), Some(-(right_len as isize)))
+        } else {
+            full.pyslice(None, Some(-(right_len as isize)))
+        };
+        (read.reference_end, clipped, unclipped)
+    };
+    let mut bp = Breakpoint::new(
+        clip,
+        ref_name.to_string(),
+        breakpoint,
+        Some(qname),
+        clipped.upper(),
+        unclipped.upper(),
+        Some(read.is_read1),
+        Some(read.is_forward()),
+        exclude_flag,
+        read.mapq,
+    );
+    bp.flag = read.flag;
+    (bp.mref, bp.mpos) = mate_loc(read);
+    bp.own = own_loc(read);
+    bp.ref_id = ref_id;
+    bp.vp = vp;
+    Some(bp)
+}
+
+/// Sidecar / disc_agree discordant-anchor observation of a primary high-MAPQ read.
+fn disc_lite_of(read: &BamRead, ref_id: i32) -> DiscLite {
+    DiscLite {
+        frag: frag_hash(read.name_bytes()),
+        flag: read.flag,
+        ref_id,
+        start: read.reference_start,
+        end: read.reference_end,
+        mref: mate_loc(read).0,
+        mpos: mate_loc(read).1,
+    }
+}
+
+/// Sidecar short-overhang candidate of a primary high-MAPQ read.
+fn short_lite_of(read: &BamRead, ref_id: i32) -> ShortLite {
+    ShortLite {
+        frag: frag_hash(read.name_bytes()),
+        flag: read.flag,
+        ref_id,
+        start: read.reference_start,
+        end: read.reference_end,
+        lead_soft: read.lead_soft as u32,
+        trail_soft: read.trail_soft as u32,
+        mref: mate_loc(read).0,
+        mpos: mate_loc(read).1,
+    }
+}
+
+/// The mate sequence `apply_mate_record` attaches to a breakpoint: cleaned, read-forward.
+fn mate_seq_of(read: &BamRead) -> QualitySeq {
+    let seq = clean_clipped_seq(&QualitySeq::new(read.seq(), read.qual()));
+    if read.is_forward() {
+        seq
+    } else {
+        seq.revcomp()
+    }
+}
+
+/// Merge two (ref_id, ord)-sorted breakpoint vectors into one (the slot order of a final
+/// vector: contigs in scan order, junctions in cleanup order within a contig). Keys are
+/// distinct; `a` wins a tie.
+fn merge_by_slot(a: Vec<Breakpoint>, b: Vec<Breakpoint>) -> Vec<Breakpoint> {
+    if b.is_empty() {
+        return a;
+    }
+    let mut out: Vec<Breakpoint> = Vec::with_capacity(a.len() + b.len());
+    let (mut ia, mut ib) = (a.into_iter().peekable(), b.into_iter().peekable());
+    loop {
+        let take_a = match (ia.peek(), ib.peek()) {
+            (None, None) => break,
+            (Some(_), None) => true,
+            (None, Some(_)) => false,
+            (Some(x), Some(y)) => (x.ref_id, x.ord) <= (y.ref_id, y.ord),
+        };
+        out.push(if take_a { ia.next().unwrap() } else { ib.next().unwrap() });
+    }
+    out
+}
+
 /// Attach discordant anchors (one contig, start-sorted) to that contig's new final
 /// breakpoints. LEFT-clipped reads lie downstream of the insertion, so a LEFT junction at
 /// B takes a REVERSE anchor starting at/after B (-5 bp) and ending within `span` (it looks
 /// back into the element, like the LEFT reverse `has_mate` reads); a RIGHT junction takes
 /// a FORWARD anchor ending at/before B (+5) and starting within `span`. Fragments already present as CLIP evidence are skipped; the
 /// total CLIP + DISC per side is capped at `cap` (lowest fragment hash).
-fn attach_disc(bps: &mut [Breakpoint], disc: &[DiscLite], left: bool, span: i64, cap: usize) {
+#[cfg(test)]
+fn attach_disc(bps: &mut [Breakpoint], disc: &[(DiscLite, u64)], left: bool, span: i64, cap: usize) {
     for bp in bps.iter_mut() {
-        let b = bp.breakpoint;
-        let Some(ev) = bp.ev.as_mut() else { continue };
-        let lo = disc.partition_point(|d| d.start < b - span);
-        let mut sel: Vec<DiscLite> = Vec::new();
-        for d in &disc[lo..] {
-            if d.start > b + span {
-                break;
-            }
-            let ok = if left {
-                d.is_reverse() && d.start >= b - 5 && d.end - b <= span
-            } else {
-                !d.is_reverse() && d.end <= b + 5 && b - d.start <= span
-            };
-            if ok && !ev.clip_lite.iter().any(|c| c.frag == d.frag) {
-                sel.push(*d);
-            }
-        }
-        let room = cap.saturating_sub(ev.clip_lite.len());
-        ev.disc_lite = select_lowest(sel, room, |d| (d.frag, d.flag));
+        attach_disc_one(bp, disc, left, span, cap);
     }
 }
 
+/// `attach_disc` for one breakpoint. With `src` present (`mem_budget_mb`, pending junction)
+/// the selected anchors' record addresses are kept alongside, in list order.
+fn attach_disc_one(bp: &mut Breakpoint, disc: &[(DiscLite, u64)], left: bool, span: i64, cap: usize) {
+    let b = bp.breakpoint;
+    let Some(ev) = bp.ev.as_mut() else { return };
+    let lo = disc.partition_point(|(d, _)| d.start < b - span);
+    let mut sel: Vec<(DiscLite, u64)> = Vec::new();
+    for (d, vp) in &disc[lo..] {
+        if d.start > b + span {
+            break;
+        }
+        let ok = if left {
+            d.is_reverse() && d.start >= b - 5 && d.end - b <= span
+        } else {
+            !d.is_reverse() && d.end <= b + 5 && b - d.start <= span
+        };
+        if ok && !ev.clip_lite.iter().any(|c| c.frag == d.frag) {
+            sel.push((*d, *vp));
+        }
+    }
+    let room = cap.saturating_sub(ev.clip_lite.len());
+    let sel = select_lowest(sel, room, |(d, _)| (d.frag, d.flag));
+    if let Some(src) = bp.src.as_mut() {
+        src.disc = sel.iter().map(|(_, vp)| *vp).collect();
+    }
+    ev.disc_lite = sel.into_iter().map(|(d, _)| d).collect();
+}
+
 /// `disc_agree_second_fragment`: candidate discordant anchors (one contig, start-sorted) for
-/// that contig's PENDING junctions. Same geometry as `attach_disc`: a LEFT junction at B (insert
+/// a PENDING junction. Same geometry as `attach_disc`: a LEFT junction at B (insert
 /// to the left of B, reference continues to the right) takes a REVERSE anchor starting at/after
 /// B - 5 whose far end is within `span` of B -- it points left, at the junction, so its mate
 /// reads into the insert; a RIGHT junction takes a FORWARD anchor ending at/before B + 5 and
 /// starting within `span`. Anchors of the clip molecule itself (same qname, or a lenient
 /// duplicate within `tol`) are skipped; at most `cap` kept (lowest qname hash).
-fn select_agree_anchors(bps: &mut [Breakpoint], disc: &[DiscLite], left: bool, span: i64, cap: usize, tol: i64) {
-    for bp in bps.iter_mut() {
-        let b = bp.breakpoint;
-        let Some(ag) = bp.agree.as_mut() else { continue };
-        let lo = disc.partition_point(|d| d.start < b - span);
-        let mut sel: Vec<DiscLite> = Vec::new();
-        for d in &disc[lo..] {
-            if d.start > b + span {
-                break;
-            }
-            let ok = if left {
-                d.is_reverse() && d.start >= b - 5 && d.end - b <= span
-            } else {
-                !d.is_reverse() && d.end <= b + 5 && b - d.start <= span
-            };
-            if ok && !ag.same_molecule(d, tol) {
-                sel.push(*d);
-            }
+fn select_agree_anchors_one(bp: &mut Breakpoint, disc: &[(DiscLite, u64)], left: bool, span: i64, cap: usize, tol: i64) {
+    let b = bp.breakpoint;
+    let Some(ag) = bp.agree.as_mut() else { return };
+    let lo = disc.partition_point(|(d, _)| d.start < b - span);
+    let mut sel: Vec<DiscLite> = Vec::new();
+    for (d, _) in &disc[lo..] {
+        if d.start > b + span {
+            break;
         }
-        ag.anchors = select_lowest(sel, cap, |d| (d.frag, d.flag));
-        // the clip-read identities served only the duplicate check above; nothing reads
-        // them after this contig's anchors are chosen (memory: ~1 ClipMol + a Vec per
-        // pending junction, held until the mate pass otherwise)
-        ag.clips = Vec::new();
+        let ok = if left {
+            d.is_reverse() && d.start >= b - 5 && d.end - b <= span
+        } else {
+            !d.is_reverse() && d.end <= b + 5 && b - d.start <= span
+        };
+        if ok && !ag.same_molecule(d, tol) {
+            sel.push(*d);
+        }
     }
+    ag.anchors = select_lowest(sel, cap, |d| (d.frag, d.flag));
+    // the clip-read identities served only the duplicate check above; nothing reads
+    // them after this contig's anchors are chosen (memory: ~1 ClipMol + a Vec per
+    // pending junction, held until the mate pass otherwise)
+    ag.clips = Vec::new();
 }
 
 /// Attach short-overhang candidates (one contig, start-sorted) to that contig's new final
 /// breakpoints: `short_candidate` against the consensus breakpoint, excluding fragments
 /// already present as CLIP evidence with the same r12, capped at `cap` (lowest (frag, flag)).
-fn attach_short(bps: &mut [Breakpoint], shorts: &[ShortLite], left: bool, window: i64, max: i64, cap: usize) {
-    let reach = window.max(max) + 2000; // the longest aligned span considered
+#[cfg(test)]
+fn attach_short(bps: &mut [Breakpoint], shorts: &[(ShortLite, u64)], left: bool, window: i64, max: i64, cap: usize) {
     for bp in bps.iter_mut() {
-        let b = bp.breakpoint;
-        let Some(ev) = bp.ev.as_mut() else { continue };
-        let lo = shorts.partition_point(|r| r.start < b - reach);
-        let mut sel: Vec<ShortLite> = Vec::new();
-        for r in &shorts[lo..] {
-            if r.start > b + window {
-                break;
-            }
-            if short_candidate(r, b, left, window, max, MIN_CLIP_LEN as u32)
-                && !ev.clip_lite.iter().any(|c| c.frag == r.frag && c.r12() == r.r12())
-            {
-                sel.push(*r);
-            }
-        }
-        sel.dedup();
-        ev.short_lite = select_lowest(sel, cap, |r| (r.frag, r.flag));
+        attach_short_one(bp, shorts, left, window, max, cap);
     }
+}
+
+/// `attach_short` for one breakpoint (record addresses kept in `src` as for DISC).
+fn attach_short_one(bp: &mut Breakpoint, shorts: &[(ShortLite, u64)], left: bool, window: i64, max: i64, cap: usize) {
+    let reach = window.max(max) + 2000; // the longest aligned span considered
+    let b = bp.breakpoint;
+    let Some(ev) = bp.ev.as_mut() else { return };
+    let lo = shorts.partition_point(|(r, _)| r.start < b - reach);
+    let mut sel: Vec<(ShortLite, u64)> = Vec::new();
+    for (r, vp) in &shorts[lo..] {
+        if r.start > b + window {
+            break;
+        }
+        if short_candidate(r, b, left, window, max, MIN_CLIP_LEN as u32)
+            && !ev.clip_lite.iter().any(|c| c.frag == r.frag && c.r12() == r.r12())
+        {
+            sel.push((*r, *vp));
+        }
+    }
+    // consecutive identical candidates collapse (the lite part decides, as before)
+    sel.dedup_by(|a, b| a.0 == b.0);
+    let sel = select_lowest(sel, cap, |(r, _)| (r.frag, r.flag));
+    if let Some(src) = bp.src.as_mut() {
+        src.short = sel.iter().map(|(_, vp)| *vp).collect();
+    }
+    ev.short_lite = sel.into_iter().map(|(r, _)| r).collect();
 }
 
 /// SHORT capture requests for one breakpoint side: each short-overhang read itself
@@ -3174,7 +3651,7 @@ mod tests {
         let fwd_up = DiscLite { frag: 1, flag: 0x1 | 0x40, ref_id: 0, start: 800, end: 950 , mref: -1, mpos: -1 };
         let rev_down = DiscLite { frag: 2, flag: 0x1 | 0x10 | 0x80, ref_id: 0, start: 1050, end: 1200 , mref: -1, mpos: -1 };
         let far = DiscLite { frag: 3, flag: 0x1 | 0x10 | 0x80, ref_id: 0, start: 1600, end: 1750 , mref: -1, mpos: -1 };
-        let disc = vec![fwd_up, rev_down, far];
+        let disc = vec![(fwd_up, 1), (rev_down, 2), (far, 3)];
         let mut l = vec![mk_bp(CLIP_LEFT)];
         let mut r = vec![mk_bp(CLIP_RIGHT)];
         attach_disc(&mut l, &disc, true, 500, 200);
@@ -3462,9 +3939,9 @@ mod tests {
             b
         };
         // 150 LEFT (b) candidates + one that is a CLIP read of the cluster (same frag/r12)
-        let mut shorts: Vec<ShortLite> = (0..150).map(|i| slite(i, 985 + (i % 10) as i64, 1135, 0, 0)).collect();
-        shorts.push(slite(999, 1000, 1140, 4, 0));
-        shorts.sort_by_key(|r| (r.start, r.frag, r.flag));
+        let mut shorts: Vec<(ShortLite, u64)> = (0..150).map(|i| (slite(i, 985 + (i % 10) as i64, 1135, 0, 0), i)).collect();
+        shorts.push((slite(999, 1000, 1140, 4, 0), 999));
+        shorts.sort_by_key(|(r, _)| (r.start, r.frag, r.flag));
         let mut l = vec![mk(CLIP_LEFT)];
         l[0].ev.as_mut().unwrap().clip_lite.push(ClipLite { frag: frag_hash(b"s999"), flag: 0x1 | 0x40, pos: 1000, mref: -1, mpos: -1 });
         attach_short(&mut l, &shorts, true, 3, 20, 100);
@@ -3479,7 +3956,7 @@ mod tests {
         // permuted input -> same subset
         let mut perm = shorts.clone();
         perm.reverse();
-        perm.sort_by_key(|r| (r.start, r.frag, r.flag));
+        perm.sort_by_key(|(r, _)| (r.start, r.frag, r.flag));
         let mut l2 = vec![mk(CLIP_LEFT)];
         attach_short(&mut l2, &perm, true, 3, 20, 100);
         let mut g2: Vec<u64> = l2[0].ev.as_ref().unwrap().short_lite.iter().map(|r| r.frag).filter(|f| *f != frag_hash(b"s999")).collect();
@@ -3611,7 +4088,7 @@ mod tests {
                 recs.sort_by_key(|r| r.alignment_start().map(usize::from));
             }
             for r in &recs {
-                d.handle_record(r, &h, 60, false, &mut cur).unwrap();
+                d.handle_record(r, &h, 60, false, &mut cur, 0).unwrap();
             }
             d.cleanup();
             let after_cleanup = d.final_left_breakpoints.len() + d.final_right_breakpoints.len();
@@ -3628,7 +4105,7 @@ mod tests {
             let mrec = rec("discmol", mflag, 70_000, vec![m(n)], mate_stored, 0);
             let read = BamRead::from_record(&mrec, &h).unwrap();
             let am = d.agree_mate_map();
-            d.apply_mate_record(&read, &FxHashSet::default(), &FxHashSet::default(), &FxHashMap::default(), &am, false, 60);
+            d.apply_mate_record(&read, &FxHashSet::default(), &FxHashSet::default(), &FxHashMap::default(), &am, false, 60, 0);
             d.resolve_disc_agree();
             (d, after_cleanup)
         }
@@ -3704,6 +4181,186 @@ mod tests {
             assert!(!d.stats_json().contains("disc_agree"));
             let (d, _) = run(true, true, Anchor::Good, rc(&w.ins[100..190]), true);
             assert!(d.stats_json().contains("\"disc_agree\": {\"pending\": 1, \"no_anchor\": 0, \"promoted\": 1, \"rejected\": 0}"));
+        }
+
+        // ---- mem_budget_mb: the compact pending form ----
+
+        fn cfg_budget(mb: Option<u64>) -> DiscoveryConfig {
+            DiscoveryConfig { mem_budget_mb: mb, evidence_sidecar: true, short_overhang_evidence: true, ..cfg(true) }
+        }
+
+        /// The anchor map the mate pass matches reads against is the same multiset of
+        /// (qname hash -> read1, strand) whether the pending junction is FULL or compact:
+        /// both key by the 64-bit hash alone (the FULL path never held the anchor's qname
+        /// either), so a hash collision is resolved identically in both forms.
+        #[test]
+        fn compact_anchor_map_equals_full_including_colliding_hashes() {
+            let w = world();
+            let h = header();
+            let mut d = Discovery::new("unused.bam".into(), 1, cfg_budget(Some(4096)), None, None);
+            let mut cur = None;
+            let mut s = w.ins[160..].to_vec();
+            s.extend_from_slice(&w.fr[..110]);
+            let recs = vec![
+                rec("clipmol", 0x1 | 0x10 | 0x80, P, vec![sc(40), m(110)], s, 50_000),
+                rec("discA", 0x1 | 0x10 | 0x40, P + 60, vec![m(150)], w.fr[60..210].to_vec(), 70_000),
+                rec("discB", 0x1 | 0x10 | 0x80, P + 80, vec![m(150)], w.fr[80..230].to_vec(), 71_000),
+            ];
+            for r in &recs {
+                d.handle_record(r, &h, 60, false, &mut cur, 0).unwrap();
+            }
+            d.cleanup();
+            assert_eq!(d.final_left_breakpoints.len(), 1);
+            // a simulated 64-bit collision: a second anchor record with discA's hash
+            let hash_a = frag_hash(b"discA");
+            {
+                let ag = d.final_left_breakpoints[0].agree.as_mut().unwrap();
+                let mut twin = ag.anchors[0];
+                twin.frag = hash_a;
+                twin.flag = 0x1 | 0x80; // forward read2 "of another template"
+                ag.anchors.push(twin);
+            }
+            let key = |m: &FxHashMap<u64, Vec<AgreeWait>>| {
+                let mut v: Vec<(u64, bool, bool)> = m.iter().flat_map(|(f, ws)| ws.iter().map(move |w| (*f, w.anchor_read1, w.anchor_reverse))).collect();
+                v.sort();
+                v
+            };
+            // FULL: anchors move into the map (built once, as in the mate pass)
+            let am = d.agree_mate_map();
+            let full = key(&am);
+            assert_eq!(full.len(), 3);
+            assert_eq!(full.iter().filter(|(f, _, _)| *f == hash_a).count(), 2, "both colliding anchors present");
+            // the same junction, compact (re-run cleanup state: rebuild the anchors first)
+            let mut d2 = Discovery::new("unused.bam".into(), 1, cfg_budget(Some(0)), None, None);
+            let mut cur = None;
+            for r in &recs {
+                d2.handle_record(r, &h, 60, false, &mut cur, 0).unwrap();
+            }
+            // inject the colliding twin before admission: run cleanup without a trip (the
+            // config's budget still makes join() record the record addresses)
+            d2.budget_bytes = None;
+            d2.cleanup();
+            {
+                let ag = d2.final_left_breakpoints[0].agree.as_mut().unwrap();
+                let mut twin = ag.anchors[0];
+                twin.frag = hash_a;
+                twin.flag = 0x1 | 0x80;
+                ag.anchors.push(twin);
+            }
+            // now convert FULL -> COMPACT in place (budget 0 trips at once)
+            d2.budget_bytes = Some(0);
+            let bp = d2.final_left_breakpoints.pop().unwrap();
+            let (mut nl, mut nr) = (Vec::new(), Vec::new());
+            d2.admit(bp, true, &mut nl, &mut nr);
+            assert!(nl.is_empty() && d2.final_left_breakpoints.is_empty() && d2.compact.len() == 1 && d2.compact_mode);
+            let am2 = d2.agree_mate_map();
+            assert_eq!(key(&am2), full);
+            // and the mate pass promotes both forms on the same read
+            let mrec = rec("discA", 0x1 | 0x80 | 0x10 | 0x20, 70_000, vec![m(90)], rc(&w.ins[100..190]), 0);
+            let read = BamRead::from_record(&mrec, &h).unwrap();
+            d.apply_mate_record(&read, &FxHashSet::default(), &FxHashSet::default(), &FxHashMap::default(), &am, false, 60, 0);
+            d2.apply_mate_record(&read, &FxHashSet::default(), &FxHashSet::default(), &FxHashMap::default(), &am2, false, 60, 0);
+            assert!(d.final_left_breakpoints[0].agree.as_ref().unwrap().promoted);
+            assert!(d2.compact.promoted(0));
+            // the mate-capture maps see the compact junction's has_mate qname in its slot
+            let (r1, r2, q) = d.get_mates();
+            let (s1, s2, q2) = d2.get_mates();
+            assert_eq!((r1, r2), (s1, s2));
+            assert_eq!(q.len(), q2.len());
+            assert!(q.contains_key("clipmol") && matches!(q2["clipmol"], BpRef::Compact(0)));
+        }
+
+        /// End to end on a real (temporary) BAM: discovery with the budget unset and with
+        /// budget 0 (every pending junction compact, promoted ones rebuilt from the file)
+        /// leaves identical final breakpoints -- consensus, mates, CLIP/DISC/SHORT lite
+        /// lists, fragment counts -- and identical stats.
+        #[test]
+        fn budget_zero_rebuilds_identical_breakpoints_from_the_bam() {
+            use noodles_sam::alignment::io::Write as _;
+            let h = header();
+            // three junctions; the ones at 1000 (LEFT) and 9000 (RIGHT) get an agreeing mate,
+            // the one at 5000 (LEFT) does not; each has a SHORT (unclipped, crossing) read and
+            // a has_mate clip read whose mate is in the file.
+            let mut recs: Vec<RecordBuf> = Vec::new();
+            let junction = |recs: &mut Vec<RecordBuf>, p: usize, left: bool, tag: &str, agree: bool| {
+                let w = world();
+                if left {
+                    let mut s = w.ins[160..].to_vec();
+                    s.extend_from_slice(&w.fr[..110]);
+                    recs.push(rec(&format!("clip{tag}"), 0x1 | 0x10 | 0x80, p, vec![sc(40), m(110)], s, p + 300));
+                    // the clip read's mate (forward, downstream): captured as MATE evidence
+                    recs.push(rec(&format!("clip{tag}"), 0x1 | 0x40 | 0x20, p + 300, vec![m(100)], w.fr[300..400].to_vec(), p));
+                    recs.push(rec(&format!("disc{tag}"), 0x1 | 0x10 | 0x40, p + 60, vec![m(150)], w.fr[60..210].to_vec(), 70_000 + p));
+                    // SHORT candidate: unclipped read crossing the junction by 8 bp
+                    let mut sh = w.fl[392..].to_vec();
+                    sh.extend_from_slice(&w.fr[..100]);
+                    recs.push(rec(&format!("short{tag}"), 0x1 | 0x40 | 0x20, p - 8, vec![m(108)], sh, p + 200));
+                    let mate = if agree { rc(&w.ins[100..190]) } else { dna(99 + p as u64, 90) };
+                    recs.push(rec(&format!("disc{tag}"), 0x1 | 0x80 | 0x10 | 0x20, 70_000 + p, vec![m(90)], mate, p + 60));
+                } else {
+                    let mut s = w.fl[290..].to_vec();
+                    s.extend_from_slice(&w.ins[..40]);
+                    recs.push(rec(&format!("disc{tag}"), 0x1 | 0x40, p - 210, vec![m(150)], w.fl[190..340].to_vec(), 70_000 + p));
+                    recs.push(rec(&format!("clip{tag}"), 0x1 | 0x40, p - 110, vec![m(110), sc(40)], s, p - 500));
+                    recs.push(rec(&format!("clip{tag}"), 0x1 | 0x80 | 0x10, p - 500, vec![m(100)], w.fl[0..100].to_vec(), p - 110));
+                    let mut sh = w.fl[300..].to_vec();
+                    sh.extend_from_slice(&w.fr[..6]);
+                    recs.push(rec(&format!("short{tag}"), 0x1 | 0x40 | 0x20, p - 100, vec![m(106)], sh, p + 200));
+                    let mate = if agree { rc(&w.ins[10..100]) } else { dna(77 + p as u64, 90) };
+                    recs.push(rec(&format!("disc{tag}"), 0x1 | 0x80 | 0x20, 70_000 + p, vec![m(90)], mate, p - 210));
+                }
+            };
+            junction(&mut recs, 1000, true, "a", true);
+            junction(&mut recs, 5000, true, "b", false);
+            junction(&mut recs, 9000, false, "c", true);
+            recs.sort_by_key(|r| r.alignment_start().map(usize::from));
+            let path = std::env::temp_dir().join(format!("peartree_budget_{}.bam", std::process::id()));
+            {
+                let mut wtr = bam::io::Writer::new(File::create(&path).unwrap());
+                wtr.write_header(&h).unwrap();
+                for r in &recs {
+                    wtr.write_alignment_record(&h, r).unwrap();
+                }
+                wtr.finish(&h).unwrap();
+            }
+            let run = |mb: Option<u64>| {
+                let mut d = Discovery::new(path.to_string_lossy().into_owned(), 1, cfg_budget(mb), None, None);
+                d.discovery().unwrap();
+                d
+            };
+            let full = run(None);
+            let zero = run(Some(0));
+            let _ = std::fs::remove_file(&path);
+            assert_eq!(full.final_left_breakpoints.len(), 1, "one LEFT promoted");
+            assert_eq!(full.final_right_breakpoints.len(), 1, "one RIGHT promoted");
+            assert_eq!(full.stats.disc_agree_pending, 3);
+            assert!(zero.trip_at.is_some() && zero.n_converted == 1);
+            assert_eq!(full.stats_json(), zero.stats_json());
+            let fields = |b: &Breakpoint| {
+                let ev = b.ev.as_ref().unwrap();
+                (
+                    (b.reference_name.clone(), b.breakpoint, b.side, b.n_reads, b.n_frags, b.n_frags_span_polya, b.has_mate, b.bp_precise, b.ref_id, b.ord),
+                    (b.clipped.seq.clone(), b.clipped.qual.clone(), b.unclipped.seq.clone(), b.unclipped.qual.clone()),
+                    (b.mates.clone(), b.mate_seqs.iter().map(|q| (q.seq.clone(), q.qual.clone())).collect::<Vec<_>>(), b.mate_dests.clone()),
+                    ev.clip_lite.iter().map(|c| (c.frag, c.flag, c.pos, c.mref, c.mpos)).collect::<Vec<_>>(),
+                    ev.disc_lite.iter().map(|c| (c.frag, c.flag, c.ref_id, c.start, c.end, c.mref, c.mpos)).collect::<Vec<_>>(),
+                    ev.short_lite.clone(),
+                    b.agree.is_none(),
+                )
+            };
+            for (f, z) in full.final_left_breakpoints.iter().zip(&zero.final_left_breakpoints) {
+                assert_eq!(fields(f), fields(z));
+            }
+            for (f, z) in full.final_right_breakpoints.iter().zip(&zero.final_right_breakpoints) {
+                assert_eq!(fields(f), fields(z));
+            }
+            // the lite lists and mates were really exercised
+            let l = &full.final_left_breakpoints[0];
+            let lev = l.ev.as_ref().unwrap();
+            assert_eq!((lev.clip_lite.len(), lev.disc_lite.len(), lev.short_lite.len(), l.mate_seqs.len()), (1, 1, 1, 1));
+            let r = &full.final_right_breakpoints[0];
+            let rev = r.ev.as_ref().unwrap();
+            assert_eq!((rev.clip_lite.len(), rev.disc_lite.len(), rev.short_lite.len(), r.mate_seqs.len()), (1, 1, 1, 1));
         }
     }
 }

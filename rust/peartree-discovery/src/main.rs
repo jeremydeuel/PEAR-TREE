@@ -2,6 +2,7 @@
 //!   python src/main.py --step discover --bam <bam> --out <out.txt.gz>
 //! Emits the same custom FASTQ-based .txt.gz breakpoint format.
 
+mod compact;
 mod config;
 mod coverage;
 mod discovery;
@@ -275,6 +276,16 @@ fn main() -> io::Result<()> {
         _ => None,
     };
 
+    // mem_budget_mb needs BGZF record addresses: BAM only.
+    if bam.ends_with(".cram") && config.mem_budget_mb.is_some() {
+        eprintln!("mem_budget_mb: ignored for CRAM input (no BGZF record addresses to rebuild pending junctions from)");
+        config.mem_budget_mb = None;
+    }
+    if let Some(mb) = config.mem_budget_mb {
+        eprintln!(
+            "memory budget: {mb} MiB for the pending disc_agree junction pool (FULL until the accounted pool exceeds it, then compact + rebuilt from the BAM after the mate pass; output unaffected)"
+        );
+    }
     // CRAM input requires a reference FASTA (to decode read sequences).
     if bam.ends_with(".cram") && reference.is_none() {
         eprintln!("CRAM input requires a reference FASTA: pass --reference <ref.fa> (names matching the CRAM @SQ)");

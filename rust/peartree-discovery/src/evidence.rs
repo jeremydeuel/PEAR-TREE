@@ -269,12 +269,15 @@ pub fn short_candidate(r: &ShortLite, b: i64, left: bool, window: i64, max: i64,
 /// position of the matching side lies within its candidate window when it leaves the
 /// buffer (all clipped reads that could define such a window have been seen by then:
 /// `horizon` > the longest aligned span). Memory: O(reads in `horizon` bp + kept).
+///
+/// Each entry carries the record's BGZF virtual position (`mem_budget_mb`: a compact
+/// pending junction re-reads its selected SHORT reads by address; 0 when unknown).
 #[derive(Default)]
 pub struct ShortCollector {
-    buf: VecDeque<ShortLite>,
+    buf: VecDeque<(ShortLite, u64)>,
     hot_l: BTreeSet<i64>,
     hot_r: BTreeSet<i64>,
-    kept: Vec<ShortLite>,
+    kept: Vec<(ShortLite, u64)>,
     pub window: i64,
     pub max: i64,
     pub horizon: i64,
@@ -288,7 +291,7 @@ impl ShortCollector {
     /// (kept, buffered) candidate counts and the approximate heap bytes of the collector
     /// (`PEARTREE_MEM_DEBUG` accounting only).
     pub fn mem_stats(&self) -> (usize, usize, usize) {
-        let sz = std::mem::size_of::<ShortLite>();
+        let sz = std::mem::size_of::<(ShortLite, u64)>();
         let bytes = self.kept.capacity() * sz
             + self.buf.capacity() * sz
             // BTreeSet<i64>: ~11 keys per leaf node of ~ (11*8 + overhead) bytes -> ~16 B/key
@@ -307,11 +310,11 @@ impl ShortCollector {
 
     fn evict_before(&mut self, pos: i64) {
         while let Some(front) = self.buf.front() {
-            if front.start >= pos {
+            if front.0.start >= pos {
                 break;
             }
             let r = self.buf.pop_front().unwrap();
-            if self.is_hot(&r) {
+            if self.is_hot(&r.0) {
                 self.kept.push(r);
             }
         }
@@ -330,10 +333,10 @@ impl ShortCollector {
         }
     }
 
-    /// Add one eligible read (coordinate-sorted input).
-    pub fn push(&mut self, r: ShortLite) {
+    /// Add one eligible read (coordinate-sorted input) with its record address.
+    pub fn push(&mut self, r: ShortLite, vp: u64) {
         self.evict_before(r.start - self.horizon);
-        self.buf.push_back(r);
+        self.buf.push_back((r, vp));
     }
 
     pub fn hot(&mut self, b: i64, left: bool) {
@@ -344,13 +347,14 @@ impl ShortCollector {
         }
     }
 
-    /// End of contig: flush the buffer and return the kept candidates (start-sorted).
-    pub fn finish(&mut self) -> Vec<ShortLite> {
+    /// End of contig: flush the buffer and return the kept candidates (start-sorted;
+    /// stable, so equal keys keep file order).
+    pub fn finish(&mut self) -> Vec<(ShortLite, u64)> {
         self.evict_before(i64::MAX);
         self.hot_l.clear();
         self.hot_r.clear();
         let mut v = std::mem::take(&mut self.kept);
-        v.sort_by_key(|r| (r.start, r.frag, r.flag));
+        v.sort_by_key(|(r, _)| (r.start, r.frag, r.flag));
         v
     }
 }
@@ -794,16 +798,16 @@ mod tests {
     #[test]
     fn short_collector_keeps_only_reads_near_hot_junctions() {
         let mut c = ShortCollector::new(3, 20);
-        c.push(sl(1, 0x41, 500, 650, 0, 0)); // nowhere near
-        c.push(sl(2, 0x41, 990, 1140, 0, 0)); // LEFT (b) for b=1000 — hot marked later
-        c.push(sl(3, 0x41, 1000, 1140, 30, 0)); // the clipped read itself
+        c.push(sl(1, 0x41, 500, 650, 0, 0), 10); // nowhere near
+        c.push(sl(2, 0x41, 990, 1140, 0, 0), 20); // LEFT (b) for b=1000 — hot marked later
+        c.push(sl(3, 0x41, 1000, 1140, 30, 0), 30); // the clipped read itself
         c.hot(1000, true);
-        c.push(sl(4, 0x41, 1001, 1150, 4, 0)); // LEFT (a)
-        c.push(sl(5, 0x51, 1900, 2050, 0, 6)); // RIGHT (a) for b=2050, marked later
+        c.push(sl(4, 0x41, 1001, 1150, 4, 0), 40); // LEFT (a)
+        c.push(sl(5, 0x51, 1900, 2050, 0, 6), 50); // RIGHT (a) for b=2050, marked later
         c.hot(2050, false);
-        c.push(sl(6, 0x41, 9000, 9150, 0, 0));
-        let kept: Vec<u64> = c.finish().iter().map(|r| r.frag).collect();
-        assert_eq!(kept, vec![2, 3, 4, 5]);
+        c.push(sl(6, 0x41, 9000, 9150, 0, 0), 60);
+        let kept: Vec<(u64, u64)> = c.finish().iter().map(|(r, vp)| (r.frag, *vp)).collect();
+        assert_eq!(kept, vec![(2, 20), (3, 30), (4, 40), (5, 50)], "record addresses ride along");
     }
 
     #[test]

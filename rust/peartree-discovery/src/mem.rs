@@ -56,11 +56,13 @@ pub struct BpBytes {
     /// `agree`: AgreePending box + inserts + clips + anchors
     pub agree: usize,
     pub agree_anchors: usize,
+    /// `src`: record addresses kept for the compact conversion (`mem_budget_mb` only)
+    pub src: usize,
 }
 
 impl BpBytes {
     pub fn total(&self) -> usize {
-        self.structs + self.consensus + self.names + self.mates + self.ev + self.agree
+        self.structs + self.consensus + self.names + self.mates + self.ev + self.agree + self.src
     }
     pub fn add(&mut self, o: &BpBytes) {
         self.n += o.n;
@@ -75,6 +77,7 @@ impl BpBytes {
         self.ev_short_lite += o.ev_short_lite;
         self.agree += o.agree;
         self.agree_anchors += o.agree_anchors;
+        self.src += o.src;
     }
 }
 
@@ -120,6 +123,9 @@ pub fn breakpoint_breakdown(bp: &Breakpoint) -> BpBytes {
             + ag.inserts.iter().map(|v| v.capacity()).sum::<usize>()
             + ag.clips.capacity() * size_of::<crate::model::ClipMol>()
             + b.agree_anchors;
+    }
+    if let Some(s) = bp.src.as_deref() {
+        b.src = size_of::<crate::model::SrcOffsets>() + (s.clip.capacity() + s.disc.capacity() + s.short.capacity()) * 8;
     }
     b
 }
@@ -190,6 +196,7 @@ pub fn report(
     discordant_obs_len: usize,
     discordant_obs_bytes: usize,
     collectors: (usize, usize, usize, usize),
+    compact: (usize, usize),
 ) {
     let rss = rss_bytes()
         .map(|b| format!("rss={:.0}MiB ", mib(b as usize)))
@@ -199,13 +206,15 @@ pub fn report(
     let slack = slack_bytes(final_left) + slack_bytes(final_right);
     eprintln!(
         "[mem] {tag}: {rss}\
-         tmp_bp={} ({:.1}MiB)  final_L={} final_R={} ({:.1}MiB)  \
+         tmp_bp={} ({:.1}MiB)  final_L={} final_R={} ({:.1}MiB)  compact={} ({:.1}MiB)  \
          polyA={} ({:.1}MiB)  disc_obs={} ({:.1}MiB)",
         tmp.len(),
         mib(breakpoints_bytes(tmp)),
         final_left.len(),
         final_right.len(),
         mib(fin.total()),
+        compact.0,
+        mib(compact.1),
         polya.len(),
         mib(polya_bytes(polya)),
         discordant_obs_len,
