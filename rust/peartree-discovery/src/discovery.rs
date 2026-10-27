@@ -496,8 +496,8 @@ pub struct Discovery {
     trip_at: Option<(String, i64, bool)>,
     /// junctions converted FULL -> COMPACT in place (as opposed to stored compact at once)
     n_converted: u64,
-    /// per-contig creation counter for `Breakpoint::ord`
-    next_ord: u64,
+    /// per-run creation counter for `Breakpoint::ord`
+    next_ord: u32,
 }
 
 impl Discovery {

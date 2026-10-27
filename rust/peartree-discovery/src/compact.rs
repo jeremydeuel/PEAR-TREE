@@ -66,7 +66,7 @@ pub fn unpack4(packed: &[u8], n: usize, out: &mut Vec<u8>) {
 #[derive(Clone, Copy, Debug)]
 pub struct Hdr {
     off: u64,
-    pub ord: u64,
+    pub ord: u32,
     pub pos: i64,
     pub ref_id: i32,
     len: u32,
@@ -207,7 +207,7 @@ impl CompactPool {
     }
 
     /// (ref_id, ord): the slot key shared with FULL final breakpoints.
-    pub fn key(&self, i: u32) -> (i32, u64) {
+    pub fn key(&self, i: u32) -> (i32, u32) {
         let h = &self.hdr[i as usize];
         (h.ref_id, h.ord)
     }
@@ -338,7 +338,7 @@ mod tests {
         assert!(pack4(b"AC.G").is_none());
     }
 
-    fn pending(ord: u64) -> Breakpoint {
+    fn pending(ord: u32) -> Breakpoint {
         let mut b = Breakpoint::new(
             crate::config::CLIP_LEFT,
             "1".into(),
@@ -361,7 +361,7 @@ mod tests {
             anchors: vec![d(11, 0x1 | 0x40 | 0x10), d(12, 0x1 | 0x80), d(13, 0x10)],
             promoted: false,
         }));
-        b.src = Some(Box::new(SrcOffsets { clip: vec![100 + ord, 200], disc: vec![300, 301, 302], short: vec![400] }));
+        b.src = Some(Box::new(SrcOffsets { clip: vec![100 + ord as u64, 200], disc: vec![300, 301, 302], short: vec![400] }));
         b
     }
 

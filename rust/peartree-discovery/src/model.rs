@@ -63,8 +63,8 @@ pub struct Breakpoint {
     /// rebuilt compact junction back at its slot: final breakpoints are in (ref_id, ord)
     /// order per side (contigs in scan order, junctions in cleanup order within a contig).
     pub ref_id: i32,
-    /// per-contig creation sequence number assigned by `Discovery::cleanup` (0 until then)
-    pub ord: u64,
+    /// per-run creation sequence number assigned by `Discovery::cleanup` (0 until then)
+    pub ord: u32,
     /// `mem_budget_mb` only: the BGZF addresses a PENDING junction needs to be converted to
     /// the compact form (every clip record of its cluster, in scan order, then its selected
     /// DISC / SHORT sidecar reads in list order). None when unlimited or not pending.
