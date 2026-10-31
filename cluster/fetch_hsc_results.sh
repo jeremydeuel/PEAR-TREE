@@ -16,7 +16,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PT_ROOT="$(cd "$HERE/.." && pwd)"
 FARM_USER="${FARM_USER:-jd43}"
 FARM_HOST="${FARM_HOST:-farm22-head1}"
-REMOTE_ROOTS="${REMOTE_ROOTS:-/nfs/users/nfs_j/jd43/results/hsc_foldback2 /nfs/users/nfs_j/jd43/results/hsc}"
+REMOTE_ROOTS="${REMOTE_ROOTS:-/nfs/users/nfs_j/jd43/results/hsc_rediscover /nfs/users/nfs_j/jd43/results/hsc_foldback2 /nfs/users/nfs_j/jd43/results/hsc}"
 LOCAL_ROOT="${LOCAL_ROOT:-$HOME/Documents/hsc_results}"
 TSH="${TSH:-tsh}"
 
