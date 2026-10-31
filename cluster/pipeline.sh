@@ -1019,9 +1019,11 @@ cmd_status() {
     [ -d "$RUNDIR" ] || { echo "no run dir $RUNDIR" >&2; exit 1; }
     local n_s n_d n_m n_g
     n_s=$(wc -l < "$RUNDIR/samples.tsv" | tr -d ' ')
-    n_d=$(ls "$RUNDIR"/discovery/*.txt.gz 2>/dev/null | wc -l | tr -d ' ')
-    n_m=$(ls "$RUNDIR"/missing 2>/dev/null | wc -l | tr -d ' ')
-    n_g=$(ls "$RUNDIR"/genotypes/*.txt.gz 2>/dev/null | wc -l | tr -d ' ')
+    # `|| true`: under pipefail a glob with no match (unit still queued) made ls fail and set -e
+    # end status silently, before printing anything (2026-10-31, 11 chain units)
+    n_d=$(ls "$RUNDIR"/discovery/*.txt.gz 2>/dev/null | wc -l | tr -d ' ' || true)
+    n_m=$(ls "$RUNDIR"/missing 2>/dev/null | wc -l | tr -d ' ' || true)
+    n_g=$(ls "$RUNDIR"/genotypes/*.txt.gz 2>/dev/null | wc -l | tr -d ' ' || true)
     echo "patient   : $PATIENT_ID   ($RUNDIR)"
     echo "samples   : $n_s"
     echo "no data   : $n_m  (iRODS lists samples that were never sequenced)"
