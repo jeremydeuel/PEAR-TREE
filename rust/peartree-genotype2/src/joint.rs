@@ -197,16 +197,124 @@ struct Row {
     n_uninf: i64,
 }
 
+impl Default for Row {
+    fn default() -> Row {
+        Row { kind: String::new(), pl: None, pl_frac: Vec::new(), pl_het_b: Vec::new(), n_alt: 0, n_ref: 0, n_uninf: 0 }
+    }
+}
+
+/// Locus and kind names shared by every colony table of a run: each name is stored once
+/// (Pair41, 2026-11: 279 colonies x 274k loci as per-colony `HashMap<String, Row>` died at 48 GB).
+#[derive(Debug, Default)]
+struct Names {
+    locus_ix: HashMap<String, u32>,
+    /// loci in order of first appearance over the files read
+    loci: Vec<String>,
+    kind_ix: HashMap<String, u16>,
+    kinds: Vec<String>,
+}
+
+impl Names {
+    fn locus(&mut self, name: &str) -> u32 {
+        if let Some(&i) = self.locus_ix.get(name) {
+            return i;
+        }
+        let i = u32::try_from(self.loci.len()).expect("more than 4e9 loci");
+        self.locus_ix.insert(name.to_string(), i);
+        self.loci.push(name.to_string());
+        i
+    }
+    fn kind(&mut self, kind: &str) -> io::Result<u16> {
+        if let Some(&i) = self.kind_ix.get(kind) {
+            return Ok(i);
+        }
+        let i = u16::try_from(self.kinds.len()).map_err(|_| bad("joint: more than 65535 distinct locus kinds"))?;
+        self.kind_ix.insert(kind.to_string(), i);
+        self.kinds.push(kind.to_string());
+        Ok(i)
+    }
+}
+
+const NO_ROW: u32 = u32::MAX;
+const HAS_PL: u8 = 1;
+const HAS_FRAC: u8 = 2;
+const HAS_BIAS: u8 = 4;
+/// `vals` sentinel: the value lives in `ColonyTable::wide`
+const WIDE: i16 = i16::MIN;
+
+/// One colony's genotype file, stored compactly: per row a kind id, presence flags and a fixed
+/// stride of numbers `[n_alt, n_ref, n_uninf, pl_absent, pl_het, pl_hom, pl_f.., pl_het_b..]` as
+/// i16. Genotype2 writes integers, nearly all within i16; any value whose f64 does not round-trip
+/// through i16 bit for bit (large, fractional, -0) is kept exactly in `wide`, so `row()` returns
+/// the same `Row` the text parse gives.
 #[derive(Debug)]
 struct ColonyTable {
-    rows: HashMap<String, Row>,
-    order: Vec<String>,
+    /// global locus id -> row index (NO_ROW = no row; ids past the end = no row)
+    row_of: Vec<u32>,
+    kind: Vec<u16>,
+    flags: Vec<u8>,
+    vals: Vec<i16>,
+    wide: HashMap<usize, f64>,
+    stride: usize,
     /// `status == ok` rows whose PL columns were not numbers (treated as missing)
     n_bad_pl: usize,
     /// shared alt fractions of the `pl_f<‰>` columns, in column order (empty: no profile)
     fracs: Vec<f64>,
     /// reference-bias values of the `pl_het_b<‰>` columns, in column order (empty: none)
     biases: Vec<f64>,
+}
+
+impl ColonyTable {
+    fn push_val(&mut self, v: f64) {
+        let n = v as i16;
+        if n != WIDE && (n as f64).to_bits() == v.to_bits() {
+            self.vals.push(n);
+        } else {
+            self.wide.insert(self.vals.len(), v);
+            self.vals.push(WIDE);
+        }
+    }
+    fn val(&self, k: usize) -> f64 {
+        match self.vals[k] {
+            WIDE => self.wide[&k],
+            n => n as f64,
+        }
+    }
+    fn row_ix(&self, locus: usize) -> Option<usize> {
+        self.row_of.get(locus).copied().filter(|&r| r != NO_ROW).map(|r| r as usize)
+    }
+    fn has_row(&self, locus: usize) -> bool {
+        self.row_ix(locus).is_some()
+    }
+    fn kind_of(&self, locus: usize) -> Option<u16> {
+        self.row_ix(locus).map(|r| self.kind[r])
+    }
+    /// (n_alt, n_ref, n_uninf) of every row / of a usable row only
+    fn counts(&self, r: usize) -> (i64, i64, i64) {
+        let o = r * self.stride;
+        (self.val(o) as i64, self.val(o + 1) as i64, self.val(o + 2) as i64)
+    }
+    fn votes(&self, locus: usize) -> Votes {
+        self.row_ix(locus).filter(|&r| self.flags[r] & HAS_PL != 0).map(|r| self.counts(r))
+    }
+    /// Fill `out` with the row at `locus` (reusing its buffers); false = no row.
+    fn row(&self, names: &Names, locus: usize, out: &mut Row) -> bool {
+        let Some(r) = self.row_ix(locus) else { return false };
+        let (o, f, nf) = (r * self.stride, self.flags[r], self.fracs.len());
+        out.kind.clear();
+        out.kind.push_str(&names.kinds[self.kind[r] as usize]);
+        (out.n_alt, out.n_ref, out.n_uninf) = self.counts(r);
+        out.pl = (f & HAS_PL != 0).then(|| [self.val(o + 3), self.val(o + 4), self.val(o + 5)]);
+        out.pl_frac.clear();
+        if f & HAS_FRAC != 0 {
+            out.pl_frac.extend((0..nf).map(|k| self.val(o + 6 + k)));
+        }
+        out.pl_het_b.clear();
+        if f & HAS_BIAS != 0 {
+            out.pl_het_b.extend((0..self.biases.len()).map(|k| self.val(o + 6 + nf + k)));
+        }
+        true
+    }
 }
 
 /// Colony id of a per-colony genotype file: basename minus `.gz`, `.txt|.tsv|.csv`, `.genotype(s)`.
@@ -244,7 +352,8 @@ fn open_text(path: &str) -> io::Result<Box<dyn BufRead>> {
 
 /// Read one numeric per-colony file (header-driven: `locus`, `status`, `pl_absent`, `pl_het`,
 /// `pl_hom` required, `kind` optional; other columns ignored). Duplicate loci: first row wins.
-fn read_colony_table_from(path: &str, input: Box<dyn BufRead>) -> io::Result<ColonyTable> {
+/// Locus and kind names go into the shared `names`.
+fn read_colony_table_from(path: &str, input: Box<dyn BufRead>, names: &mut Names) -> io::Result<ColonyTable> {
     let mut lines = input.lines();
     let header = lines.next().transpose()?.ok_or_else(|| bad(format!("{path}: empty genotype file")))?;
     let cols: Vec<&str> = header.trim_end_matches(['\r', '\n']).split('\t').collect();
@@ -283,7 +392,19 @@ fn read_colony_table_from(path: &str, input: Box<dyn BufRead>) -> io::Result<Col
     }
     let (i_nalt, i_nref, i_nuninf) = (find("n_alt"), find("n_ref"), find("n_uninf"));
     let ok = Status::Ok.as_str();
-    let mut t = ColonyTable { rows: HashMap::new(), order: Vec::new(), n_bad_pl: 0, fracs, biases };
+    let stride = 6 + fracs.len() + biases.len();
+    let mut t = ColonyTable {
+        row_of: Vec::new(),
+        kind: Vec::new(),
+        flags: Vec::new(),
+        vals: Vec::new(),
+        wide: HashMap::new(),
+        stride,
+        n_bad_pl: 0,
+        fracs,
+        biases,
+    };
+    let mut prof: Vec<f64> = Vec::new();
     for line in lines {
         let line = line?;
         let line = line.trim_end_matches(['\r', '\n']);
@@ -292,7 +413,8 @@ fn read_colony_table_from(path: &str, input: Box<dyn BufRead>) -> io::Result<Col
         }
         let f: Vec<&str> = line.split('\t').collect();
         let Some(name) = f.get(i_locus).filter(|s| !s.is_empty()) else { continue };
-        if t.rows.contains_key(*name) {
+        let id = names.locus(name) as usize;
+        if t.has_row(id) {
             continue;
         }
         let pl = if f.get(i_status).map(|s| s.trim()) == Some(ok) {
@@ -303,26 +425,51 @@ fn read_colony_table_from(path: &str, input: Box<dyn BufRead>) -> io::Result<Col
         } else {
             None
         };
-        let kind = i_kind.and_then(|k| f.get(k)).map(|s| s.trim().to_string()).unwrap_or_default();
-        let profile = |idx: &[usize]| -> Vec<f64> {
-            if pl.is_none() {
-                return Vec::new();
-            }
-            let v: Vec<f64> = idx.iter().filter_map(|&k| f.get(k).and_then(|x| x.trim().parse::<f64>().ok())).collect();
-            if v.len() == idx.len() && v.iter().all(|x| x.is_finite()) { v } else { Vec::new() }
-        };
-        let pl_frac = profile(&i_frac);
-        let pl_het_b = profile(&i_bias);
+        let kind = i_kind.and_then(|k| f.get(k)).map(|s| s.trim()).unwrap_or_default();
         let count = |i: Option<usize>| i.and_then(|k| f.get(k)).and_then(|x| x.trim().parse::<i64>().ok()).unwrap_or(0).max(0);
-        let (n_alt, n_ref, n_uninf) = (count(i_nalt), count(i_nref), count(i_nuninf));
-        t.order.push(name.to_string());
-        t.rows.insert(name.to_string(), Row { kind, pl, pl_frac, pl_het_b, n_alt, n_ref, n_uninf });
+        // a profile is all-or-nothing: every column numeric and finite, on a row with PLs
+        let profile = |idx: &[usize], prof: &mut Vec<f64>| -> bool {
+            prof.clear();
+            if pl.is_none() || idx.is_empty() {
+                return false;
+            }
+            prof.extend(idx.iter().filter_map(|&k| f.get(k).and_then(|x| x.trim().parse::<f64>().ok())));
+            prof.len() == idx.len() && prof.iter().all(|x| x.is_finite())
+        };
+        let row = t.kind.len();
+        if t.row_of.len() <= id {
+            t.row_of.resize(id + 1, NO_ROW);
+        }
+        t.row_of[id] = u32::try_from(row).map_err(|_| bad(format!("{path}: more than 4e9 rows")))?;
+        t.kind.push(names.kind(kind)?);
+        let mut flags = if pl.is_some() { HAS_PL } else { 0 };
+        for n in [count(i_nalt), count(i_nref), count(i_nuninf)] {
+            t.push_val(n as f64);
+        }
+        for v in pl.unwrap_or([0.0; 3]) {
+            t.push_val(v);
+        }
+        let has_frac = profile(&i_frac, &mut prof);
+        for k in 0..i_frac.len() {
+            t.push_val(if has_frac { prof[k] } else { 0.0 });
+        }
+        flags |= if has_frac { HAS_FRAC } else { 0 };
+        let has_bias = profile(&i_bias, &mut prof);
+        for k in 0..i_bias.len() {
+            t.push_val(if has_bias { prof[k] } else { 0.0 });
+        }
+        flags |= if has_bias { HAS_BIAS } else { 0 };
+        t.flags.push(flags);
     }
+    t.row_of.shrink_to_fit();
+    t.kind.shrink_to_fit();
+    t.flags.shrink_to_fit();
+    t.vals.shrink_to_fit();
     Ok(t)
 }
 
-fn read_colony_table(path: &str) -> io::Result<ColonyTable> {
-    read_colony_table_from(path, open_text(path)?)
+fn read_colony_table(path: &str, names: &mut Names) -> io::Result<ColonyTable> {
+    read_colony_table_from(path, open_text(path)?, names)
 }
 
 // ------------------------------------------------------------------ tree hypotheses
@@ -643,8 +790,26 @@ fn is_germline_het_candidate(locus: &str, votes: &[Votes], n_colonies: usize) ->
 
 /// The bias per kind / colony. `votes[i][c]` = counts of colony c at locus i (None = no data);
 /// `n_colonies` = colonies with a genotype file.
+#[cfg(test)]
 fn estimate_ref_bias(mode: RefBias, loci: &[String], kinds: &[String], votes: &[Vec<Votes>], n_colonies: usize) -> BiasEstimate {
     let ncol = votes.first().map(|v| v.len()).unwrap_or(0);
+    estimate_ref_bias_by(mode, loci, kinds, ncol, n_colonies, &|i, out: &mut Vec<Votes>| {
+        out.clear();
+        out.extend_from_slice(&votes[i]);
+    })
+}
+
+/// `estimate_ref_bias` with the votes of locus i written into a buffer on demand (`votes_of`),
+/// so the loci x colonies vote matrix is never held.
+fn estimate_ref_bias_by(
+    mode: RefBias,
+    loci: &[String],
+    kinds: &[String],
+    ncol: usize,
+    n_colonies: usize,
+    votes_of: &dyn Fn(usize, &mut Vec<Votes>),
+) -> BiasEstimate {
+    let mut vbuf: Vec<Votes> = Vec::with_capacity(ncol);
     let mut est = BiasEstimate {
         mode,
         n_cand: 0,
@@ -662,7 +827,12 @@ fn estimate_ref_bias(mode: RefBias, loci: &[String], kinds: &[String], votes: &[
         }
         RefBias::Auto => {}
     }
-    let cand: Vec<usize> = (0..loci.len()).filter(|&i| is_germline_het_candidate(&loci[i], &votes[i], n_colonies)).collect();
+    let cand: Vec<usize> = (0..loci.len())
+        .filter(|&i| {
+            votes_of(i, &mut vbuf);
+            is_germline_het_candidate(&loci[i], &vbuf, n_colonies)
+        })
+        .collect();
     est.n_cand = cand.len();
     // per-kind sums
     let mut order: Vec<String> = Vec::new();
@@ -674,7 +844,8 @@ fn estimate_ref_bias(mode: RefBias, loci: &[String], kinds: &[String], votes: &[
             (0, 0, 0, 0)
         });
         e.0 += 1;
-        for &(a, r, u) in votes[i].iter().flatten() {
+        votes_of(i, &mut vbuf);
+        for &(a, r, u) in vbuf.iter().flatten() {
             e.1 += a;
             e.2 += r;
             e.3 += u;
@@ -718,7 +889,8 @@ fn estimate_ref_bias(mode: RefBias, loci: &[String], kinds: &[String], votes: &[
         // against the kind's own vote ratio, not its locus-shrunk b: the colony factor measures how
         // a colony departs from the kinds' pooled behaviour, it must not re-absorb the shrinkage
         let kb = est.kinds.iter().find(|k| k.kind == kinds[i]).map(|k| k.raw).unwrap_or(est.global);
-        for (c, v) in votes[i].iter().enumerate() {
+        votes_of(i, &mut vbuf);
+        for (c, v) in vbuf.iter().enumerate() {
             if let Some((a, r, _)) = v {
                 num[c] += *a as f64;
                 den[c] += kb * *r as f64;
@@ -887,18 +1059,39 @@ fn fmt_f(x: f64, digits: usize) -> String {
     }
 }
 
-fn write_out(path: &str, content: &[u8]) -> io::Result<()> {
-    let f = File::create(path).map_err(|e| io::Error::new(e.kind(), format!("cannot create {path}: {e}")))?;
-    if path.ends_with(".gz") {
-        let mut enc = GzEncoder::new(io::BufWriter::new(f), Compression::default());
-        enc.write_all(content)?;
-        enc.finish()?.flush()?;
-    } else {
-        let mut w = io::BufWriter::new(f);
-        w.write_all(content)?;
-        w.flush()?;
+/// An output file, gzipped when its path ends in `.gz`; written as it goes.
+enum OutFile {
+    Gz(io::BufWriter<GzEncoder<io::BufWriter<File>>>),
+    Plain(io::BufWriter<File>),
+}
+
+impl OutFile {
+    fn create(path: &str) -> io::Result<OutFile> {
+        let f = File::create(path).map_err(|e| io::Error::new(e.kind(), format!("cannot create {path}: {e}")))?;
+        Ok(if path.ends_with(".gz") {
+            OutFile::Gz(io::BufWriter::with_capacity(1 << 20, GzEncoder::new(io::BufWriter::new(f), Compression::default())))
+        } else {
+            OutFile::Plain(io::BufWriter::with_capacity(1 << 20, f))
+        })
     }
-    Ok(())
+    fn write(&mut self, b: &[u8]) -> io::Result<()> {
+        match self {
+            OutFile::Gz(w) => w.write_all(b),
+            OutFile::Plain(w) => w.write_all(b),
+        }
+    }
+    fn finish(self) -> io::Result<()> {
+        match self {
+            OutFile::Gz(w) => w.into_inner().map_err(|e| e.into_error())?.finish()?.flush(),
+            OutFile::Plain(mut w) => w.flush(),
+        }
+    }
+}
+
+fn write_out(path: &str, content: &[u8]) -> io::Result<()> {
+    let mut o = OutFile::create(path)?;
+    o.write(content)?;
+    o.finish()
 }
 
 fn best_id<'a>(ctx: &'a Ctx<'a>, b: Best) -> &'a str {
@@ -913,19 +1106,9 @@ fn clade_str(ctx: &Ctx, node: usize) -> String {
     ctx.tree.clade_labels(node).join(",")
 }
 
-/// Per-locus TSV and the numeric P(carrier) matrix as strings. `usable[i * C + c]` = colony c has
-/// a `status == ok` row with numeric PLs at locus i (else its matrix cell is empty);
-/// `has_file[c]` = colony c has a genotype file (else its TSV `p_<colony>` column is empty too).
-fn render(
-    ctx: &Ctx,
-    loci: &[String],
-    kinds: &[String],
-    scores: &[LocusScore],
-    usable: &[bool],
-    has_file: &[bool],
-) -> (String, String) {
+/// Header lines of the per-locus TSV and the matrix.
+fn render_header(ctx: &Ctx) -> (String, String) {
     let cols = &ctx.tree.tips;
-    let nc = cols.len();
     let mut tsv = String::from(
         "locus\tlocus_kind\tn_colonies_data\tbest\tcarriers\tn_carriers\tpost_best\tbest_tree\tbest_tree_clade\tpost_tree\tlog10_bf_tree\tlog10_L_best_tree\tlog10_L_root\tlog10_L_indep\tlog10_L_noise",
     );
@@ -940,47 +1123,50 @@ fn render(
         mat.push_str(&csv_field(c));
     }
     mat.push('\n');
-    for (i, (name, s)) in loci.iter().zip(scores).enumerate() {
-        let (carriers, n_car) = match s.best {
-            Best::Node(b) => (clade_str(ctx, b), ctx.tree.nodes[b].clade.len()),
-            _ => (String::new(), 0),
-        };
-        let row_usable = &usable[i * nc..(i + 1) * nc];
-        let fields = [
-            name.clone(),
-            if kinds[i].is_empty() { ".".to_string() } else { kinds[i].clone() },
-            row_usable.iter().filter(|&&u| u).count().to_string(),
-            best_id(ctx, s.best).to_string(),
-            carriers,
-            n_car.to_string(),
-            fmt_f(s.post_best, 4),
-            ctx.tree.nodes[s.best_tree].id.clone(),
-            clade_str(ctx, s.best_tree),
-            fmt_f(s.post_tree, 4),
-            fmt_f(s.bf, 3),
-            fmt_f(s.s_best_tree / LN10, 3),
-            fmt_f(s.s_root / LN10, 3),
-            fmt_f(s.li / LN10, 3),
-            fmt_f(s.ln / LN10, 3),
-        ];
-        tsv.push_str(&fields.join("\t"));
-        for (p, &f) in s.p_carrier.iter().zip(has_file) {
-            tsv.push('\t');
-            if f {
-                tsv.push_str(&fmt_f(*p, 4));
-            }
-        }
-        tsv.push('\n');
-        mat.push_str(&csv_field(name));
-        for (p, &u) in s.p_carrier.iter().zip(row_usable) {
-            mat.push(';');
-            if u {
-                mat.push_str(&fmt_f(*p, 4));
-            }
-        }
-        mat.push('\n');
-    }
     (tsv, mat)
+}
+
+/// Append one locus's TSV and matrix lines. `row_usable[c]` = colony c has a `status == ok` row
+/// with numeric PLs (else its matrix cell is empty); `has_file[c]` = colony c has a genotype file
+/// (else its TSV `p_<colony>` column is empty too).
+fn render_locus(ctx: &Ctx, name: &str, kind: &str, s: &LocusScore, row_usable: &[bool], has_file: &[bool], tsv: &mut String, mat: &mut String) {
+    let (carriers, n_car) = match s.best {
+        Best::Node(b) => (clade_str(ctx, b), ctx.tree.nodes[b].clade.len()),
+        _ => (String::new(), 0),
+    };
+    let fields = [
+        name.to_string(),
+        if kind.is_empty() { ".".to_string() } else { kind.to_string() },
+        row_usable.iter().filter(|&&u| u).count().to_string(),
+        best_id(ctx, s.best).to_string(),
+        carriers,
+        n_car.to_string(),
+        fmt_f(s.post_best, 4),
+        ctx.tree.nodes[s.best_tree].id.clone(),
+        clade_str(ctx, s.best_tree),
+        fmt_f(s.post_tree, 4),
+        fmt_f(s.bf, 3),
+        fmt_f(s.s_best_tree / LN10, 3),
+        fmt_f(s.s_root / LN10, 3),
+        fmt_f(s.li / LN10, 3),
+        fmt_f(s.ln / LN10, 3),
+    ];
+    tsv.push_str(&fields.join("\t"));
+    for (p, &f) in s.p_carrier.iter().zip(has_file) {
+        tsv.push('\t');
+        if f {
+            tsv.push_str(&fmt_f(*p, 4));
+        }
+    }
+    tsv.push('\n');
+    mat.push_str(&csv_field(name));
+    for (p, &u) in s.p_carrier.iter().zip(row_usable) {
+        mat.push(';');
+        if u {
+            mat.push_str(&fmt_f(*p, 4));
+        }
+    }
+    mat.push('\n');
 }
 
 // ------------------------------------------------------------------ driver
@@ -1034,21 +1220,21 @@ pub fn run(args: &JointArgs) -> io::Result<()> {
 
     // ---- read tables (loci in order of first appearance over the given files; colonies in tip order)
     let mut tables: Vec<Option<ColonyTable>> = (0..tips.len()).map(|_| None).collect();
-    let mut loci: Vec<String> = Vec::new();
-    let mut seen: HashSet<String> = HashSet::new();
+    let mut names = Names::default();
     let tip_ix: HashMap<&str, usize> = tips.iter().enumerate().map(|(i, t)| (t.as_str(), i)).collect();
+    let mut n_wide = 0usize;
     for f in &args.genotype_files {
-        let t = read_colony_table(f)?;
+        let t = read_colony_table(f, &mut names)?;
         if t.n_bad_pl > 0 {
             eprintln!("joint: WARNING: {f}: {} 'ok' rows without numeric PLs (treated as missing)", t.n_bad_pl);
         }
-        for n in &t.order {
-            if seen.insert(n.clone()) {
-                loci.push(n.clone());
-            }
-        }
+        n_wide += t.wide.len();
         tables[tip_ix[colony_stem(f).as_str()]] = Some(t);
     }
+    let n_rows: usize = tables.iter().flatten().map(|t| t.kind.len()).sum();
+    eprintln!("joint: read {n_rows} rows ({n_wide} values outside the compact i16 range)");
+    let loci = std::mem::take(&mut names.loci);
+    names.locus_ix = HashMap::new(); // the lookup is done; only the kind names are read below
     let has_file: Vec<bool> = tables.iter().map(|t| t.is_some()).collect();
     // the shared-fraction grid must be the same in every file (empty = old format, no profile)
     let fracs_all: Vec<f64> = tables.iter().flatten().next().map(|t| t.fracs.clone()).unwrap_or_default();
@@ -1085,26 +1271,19 @@ pub fn run(args: &JointArgs) -> io::Result<()> {
             "joint: --ref-bias needs the per-colony pl_het_b<‰> columns: genotype with ref_bias_grid set in the genotype2 config (e.g. ref_bias_grid = 0.4,0.5,0.6,0.7,0.8,0.9,1.0)",
         ));
     }
-    let mut kinds = vec![String::new(); l];
-    for (i, name) in loci.iter().enumerate() {
-        if let Some(r) = tables.iter().flatten().find_map(|t| t.rows.get(name)) {
-            kinds[i] = r.kind.clone();
-        }
-    }
+    // a locus's kind: from the first colony in tip order that has a row
+    let kinds: Vec<String> = (0..l)
+        .map(|i| tables.iter().flatten().find_map(|t| t.kind_of(i)).map(|k| names.kinds[k as usize].clone()).unwrap_or_default())
+        .collect();
     let est = if args.ref_bias == RefBias::Off {
         None
     } else {
-        let votes: Vec<Vec<Votes>> = loci
-            .iter()
-            .map(|name| {
-                (0..c)
-                    .map(|col| {
-                        tables[col].as_ref().and_then(|t| t.rows.get(name)).filter(|r| r.pl.is_some()).map(|r| (r.n_alt, r.n_ref, r.n_uninf))
-                    })
-                    .collect()
-            })
-            .collect();
-        let est = estimate_ref_bias(args.ref_bias, &loci, &kinds, &votes, has_file.iter().filter(|&&f| f).count());
+        let votes_of = |i: usize, out: &mut Vec<Votes>| {
+            out.clear();
+            out.extend(tables.iter().map(|t| t.as_ref().and_then(|t| t.votes(i))));
+        };
+        let ncol = if l == 0 { 0 } else { c };
+        let est = estimate_ref_bias_by(args.ref_bias, &loci, &kinds, ncol, has_file.iter().filter(|&&f| f).count(), &votes_of);
         let (log, table) = render_bias(&est, tips, &has_file);
         eprintln!("{log}");
         let path = refbias_path(&args.out_tsv);
@@ -1113,13 +1292,22 @@ pub fn run(args: &JointArgs) -> io::Result<()> {
         Some(est)
     };
 
-    let mut usable = vec![false; l * c];
-    let mut scores = Vec::with_capacity(l);
+    // score and write one locus at a time: nothing of size loci x colonies is held
+    let mut out_tsv = OutFile::create(&args.out_tsv)?;
+    let mut out_mat = OutFile::create(&args.out_matrix)?;
+    let (mut tsv, mut mat) = render_header(&ctx);
+    let mut usable = vec![false; c];
     let mut terms = Terms::new(c, fracs.len());
     let model = CellModel { dropout: args.dropout, false_present: args.false_present, use_k: &use_k, n_fracs_all: fracs_all.len(), bias_grid: &biases };
     let mut cell_b = vec![1.0; c];
+    let mut bufs: Vec<Row> = (0..c).map(|_| Row::default()).collect();
+    let mut have = vec![false; c];
+    let (mut n_tree, mut n_noise, mut n_root) = (0usize, 0usize, 0usize);
     for (i, name) in loci.iter().enumerate() {
-        let rows: Vec<Option<&Row>> = (0..c).map(|col| tables[col].as_ref().and_then(|t| t.rows.get(name))).collect();
+        for (col, buf) in bufs.iter_mut().enumerate() {
+            have[col] = tables[col].as_ref().is_some_and(|t| t.row(&names, i, buf));
+        }
+        let rows: Vec<Option<&Row>> = bufs.iter().zip(&have).map(|(r, &h)| h.then_some(r)).collect();
         if let Some(e) = &est {
             // a locus whose reads are mostly uninformative (far duplications: the reference-junction
             // reads score ln 1/2 by construction) gets no correction: its 2-3 votes carry no bias
@@ -1136,19 +1324,34 @@ pub fn run(args: &JointArgs) -> io::Result<()> {
                 *b = if skip { 1.0 } else { e.cell_b(&kinds[i], col, &biases) };
             }
         }
-        locus_terms(&model, &rows, est.as_ref().map(|_| cell_b.as_slice()), &mut terms, &mut usable[i * c..(i + 1) * c]);
+        usable.fill(false);
+        locus_terms(&model, &rows, est.as_ref().map(|_| cell_b.as_slice()), &mut terms, &mut usable);
         let zyg = (args.zygosity == Zygosity::Locus).then(|| (terms.lh.as_slice(), terms.lo.as_slice()));
-        scores.push(score_locus_z(&ctx, &terms.l1, &terms.l0, &terms.lf, zyg));
+        let s = score_locus_z(&ctx, &terms.l1, &terms.l0, &terms.lf, zyg);
+        match s.best {
+            Best::Node(k) => {
+                n_tree += 1;
+                n_root += (k == 0) as usize;
+            }
+            Best::Noise => n_noise += 1,
+            Best::Indep => {}
+        }
+        render_locus(&ctx, name, &kinds[i], &s, &usable, &has_file, &mut tsv, &mut mat);
+        if tsv.len() > (1 << 20) || i + 1 == l {
+            out_tsv.write(tsv.as_bytes())?;
+            out_mat.write(mat.as_bytes())?;
+            tsv.clear();
+            mat.clear();
+        }
     }
-
-    let (tsv, mat) = render(&ctx, &loci, &kinds, &scores, &usable, &has_file);
-    write_out(&args.out_tsv, tsv.as_bytes())?;
-    write_out(&args.out_matrix, mat.as_bytes())?;
-    let n_tree = scores.iter().filter(|s| matches!(s.best, Best::Node(_))).count();
-    let n_noise = scores.iter().filter(|s| s.best == Best::Noise).count();
+    if l == 0 {
+        out_tsv.write(tsv.as_bytes())?;
+        out_mat.write(mat.as_bytes())?;
+    }
+    out_tsv.finish()?;
+    out_mat.finish()?;
     eprintln!(
-        "joint: best hypothesis: {n_tree} tree ({} ROOT), {} INDEP, {n_noise} NOISE; wrote {} and {}",
-        scores.iter().filter(|s| s.best == Best::Node(0)).count(),
+        "joint: best hypothesis: {n_tree} tree ({n_root} ROOT), {} INDEP, {n_noise} NOISE; wrote {} and {}",
         l - n_tree - n_noise,
         args.out_tsv,
         args.out_matrix
@@ -1164,6 +1367,47 @@ pub fn run(args: &JointArgs) -> io::Result<()> {
 mod tests {
     use super::*;
     use crate::types::OUTPUT_HEADER;
+
+    fn rows_of(t: &ColonyTable, names: &Names) -> HashMap<String, Row> {
+        let mut out = HashMap::new();
+        for (i, n) in names.loci.iter().enumerate() {
+            let mut r = Row::default();
+            if t.row(names, i, &mut r) {
+                out.insert(n.clone(), r);
+            }
+        }
+        out
+    }
+
+    fn table_rows(text: &str) -> io::Result<(ColonyTable, HashMap<String, Row>)> {
+        let mut names = Names::default();
+        let t = read_colony_table_from("mem", Box::new(io::Cursor::new(text.as_bytes().to_vec())), &mut names)?;
+        let rows = rows_of(&t, &names);
+        Ok((t, rows))
+    }
+
+    #[test]
+    fn compact_store_is_exact() {
+        // values outside i16, fractional, -0 and the sentinel itself come back bit for bit
+        let text = "locus\tkind\tstatus\tn_alt\tn_ref\tn_uninf\tpl_absent\tpl_het\tpl_hom\tpl_f020\tpl_f050\tpl_het_b500\n\
+                    a:1-2\tTSD\tok\t70000\t3\t0\t40000\t0\t-32768\t-0\t2.5\t-32767\n\
+                    b:1-2\tBLUNT\tok\t1\t2\t3\t1\t2\t3\tx\t5\t7\n\
+                    c:1-2\tTSD\tno_reads\t0\t0\t0\t0\t0\t0\t0\t0\t0\n";
+        let (t, rows) = table_rows(text).unwrap();
+        let a = &rows["a:1-2"];
+        assert_eq!((a.n_alt, a.n_ref, a.n_uninf), (70000, 3, 0));
+        assert_eq!(a.pl, Some([40000.0, 0.0, -32768.0]));
+        assert_eq!(a.pl_frac.len(), 2);
+        assert!(a.pl_frac[0] == 0.0 && a.pl_frac[0].is_sign_negative());
+        assert_eq!(a.pl_frac[1], 2.5);
+        assert_eq!(a.pl_het_b, vec![-32767.0]);
+        assert!(t.wide.len() == 5, "{:?}", t.wide);
+        // a bad profile cell drops that profile only
+        assert!(rows["b:1-2"].pl_frac.is_empty());
+        assert_eq!(rows["b:1-2"].pl_het_b, vec![7.0]);
+        assert_eq!(rows["c:1-2"].pl, None);
+        assert!(rows["c:1-2"].pl_het_b.is_empty());
+    }
 
     const TOY: &str = "((A:1,B:1):2,(C:1,D:1):2);";
 
@@ -1314,10 +1558,10 @@ mod tests {
         let text = "locus\tkind\tstatus\tpl_absent\tpl_het\tpl_hom\tpl_f020\tpl_f050\tpl_f200\n\
                     chr1:1-13\tTSD\tok\t12\t0\t40\t-3\t5\t20\n\
                     chr1:50-50\tTSD\tno_reads\t0\t0\t0\t0\t0\t0\n";
-        let t = read_colony_table_from("mem", Box::new(io::Cursor::new(text.as_bytes().to_vec()))).unwrap();
+        let (t, rows) = table_rows(text).unwrap();
         assert_eq!(t.fracs, vec![0.02, 0.05, 0.2]);
-        assert_eq!(t.rows["chr1:1-13"].pl_frac, vec![-3.0, 5.0, 20.0]);
-        assert!(t.rows["chr1:50-50"].pl_frac.is_empty());
+        assert_eq!(rows["chr1:1-13"].pl_frac, vec![-3.0, 5.0, 20.0]);
+        assert!(rows["chr1:50-50"].pl_frac.is_empty());
     }
 
     #[test]
@@ -1728,21 +1972,23 @@ mod tests {
                     high_coverage\t0\tx\tchr1:90-60\t0\tL1_MED_DELETION\t\t0\n\
                     ok\t.\tx\tchr1:200-212\t3\tTSD\t\t0\n\
                     ok\t1\tx\tchr1:1-13\t2\tTSD\t\t3\n";
-        let t = read_colony_table_from("mem", Box::new(io::Cursor::new(text.as_bytes().to_vec()))).unwrap();
-        assert_eq!(t.order, vec!["chr1:1-13", "chr1:50-50", "chr1:90-60", "chr1:200-212"]);
-        assert_eq!(t.rows["chr1:1-13"], Row { kind: "TSD".into(), pl: Some([200.0, 0.0, 150.0]), pl_frac: vec![], pl_het_b: vec![], n_alt: 0, n_ref: 0, n_uninf: 0 }); // first wins
+        let mut names = Names::default();
+        let t = read_colony_table_from("mem", Box::new(io::Cursor::new(text.as_bytes().to_vec())), &mut names).unwrap();
+        assert_eq!(names.loci, vec!["chr1:1-13", "chr1:50-50", "chr1:90-60", "chr1:200-212"]);
+        let rows = rows_of(&t, &names);
+        assert_eq!(rows["chr1:1-13"], Row { kind: "TSD".into(), pl: Some([200.0, 0.0, 150.0]), pl_frac: vec![], pl_het_b: vec![], n_alt: 0, n_ref: 0, n_uninf: 0 }); // first wins
         assert!(t.fracs.is_empty());
-        assert_eq!(t.rows["chr1:50-50"].pl, None);
-        assert_eq!(t.rows["chr1:90-60"].kind, "L1_MED_DELETION");
-        assert_eq!(t.rows["chr1:90-60"].pl, None);
-        assert_eq!(t.rows["chr1:200-212"].pl, None);
+        assert_eq!(rows["chr1:50-50"].pl, None);
+        assert_eq!(rows["chr1:90-60"].kind, "L1_MED_DELETION");
+        assert_eq!(rows["chr1:90-60"].pl, None);
+        assert_eq!(rows["chr1:200-212"].pl, None);
         assert_eq!(t.n_bad_pl, 1);
         // the real header parses; a legacy header is refused
         let real = format!("{OUTPUT_HEADER}chr1:1-13\tTSD\tok\t20\t10\t10\t0\t0\t0\t5\t5\t0.5\t0\t1\t0\t200\t0\t150\t99\t300\t300\n");
-        let t = read_colony_table_from("mem", Box::new(io::Cursor::new(real.into_bytes()))).unwrap();
-        assert_eq!(t.rows["chr1:1-13"].pl, Some([200.0, 0.0, 150.0]));
+        let (_, rows) = table_rows(&real).unwrap();
+        assert_eq!(rows["chr1:1-13"].pl, Some([200.0, 0.0, 150.0]));
         let legacy = "insertion\tgenotype\tscore_genotype\tscore_alternative\tcoverage\tn_alt\tn_ref\tn_art\n";
-        let e = read_colony_table_from("old.txt.gz", Box::new(io::Cursor::new(legacy.as_bytes().to_vec()))).unwrap_err();
+        let e = read_colony_table_from("old.txt.gz", Box::new(io::Cursor::new(legacy.as_bytes().to_vec())), &mut Names::default()).unwrap_err();
         assert!(e.to_string().contains("missing column(s) locus, status, pl_absent, pl_het, pl_hom"), "{e}");
     }
 
