@@ -227,6 +227,7 @@ cmd_submit() {
 import arm_config; print(arm_config.describe('B'))") >&2
 
     # CI_MEM 64 GB: Pair38 combine (6.46M insertions, GRCh37 151bp) TERM_MEMLIMIT at 16 GB (2026-10-27)
+    # AN_MEM 96 GB/long + RP_MEM 64 GB: Pair40 annotate killed at 32 GB, Pair38/41 report at 16 GB (2026-11-07)
     env WORKROOT="$W" RESULTS_DIR="$RESULTS_ROOT" VENV="$VENV" \
         PT_ASSEMBLY="$asm" GENOME_2BIT="$twobit" DISC_CFG="$disc" \
         GENO_CFG="$PT_ROOT/cluster/config.genotype.grch38.tprt" GENO_ONE_SIDED=0 \
@@ -235,7 +236,8 @@ import arm_config; print(arm_config.describe('B'))") >&2
         TPRT_ANNOT_TMP="$HSC_ROOT/tmp/$P" \
         GT_THROTTLE="${GT_THROTTLE:-20}" GT_MEM_T1="${GT_MEM_T1:-4000}" GT_MEM_T2="${GT_MEM_T2:-16000}" \
         SD_MEM_T1="${SD_MEM_T1:-16000}" SD_MEM_T2="${SD_MEM_T2:-64000}" CI_MEM="${CI_MEM:-64000}" CI_CORES="${CI_CORES:-8}" \
-        CG_MEM="${CG_MEM:-48000}" AN_MEM="${AN_MEM:-32000}" AN_CORES="${AN_CORES:-8}" \
+        CG_MEM="${CG_MEM:-48000}" AN_MEM="${AN_MEM:-96000}" AN_CORES="${AN_CORES:-8}" AN_QUEUE="${AN_QUEUE:-long}" \
+        RP_MEM="${RP_MEM:-64000}" \
         PT_HEADER_GATE="$asm" \
         PT_JOB_PREFIX="${P}_hsc" PT_NO_CLEANUP="${KEEP_BAMS:-0}" PT_JOBIDS_FILE="$W/jobids.tsv" \
         bash "$PT_ROOT/cluster/pipeline.sh" submit-list "$P" "$W/samples.tsv"

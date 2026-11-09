@@ -134,7 +134,9 @@ GT_MEM_T1="${GT_MEM_T1:-2000}";  GT_MEM_T2="${GT_MEM_T2:-8000}"    # genotype:  
 CI_MEM="${CI_MEM:-24000}"; CI_CORES="${CI_CORES:-8}"
 CG_MEM="${CG_MEM:-8000}"; CG_CORES="${CG_CORES:-8}"
 AN_MEM="${AN_MEM:-32000}"; AN_CORES="${AN_CORES:-4}"
+RP_MEM="${RP_MEM:-16000}"                 # report; hsc_run.sh passes more (Pair38/41 TERM_MEMLIMIT at 16 GB)
 QUEUE="${QUEUE:-normal}"                  # tier1 wall: 12 h
+AN_QUEUE="${AN_QUEUE:-$QUEUE}"            # annotate; Pair40 ran 7 h of the normal queue's 12 h before its memory kill
 RETRY_QUEUE="${RETRY_QUEUE:-long}"        # tier2 wall: 48 h
 CTRL_QUEUE="${CTRL_QUEUE:-week}"          # controller waits out the tier2 array (up to 48 h)
 
@@ -362,14 +364,14 @@ submit_dag() {
 
     jid_an=$(submit_job -J "${JOB_PREFIX}_annotate" -w "done($jid_cg)" \
         -o "$RUNDIR/logs/annotate.%J.log" -e "$RUNDIR/logs/annotate.%J.err" \
-        -n "$AN_CORES" -q "$QUEUE" -M "$AN_MEM" -R "select[mem>$AN_MEM] rusage[mem=$AN_MEM] $R" \
+        -n "$AN_CORES" -q "$AN_QUEUE" -M "$AN_MEM" -R "select[mem>$AN_MEM] rusage[mem=$AN_MEM] $R" \
         "$W annotate")
     log "phase 6 annotate       : $jid_an"; record_jobid an "$jid_an"
 
     if [ "$GENOTYPE_IMPL" = v2 ] && [ "$PT_REPORT" = 1 ]; then
         jid_rp=$(submit_job -J "${JOB_PREFIX}_report" -w "done($jid_an)" \
             -o "$RUNDIR/logs/report.%J.log" -e "$RUNDIR/logs/report.%J.err" \
-            -n 1 -q "$QUEUE" -M 16000 -R "select[mem>16000] rusage[mem=16000]" \
+            -n 1 -q "$QUEUE" -M "$RP_MEM" -R "select[mem>$RP_MEM] rusage[mem=$RP_MEM]" \
             "$W report")
         log "phase 7 report         : $jid_rp"; record_jobid rp "$jid_rp"
     fi
